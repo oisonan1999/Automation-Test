@@ -1,0 +1,135 @@
+{
+  "Test_Grabbag_Wrap": [
+    {
+      "action": "navigate",
+      "path": [
+        "Data Configs",
+        "Grab Bag V2"
+      ]
+    },
+    {
+      "action": "checkbox",
+      "target": "BagID",
+      "value": "random_2"
+    },
+    {
+      "action": "download",
+      "target": "Export CSV",
+      "value": "grab_bag_v2.csv"
+    },
+    {
+      "action": "smart_test_cycle",
+      "target": "Import CSV",
+      "value": "grab_bag_v2.csv"
+    }
+  ],
+  "Test_Perk_Wrap": [
+    {
+      "action": "navigate",
+      "path": [
+        "Data Configs",
+        "Perk",
+        "Perk"
+      ]
+    },
+    {
+      "action": "checkbox",
+      "target": "BagID",
+      "value": "random_2"
+    },
+    {
+      "action": "download",
+      "target": "Export CSV",
+      "value": "user_defined.csv"
+    },
+    {
+      "action": "smart_test_cycle",
+      "target": "Import CSV",
+      "value": "user_defined.csv"
+    }
+  ],
+  "Test Auto Clone Gacha": [
+    {
+      "action": "navigate",
+      "path": [
+        "Live Events",
+        "Gacha Event",
+        "Gacha Event"
+      ]
+    },
+    {
+      "action": "clone_row",
+      "target": "EventGacha_ninhpq"
+    },
+    {
+      "action": "update_form",
+      "data": {
+        "New Event ID": "hieunm_test_auto",
+        "gate": "LiveOpsTest",
+        "currency": "Use another",
+        "currency value": "GachaShard_Dec2025_12days_w2_Main"
+      }
+    },
+    {
+      "action": "save_form"
+    }
+  ],
+  "Test_Auto_Clone_Gacha": [
+    {
+      "action": "navigate",
+      "path": [
+        "Live Events",
+        "Gacha Event",
+        "Gacha Event"
+      ]
+    },
+    {
+      "action": "clone_row",
+      "target": "EventGacha_ninhpq"
+    },
+    {
+      "action": "update_form",
+      "data": {
+        "New Event ID": "hieunm_test_auto_1",
+        "gate": "LiveOpsTest",
+        "currency": "Use another",
+        "currency value": "GachaShard_Dec2025_12days_w2_Main"
+      }
+    },
+    {
+      "action": "save_form"
+    }
+  ],
+  "Test_Grabbag_1": {
+    "command": "Vào Data Configs -> Grab Bag V2 -> Chọn 3 BagID bất kỳ -> Export CSV -> Dùng smart cycle test file csv -> Import CSV file đó",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Data Configs",
+          "Grab Bag V2"
+        ]
+      },
+      {
+        "action": "checkbox",
+        "target": "BagID",
+        "value": "random_3"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "file.csv"
+      },
+      {
+        "action": "smart_test_cycle",
+        "target": "Import CSV",
+        "value": "file.csv"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "file.csv"
+      }
+    ]
+  }
+}
