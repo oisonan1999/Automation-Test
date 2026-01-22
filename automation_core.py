@@ -80,9 +80,8 @@ class BrickAutomation(NavigatorMixin, FormHandlerMixin, DataHandlerMixin, SmartT
                          report_logs.extend(logs)
 
                     elif act == "upload": 
-                         logs = self.handle_upload(page, tgt, val)
-                         logs.extend(self.handle_upload(page, tgt, val))
-                        #  report_logs.append({"step":"Upload","status":"PASS" if s else "FAIL","details":m})
+                         upload_logs = self.handle_upload(page, tgt, val)
+                         report_logs.extend(upload_logs)
                          self.close_popup(page)
                     
                     elif act == "manipulate_csv":
@@ -91,8 +90,19 @@ class BrickAutomation(NavigatorMixin, FormHandlerMixin, DataHandlerMixin, SmartT
                         report_logs.append({"step": "CSV", "status": "PASS" if "Success" in res else "FAIL", "details": res})
 
                     time.sleep(1)
-                
-                return report_logs
+                # ====================================================
+                # [MỚI] TỰ ĐỘNG REFRESH TRANG SAU KHI HOÀN THÀNH
+                # ====================================================
+                print("   🔄 Job Finished. Refreshing page to clean state...")
+                try:
+                    # Reload trang
+                    page.reload()
+                    # Chờ nhẹ 1 chút để đảm bảo trang load xong cơ bản
+                    try: page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    except: pass
+                except Exception as e:
+                    print(f"   ⚠️ Refresh warning: {e}")
+                return report_logs    
             except Exception as e: 
                 print(f"CRASH: {e}")
                 return [{"step": "System", "status": "CRASH", "details": str(e)}]

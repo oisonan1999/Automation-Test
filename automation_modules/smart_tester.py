@@ -71,19 +71,14 @@ class SmartTesterMixin:
             except: pass
 
     def _perform_upload_action(self, page, file_path):
-        """
-        Hàm Upload "Bao sân": Bấm nút -> Confirm -> Chờ Success.
-        Trả về: (Success: Bool, Message: String)
-        """
+        """Hàm Upload bao sân: Bấm nút -> Confirm -> Chờ kết quả"""
         max_retries = 3
-        
         for attempt in range(max_retries):
             try:
                 print(f"      🔄 Upload attempt {attempt+1}...")
-                # 1. Dọn dẹp chiến trường
                 self._ensure_popup_closed(page)
-
-                # 2. Chọn file
+                
+                # 1. Chọn file
                 with page.expect_file_chooser(timeout=3000) as fc_info:
                     btn = page.locator("button:has-text('Import CSV'), a:has-text('Import CSV')").first
                     if not btn.is_visible(): btn = page.locator(".btn-import, [title='Import']").first
@@ -92,42 +87,61 @@ class SmartTesterMixin:
                         btn.scroll_into_view_if_needed()
                         btn.click(force=True)
                     else:
+                        # Fallback: click vào input file ẩn
                         page.locator("input[type='file']").evaluate("e => e.click()")
                 
                 file_chooser = fc_info.value
                 file_chooser.set_files(file_path)
                 
-                # 3. VÒNG LẶP CHỜ KẾT QUẢ (WAIT LOOP)
-                # Thay vì chờ Confirm rồi thoát, ta chờ Confirm -> Bấm -> Chờ Success luôn
+                # 2. Vòng lặp chờ kết quả (Tối đa 20s)
                 start_wait = time.time()
-                while time.time() - start_wait < 20: # Chờ tối đa 20s cho mỗi lần thử
-                    
-                    # A. TÌM THẤY SUCCESS (Ưu tiên số 1)
-                    # Tìm text "Success" hoặc icon check xanh
+                while time.time() - start_wait < 20: 
+                    # A. Check Success (Ưu tiên)
                     success_signal = page.locator(".swal2-success-ring, .toast-success").or_(page.locator("text=Success"))
                     if success_signal.first.is_visible():
-                        print("      ✅ Success detected inside upload loop!")
+                        print("      ✅ Success detected!")
                         return True, "Success"
 
-                    # B. TÌM THẤY LỖI (Import Failed)
-                    error_signal = page.locator(".swal2-validation-error, .swal2-x-mark").or_(page.locator("text=Import Failed"))
-                    if error_signal.first.is_visible():
-                        err_text = error_signal.first.inner_text()
-                        print(f"      ❌ Error detected: {err_text[:50]}")
-                        # Nếu đây là file Valid mà bị lỗi -> Return False luôn, không Retry (vì Retry cũng lỗi thế thôi)
-                        return False, f"Upload Failed: {err_text[:50]}"
+                    # B. Check Error (NÂNG CẤP: Đọc lỗi kỹ hơn)
+                    # Tìm bất kỳ dấu hiệu lỗi nào
+                    error_indicators = page.locator(".swal2-validation-error, .swal2-x-mark, .swal2-icon-error").or_(
+                                       page.locator("text=Import Failed")).or_(
+                                       page.locator(".modal-title:has-text('Error')"))
+                    
+                    if error_indicators.first.is_visible():
+                        # Cố gắng đọc nội dung lỗi từ các container text phổ biến
+                        err_text = ""
+                        
+                        # Ưu tiên 1: Validation Message của SweetAlert (Thường chứa lỗi CSV)
+                        if page.locator("#swal2-validation-message").is_visible():
+                            err_text = page.locator("#swal2-validation-message").inner_text()
+                        
+                        # Ưu tiên 2: HTML Container chính
+                        elif page.locator("#swal2-html-container").is_visible():
+                            err_text = page.locator("#swal2-html-container").inner_text()
+                            
+                        # Ưu tiên 3: Nếu là modal Bootstrap
+                        elif page.locator(".modal-body").is_visible():
+                            err_text = page.locator(".modal-body").inner_text()
+                            
+                        # Fallback: Lấy text từ chính element phát hiện lỗi (nếu nó là text)
+                        if not err_text:
+                            err_text = error_indicators.first.inner_text()
+                            
+                        if not err_text: err_text = "Unknown Error (Icon detected but no text)"
+                        
+                        print(f"      ❌ Error detected: {err_text[:100]}")
+                        return False, f"Upload Failed: {err_text[:100]}"
 
-                    # C. TÌM NÚT CONFIRM (Nếu chưa bấm)
+                    # C. Check Confirm Button (Nếu cần bấm thêm bước xác nhận)
                     confirm_btn = page.locator(".modal.show button.btn-primary:has-text('Upload'), button.swal2-confirm, button:has-text('Confirm')").first
                     if confirm_btn.is_visible():
-                        # Chỉ bấm nếu chưa thấy success
                         confirm_btn.click(force=True)
-                        time.sleep(1) # Chờ server phản hồi sau khi bấm
-                        continue # Quay lại đầu vòng lặp while để check tiếp
+                        time.sleep(1)
+                        continue 
 
                     time.sleep(0.5)
                 
-                # Nếu hết 20s mà không thấy gì -> Retry loop lớn
                 print("      ⚠️ Timeout waiting for response. Retrying...")
                 continue
 
@@ -140,14 +154,14 @@ class SmartTesterMixin:
     def smart_test_cycle(self, page, target_csv):
         logs = []
         try:
-            # ... (Phần A: Chuẩn bị file - GIỮ NGUYÊN) ...
+            # 1. Chuẩn bị file
             file_path = os.path.join(DOWNLOAD_DIR, target_csv)
             if not os.path.exists(file_path):
                  files = sorted(os.listdir(DOWNLOAD_DIR), key=lambda x: os.path.getmtime(os.path.join(DOWNLOAD_DIR, x)))
                  if files: file_path = os.path.join(DOWNLOAD_DIR, files[-1]); target_csv = files[-1]
             original_df = pd.read_csv(file_path)
             
-            # --- PHASE 1: NEGATIVE TESTING (FUZZING) ---
+            # 2. Phase 1: Fuzzing
             print("   🧪 PHASE 1: Running Fuzz Tests...")
             fuzzed_df = self._generate_fuzzed_data(original_df)
             fuzz_path = os.path.join(DOWNLOAD_DIR, f"fuzzed_{target_csv}")
@@ -155,91 +169,56 @@ class SmartTesterMixin:
             save_cols = [c for c in fuzzed_df.columns if c not in meta_cols]
             fuzzed_df[save_cols].to_csv(fuzz_path, index=False)
             
-            # Upload File Lỗi (Gọi hàm Upload mới)
-            # Hàm này sẽ trả về False (vì file lỗi sẽ sinh ra Error Popup)
-            # Nhưng ta cần verify cái Error Text đó
             self._ensure_popup_closed(page)
-            
-            # Lưu ý: Với Fuzzing, ta kỳ vọng nó Fail, nên ta sẽ tự handle việc check error
-            # Tuy nhiên để đơn giản, ta cứ gọi upload, nó sẽ trả về (False, "Upload Failed...")
-            # Sau đó ta đọc lại popup trên màn hình
-            
-            # Thực hiện upload (Chấp nhận nó sẽ báo Fail)
             self._perform_upload_action(page, fuzz_path) 
             
-            # Verify Lỗi (Đọc popup đang hiện trên màn hình)
             print("      🛡️ Analyzing Error Popup...")
             popup_text = ""
             try:
                 any_popup = page.locator(".swal2-popup, .modal-content").first
-                if any_popup.is_visible():
-                    popup_text = any_popup.inner_text().lower()
-                else:
-                    popup_text = "no popup appeared"
-                self._ensure_popup_closed(page) # Đóng ngay
+                if any_popup.is_visible(): popup_text = any_popup.inner_text().lower()
+                else: popup_text = "no popup appeared"
+                self._ensure_popup_closed(page)
             except: popup_text = "error reading popup"
 
             for idx, row in fuzzed_df.iterrows():
                 expected = str(row["EXPECTED_KEYWORD"]).lower()
-                if expected in popup_text:
-                    res = "PASS"; detail = f"Caught: '{expected}'"
-                else:
-                    res = "FAIL"; detail = f"Missed: '{expected}'"
-                    if "no popup" in popup_text: detail = "System did not block invalid data!"
+                if expected in popup_text: res = "PASS"; detail = f"Caught: '{expected}'"
+                else: res = "FAIL"; detail = f"Missed: '{expected}'"
                 logs.append({"step": f"Test Case #{idx+1}", "test_case": row["TEST_CASE"], "status": "EXECUTED", "result": res, "details": detail})
 
-            # --- PHASE 2: POSITIVE TESTING (VALID DATA) ---
+            # 3. Phase 2: Valid Data
             print("   ✨ PHASE 2: Verify Valid Import...")
-            
             valid_df = original_df.iloc[[0]].copy()
             current_timestamp = int(time.time())
             
-            # 1. LOGIC SINH ID (GRABBAG PREFIX)
+            # Logic sinh ID
             for col in valid_df.columns:
                 col_lower = col.lower()
                 if "id" in col_lower or "key" in col_lower:
-                    if "bagid" in col_lower:
-                        new_id = f"Grabbag_Auto_{current_timestamp}"
-                        valid_df[col] = new_id
-                    else:
-                        valid_df[col] = f"Auto_{current_timestamp}"
+                    if "bagid" in col_lower: new_id = f"Grabbag_Auto_{current_timestamp}"
+                    else: new_id = f"Auto_{current_timestamp}"
+                    valid_df[col] = new_id
 
-            # 2. LOGIC BUSINESS RULE: ShowInStore = 0 -> Clear Offers
-            # Tìm tên cột thực tế (không phân biệt hoa thường)
+            # Logic ShowInStore
             show_col = next((c for c in valid_df.columns if c.lower() == "showinstore"), None)
-            
             if show_col:
-                # Lấy giá trị của dòng đầu tiên
                 val = str(valid_df.iloc[0][show_col]).strip()
-                
-                # Nếu giá trị là 0
                 if val == "0" or val == "False":
-                    print("      ℹ️ Detect ShowInStore=0. Clearing Offer dependent columns...")
-                    
-                    # Danh sách các cột cần xóa trắng
                     dependent_cols = ["OfferDisplayID", "OfferParentID", "OfferSectionID"]
-                    
                     for dep in dependent_cols:
-                        # Tìm tên cột thực tế trong file CSV
                         target_col = next((c for c in valid_df.columns if c.lower() == dep.lower()), None)
-                        if target_col:
-                            # Gán giá trị rỗng
-                            valid_df.at[valid_df.index[0], target_col] = "" # Hoặc np.nan nếu cần
+                        if target_col: valid_df.at[valid_df.index[0], target_col] = "" 
 
             valid_path = os.path.join(DOWNLOAD_DIR, f"valid_{target_csv}")
             valid_df.to_csv(valid_path, index=False)
             
-            # Upload File Sạch
             self._ensure_popup_closed(page)
             is_success, msg = self._perform_upload_action(page, valid_path)
             
-            if is_success:
-                final_res = "PASS"
-                final_detail = "Successfully imported valid data"
-                self._ensure_popup_closed(page)
-            else:
-                final_res = "FAIL"
-                final_detail = msg
+            final_res = "PASS" if is_success else "FAIL"
+            final_detail = "Successfully imported valid data" if is_success else msg
+            self._ensure_popup_closed(page)
 
             logs.append({"step": "Final Sanity Check", "test_case": "Import Valid Data", "status": "EXECUTED", "result": final_res, "details": final_detail})
 
@@ -249,15 +228,13 @@ class SmartTesterMixin:
         return logs
     
     def handle_upload(self, page, target_btn_name, file_name):
-        """
-        Hàm Upload file đơn lẻ (được nâng cấp để dùng chung logic dọn dẹp với Smart Cycle)
-        """
+        """Hàm xử lý Upload chính"""
         logs = []
         try:
-            # 1. Xác định file
             real_file_name = file_name
-            # Nếu user nói chung chung "file csv", thử lấy file fuzzed gần nhất
-            if not real_file_name or "file" in real_file_name.lower():
+            
+            # Chỉ fallback khi tên file là 'file.csv' hoặc rỗng
+            if not real_file_name or real_file_name.lower().strip() == "file.csv":
                 real_file_name = self.memory.get('LAST_FUZZED_FILE', file_name)
             
             file_path = os.path.join(DOWNLOAD_DIR, real_file_name)
@@ -265,58 +242,22 @@ class SmartTesterMixin:
                 return [{"step": "Upload", "status": "FAIL", "details": f"File not found: {real_file_name}"}]
 
             print(f"   📤 Uploading: {real_file_name}")
-
-            # 2. GỌI HÀM DỌN DẸP (HARDCORE CLEANUP)
-            # Đảm bảo không còn popup nào từ bước trước ám quẻ
             self._ensure_popup_closed(page)
 
-            # 3. THỰC HIỆN UPLOAD (Dùng lại hàm _perform_upload_action đã viết ở bước trước)
-            # Hàm này đã có logic Retry và Force Click
-            success = self._perform_upload_action(page, file_path)
+            # Gọi hàm thực thi và lấy kết quả trực tiếp
+            success, msg = self._perform_upload_action(page, file_path)
             
-            status = "FAIL"
-            detail = "Upload trigger failed"
-
-            if success:
-                print("   🛡️ Checking upload result...")
-                # 4. CHỜ KẾT QUẢ (SUCCESS HOẶC ERROR)
-                try:
-                    # Chờ 1 trong 2 hiện tượng: Lỗi hoặc Thành công
-                    # swal2-success-ring: Vòng tròn xanh
-                    # swal2-validation-error: Dấu X đỏ hoặc thông báo lỗi
-                    any_result = page.locator(".swal2-success-ring, .toast-success, .alert-success").or_(
-                                 page.locator(".swal2-validation-error, .swal2-x-mark, .modal-content:has-text('Failed')")).or_(
-                                 page.locator("text=Success")).or_(page.locator("text=Import Failed"))
-                    
-                    any_result.first.wait_for(state="visible", timeout=15000)
-                    
-                    # Phân tích xem nó là Success hay Fail
-                    found_text = any_result.first.inner_text().lower() if any_result.first.is_visible() else ""
-                    is_success_icon = page.locator(".swal2-success-ring").is_visible()
-                    
-                    if is_success_icon or "success" in found_text:
-                        status = "PASS"
-                        detail = "Upload successfully"
-                        print("      ✅ Success detected!")
-                    else:
-                        status = "FAIL"
-                        detail = f"Upload failed: {found_text[:50]}..."
-                        print(f"      ⚠️ Error detected: {detail}")
-
-                except Exception as e:
-                    status = "TIMEOUT"
-                    detail = "No response from server after upload"
-
-                # 5. DỌN DẸP LẦN CUỐI (QUAN TRỌNG)
-                # Dù Pass hay Fail, BẮT BUỘC xóa sổ popup để không chặn bước sau
-                self._ensure_popup_closed(page)
+            status = "PASS" if success else "FAIL"
+            detail = "Upload successfully" if success else f"Upload failed: {msg}"
+            
+            self._ensure_popup_closed(page)
 
             logs.append({"step": "Upload", "status": status, "details": detail})
 
         except Exception as e:
             logs.append({"step": "Upload", "status": "CRASH", "details": str(e)})
-            self._ensure_popup_closed(page) # Cứu vãn
-
+            self._ensure_popup_closed(page)
+        
         return logs
     
     def _find_upload_trigger(self, page, name):

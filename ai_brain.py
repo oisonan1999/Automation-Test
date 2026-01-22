@@ -7,53 +7,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SYSTEM_PROMPT = """
-You are a Senior QA Automation AI. 
-Task: Convert User Command into a detailed, sequential JSON Action Plan.
-
-AVAILABLE ACTIONS:
-1. "navigate": {"action": "navigate", "path": ["Menu1", "Menu2"]}
-2. "checkbox": {"action": "checkbox", "target": "ColumnName", "value": "random_N/all"}
-3. "download": {"action": "download", "target": "Export CSV", "value": "file.csv"}
-4. "upload":   {"action": "upload", "target": "Import CSV", "value": "file.csv"}
-5. "manipulate_csv": {"action": "manipulate_csv", "target": "file.csv", "operation": "add/edit/delete", "data": "instruction"}
-6. "smart_test_cycle": {"action": "smart_test_cycle", "target": "Import CSV", "value": "file.csv"}
-7. "clone_row": {"action": "clone_row", "target": "ID"}
-8. "edit_row": {"action": "edit_row", "target": "ID"}
-9. "update_form": {"action": "update_form", "data": {"Label": "Value", ...}}
-   - Used to fill forms/popups. 
-   - MUST extract ALL fields mentioned in user command.
-10. "save_form": {"action": "save_form"}
-
-CRITICAL RULES:
-1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
-   - "Go to A -> B -> Clone C" => 1. navigate [A,B], 2. clone C.
-
-2. **FORM DATA EXTRACTION (CRITICAL)**:
-   - Command: "Set ID: A, Gate: B, Currency: C and Currency Value: D"
-   - You MUST extract ALL 4 fields into one "update_form" action.
-   - Ignore connectors like "and", "và", "then", "with".
-   - Output: 
-     {
-       "action": "update_form", 
-       "data": {
-         "ID": "A", 
-         "Gate": "B", 
-         "Currency": "C", 
-         "Currency Value": "D"
-       }
-     }
-
-3. **CLONE FLOW**:
-   - Command: "Clone 'A' to 'B', gate 'C'..."
-   - Output:
-     [
-       {"action": "clone_row", "target": "A"},
-       {"action": "update_form", "data": {"ID": "B", "Gate": "C", ...}},
-       {"action": "save_form"}
-     ]
-"""
-
+MODEL_REASONING = "deepseek-r1:14b"
+MODEL_FORMATTING = "qwen2.5-coder:14b"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = "scenarios.json"
 
 def load_scenarios():
@@ -76,28 +32,169 @@ def save_scenario(name, plan, user_command=""):
 
 def clean_json_string(text):
     if not text: return "[]"
-    # Remove markdown code blocks
+    # Xử lý các trường hợp model trả về markdown
     text = text.replace("```json", "").replace("```", "").strip()
-    # Extract list if embedded in text
+    
+    # Dùng regex tìm đoạn JSON list [...] nằm ngoài cùng
     match = re.search(r'\[.*\]', text, re.DOTALL)
     if match: return match.group(0)
     return text
 
-def parse_command_to_json(user_command, context_plan=None):
-    context_str = f"\nEXISTING PLAN: {json.dumps(context_plan)}" if context_plan else ""
-    model = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:14b")
-    url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+def call_ollama(model_name, prompt, stream=False):
+    """Hàm gọi API Ollama chung cho cả 2 model"""
     payload = {
-        "model": model,
-        "prompt": f"{SYSTEM_PROMPT}{context_str}\n\nUSER COMMAND: {user_command}\n\nJSON OUTPUT:",
-        "format": "json",
-        "stream": False,
-        "options": {"temperature": 0.1}
+        "model": model_name,
+        "prompt": prompt,
+        "stream": stream,
+        "options": {
+            "temperature": 0.1, # Giữ nhiệt độ thấp để kết quả ổn định
+            "num_ctx": 4096     # Tăng context window nếu lệnh dài
+        }
     }
     try:
-        response = requests.post(url, json=payload)
-        cleaned_json = clean_json_string(response.json().get('response', ''))
-        return json.loads(cleaned_json)
+        response = requests.post(OLLAMA_URL, json=payload)
+        if response.status_code == 200:
+            return response.json().get('response', '')
+        else:
+            print(f"⚠️ Error calling {model_name}: {response.text}")
+            return None
     except Exception as e:
-        print(f"❌ Brain Error: {e}")
-        return [] # Return empty list on error to avoid crash
+        print(f"❌ Connection Error ({model_name}): {e}")
+        return None
+
+def parse_command_to_json(user_command, context_plan=None):
+    print("\n🧠 AI Pipeline Started...")
+
+    # =========================================================================
+    # BƯỚC 1: SUY LUẬN (REASONING PHASE) - Model: DeepSeek-R1
+    # Nhiệm vụ: Hiểu tiếng Việt, phân tích logic, phá giải các yêu cầu phức tạp.
+    # =========================================================================
+    print(f"   1️⃣  DeepSeek-R1 đang suy nghĩ phân tích yêu cầu...")
+    
+    reasoning_prompt = f"""
+    Analyze the following QA Automation Command provided by the user.
+    
+    USER COMMAND: "{user_command}"
+    
+    YOUR TASK:
+    1. Understand the user's intent in Vietnamese/English.
+    2. Break it down into a logical sequence of steps.
+    3. Extract key details like:
+       - Menu paths (e.g., "Data Configs -> Grab Bag").
+       - File names (e.g., "file2.csv").
+       - Specific actions (Upload, Export, Add rows).
+       - Data values (e.g., "BagID=Grabbag_hnm").
+    4. Identify any implicit steps (e.g., "Export" usually means we need to wait for a download).
+    5. Identify specific actions:
+       - "Chọn/Tick X dòng" -> Checkbox action.
+       - "Bất kỳ/Random" -> Value should imply random.
+       - "Export... tên là X" -> Download action with specific filename.
+       - "Thêm dòng... vào file" -> Manipulate CSV action.
+    6. Extract Data:
+       - If adding rows: Extract Column Name and Values (e.g., BagID = A, B).
+
+    Output ONLY the logical analysis/plan in plain text. Do NOT generate JSON yet.
+    """
+    
+    # Gọi DeepSeek
+    raw_analysis = call_ollama(MODEL_REASONING, reasoning_prompt)
+    if not raw_analysis: return []
+
+    # Lọc bỏ thẻ <think>...</think> đặc trưng của DeepSeek-R1 để tránh gây nhiễu cho bước sau
+    analysis_clean = re.sub(r'<think>.*?</think>', '', raw_analysis, flags=re.DOTALL).strip()
+    
+    # In ra một phần suy nghĩ để bạn theo dõi (Debug)
+    print(f"      📝 Phân tích từ DeepSeek: {analysis_clean[:100].replace(chr(10), ' ')}...")
+
+    # =========================================================================
+    # BƯỚC 2: ĐỊNH DẠNG (FORMATTING PHASE) - Model: Qwen2.5-Coder
+    # Nhiệm vụ: Nhìn vào bản phân tích của DeepSeek và viết code JSON chuẩn xác.
+    # =========================================================================
+    print(f"   2️⃣  Qwen2.5-Coder đang chuyển đổi sang JSON Action Plan...")
+
+    formatting_prompt = f"""
+    You are a Senior QA Automation AI and a Strict JSON Converter.
+    I will provide you with a User Command and an Expert Analysis (from DeepSeek).
+    
+    Task: Convert them into a detailed, sequential JSON Action Plan.
+
+    AVAILABLE ACTIONS:
+    1. "navigate": {{ "action": "navigate", "path": ["Menu1", "Menu2"] }}
+    2. "checkbox": 
+       - Rule: Use for "Chọn", "Tick", "Select".
+       - Format: {{ "action": "checkbox", "target": "ColumnName", "value": "random_N" or "all" }}
+       - Example: "Chọn 2 BagID bất kỳ" -> value: "random_2", target: "BagID".
+    3. "download": 
+       - Rule: Use for "Export".
+       - Format: {{ "action": "download", "target": "Export CSV", "value": "filename.csv" }}
+    4. "upload": {{ "action": "upload", "target": "Import CSV", "value": "filename.csv" }}
+    5. "manipulate_csv": 
+       - Rule: Use for "Thêm dòng", "Sửa dòng", "Add rows".
+       - Format: {{ "action": "manipulate_csv", "target": "filename.csv", "operation": "add", "data": "ColName=Val1,Val2" }}
+       - Example: "Thêm 2 dòng BagID là A, B vào file.csv" 
+         -> {{ "action": "manipulate_csv", "target": "file.csv", "operation": "add", "data": "BagID=A,B" }}
+    6. "smart_test_cycle": {{ "action": "smart_test_cycle", "target": "Import CSV", "value": "file.csv" }}
+    7. "clone_row": {{ "action": "clone_row", "target": "ID" }}
+    8. "edit_row": {{ "action": "edit_row", "target": "ID" }}
+    9. "update_form": {{ "action": "update_form", "data": {{ "Label": "Value", ... }} }}
+       - Used to fill forms/popups. 
+       - MUST extract ALL fields mentioned in user command.
+    10. "save_form": {{ "action": "save_form" }}
+
+    CRITICAL RULES:
+    1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
+       - "Go to A -> B -> Clone C" => 1. navigate [A,B], 2. clone C.
+
+    2. **FORM DATA EXTRACTION (CRITICAL)**:
+       - Command: "Set ID: A, Gate: B, Currency: C and Currency Value: D"
+       - You MUST extract ALL 4 fields into one "update_form" action.
+       - Ignore connectors like "and", "và", "then", "with".
+       - Output: 
+         {{
+           "action": "update_form", 
+           "data": {{
+             "ID": "A", 
+             "Gate": "B", 
+             "Currency": "C", 
+             "Currency Value": "D"
+           }}
+         }}
+
+    3. **CLONE FLOW**:
+       - Command: "Clone 'A' to 'B', gate 'C'..."
+       - Output:
+         [
+           {{ "action": "clone_row", "target": "A" }},
+           {{ "action": "update_form", "data": {{ "ID": "B", "Gate": "C", ... }} }},
+           {{ "action": "save_form" }}
+         ]
+
+    INPUT CONTEXT:
+    - Original Command: "{user_command}"
+    - Expert Analysis:
+    {analysis_clean}
+
+    OUTPUT REQUIREMENT:
+    - Output ONLY the raw JSON list [ ... ].
+    - No markdown formatting (no ```json).
+    - No explanations.
+    """
+
+    # Gọi Qwen
+    json_output = call_ollama(MODEL_FORMATTING, formatting_prompt)
+    
+    # Làm sạch và Parse JSON
+    final_json_str = clean_json_string(json_output)
+    
+    try:
+        plan = json.loads(final_json_str)
+        print(f"   ✅ Đã tạo thành công {len(plan)} bước hành động.")
+        if plan and plan[-1].get("action") == "manipulate_csv" and "Import" in user_command:
+             print("   ⚠️ Auto-fix: Adding missing Upload step.")
+             target_file = plan[-1].get("target")
+             plan.append({"action": "upload", "target": "Import CSV", "value": target_file})
+        return plan
+    except json.JSONDecodeError as e:
+        print(f"   ❌ Lỗi Parse JSON từ Qwen: {e}")
+        print(f"   Raw output: {json_output}")
+        return []
