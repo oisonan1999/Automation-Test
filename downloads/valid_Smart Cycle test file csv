@@ -1,0 +1,2 @@
+SectionID,gate,title,subtitle,tooltip,weight,StartDate,EndDate,RepeatWeekly,header_color,background_color,texture,title_icon,is_prize_wall,tab_id
+Section_Auto_1769146388,jan2026_live,!!OFFER_SECTION_JAN2026_ML_NAME,!!SECTION_JUL2025_ML_DESC,!!SECTION_JUL2025_ML_DESC,1000004,,,,Purple,Blue,UI/StoreV2/OfferSections/Header_Premium_2025,,False,feature

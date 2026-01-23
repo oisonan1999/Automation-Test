@@ -6,6 +6,7 @@ import re
 import shutil
 import csv
 from playwright.sync_api import Page
+from streamlit import columns
 from .constants import DOWNLOAD_DIR
 
 class SmartTesterMixin:
@@ -26,17 +27,22 @@ class SmartTesterMixin:
 
         # 1. EMPTY FIELDS (Bắt lỗi Required)
         for col in columns:
-            if "id" in col.lower() or "name" in col.lower() or "gate" in col.lower():
-                r = base_row.copy(); r[col] = ""
-                add_case(r, f"Bỏ trống '{col}'", f"{col} is required")
+            col_lower = col.lower()
+            # Chỉ Fuzzing những cột có vẻ là bắt buộc (ID, Name, Gate)
+            if "id" in col_lower or "name" in col_lower or "gate" in col_lower:
+                # Nếu cột gốc không rỗng mới test lỗi rỗng
+                # (Tránh test lỗi rỗng trên cột vốn dĩ được phép rỗng)
+                val = str(base_row.get(col, ""))
+                if val and val.lower() != "nan":
+                    r = base_row.copy(); r[col] = ""
+                    add_case(r, f"Bỏ trống '{col}'", f"{col} is required")
 
         # 2. TYPE MISMATCH (Bắt lỗi Number/Format)
         for col in columns:
             col_lower = col.lower()
-            if any(x in col_lower for x in ['cost', 'price', 'amount', 'stock']):
+            if any(x in col_lower for x in ['cost', 'price', 'amount', 'stock', 'weight']):
                 r = base_row.copy(); r[col] = "NotANumber"
                 add_case(r, f"Nhập chữ vào cột số '{col}'", "valid integer")
-                
                 r2 = base_row.copy(); r2[col] = "-9999"
                 add_case(r2, f"Số âm trong '{col}'", "must be positive")
 
@@ -45,34 +51,40 @@ class SmartTesterMixin:
             if "id" in col.lower():
                 r = base_row.copy(); r[col] = "ID_@#$%^&*"
                 add_case(r, f"Ký tự lạ trong '{col}'", "invalid format")
-                
+                # XSS Test nhẹ
                 r2 = base_row.copy(); r2[col] = "<script>alert(1)</script>"
                 add_case(r2, f"XSS Script trong '{col}'", "invalid format")
 
         return pd.DataFrame(fuzzed_rows)
     
     def _ensure_popup_closed(self, page):
-        """Chỉ dùng để dọn dẹp TRƯỚC khi bắt đầu upload"""
-        targets = [".swal2-container", ".modal.show", ".modal-backdrop", ".swal2-overlay"]
-        has_popup = False
-        for sel in targets:
-            if page.locator(sel).count() > 0: has_popup = True
+        """Dọn dẹp popup: Ưu tiên click nút đóng trước, xóa DOM sau"""
+        # 1. Thử click nút OK/Close/Cancel (Cách lịch sự)
+        try:
+            # Tìm các nút đóng phổ biến
+            close_btns = page.locator(".swal2-confirm, .swal2-cancel, .btn-close, .close, button:has-text('Close'), button:has-text('OK')").all()
+            for btn in close_btns:
+                if btn.is_visible():
+                    btn.click()
+                    time.sleep(0.2)
+        except: pass
         
-        if has_popup:
-            try:
-                # Ưu tiên xóa DOM để nhanh gọn
-                page.evaluate("""
-                    document.querySelectorAll('.swal2-container, .modal-backdrop, .modal.show').forEach(e => e.remove());
-                    document.body.classList.remove('swal2-shown', 'swal2-height-auto', 'modal-open');
-                    document.body.style.overflow = 'auto';
-                    document.body.style.height = 'auto';
-                """)
-                time.sleep(0.5)
-            except: pass
+        time.sleep(0.5)
+
+        # 2. Xóa DOM (Biện pháp mạnh - Cleanup)
+        try:
+            page.evaluate("""
+                document.querySelectorAll('.swal2-container, .modal-backdrop, .modal.show').forEach(e => e.remove());
+                document.body.classList.remove('swal2-shown', 'swal2-height-auto', 'modal-open');
+                document.body.style.overflow = 'auto';
+                document.body.style.height = 'auto';
+            """)
+        except: pass
 
     def _perform_upload_action(self, page, file_path):
         """Hàm Upload bao sân: Bấm nút -> Confirm -> Chờ kết quả"""
         max_retries = 3
+        wait_timeout = 40
         for attempt in range(max_retries):
             try:
                 print(f"      🔄 Upload attempt {attempt+1}...")
@@ -87,7 +99,6 @@ class SmartTesterMixin:
                         btn.scroll_into_view_if_needed()
                         btn.click(force=True)
                     else:
-                        # Fallback: click vào input file ẩn
                         page.locator("input[type='file']").evaluate("e => e.click()")
                 
                 file_chooser = fc_info.value
@@ -95,51 +106,48 @@ class SmartTesterMixin:
                 
                 # 2. Vòng lặp chờ kết quả (Tối đa 20s)
                 start_wait = time.time()
-                while time.time() - start_wait < 20: 
-                    # A. Check Success (Ưu tiên)
-                    success_signal = page.locator(".swal2-success-ring, .toast-success").or_(page.locator("text=Success"))
-                    if success_signal.first.is_visible():
-                        print("      ✅ Success detected!")
-                        return True, "Success"
-
-                    # B. Check Error (NÂNG CẤP: Đọc lỗi kỹ hơn)
-                    # Tìm bất kỳ dấu hiệu lỗi nào
-                    error_indicators = page.locator(".swal2-validation-error, .swal2-x-mark, .swal2-icon-error").or_(
-                                       page.locator("text=Import Failed")).or_(
-                                       page.locator(".modal-title:has-text('Error')"))
+                while time.time() - start_wait < wait_timeout: 
+                    # --- CHIẾN THUẬT MỚI: QUÉT TOÀN BỘ POPUP ---
+                    # Tìm bất kỳ popup nào đang hiện (Success, Error, Confirm)
+                    popup = page.locator(".swal2-popup, .modal-content, .toast-message").first
                     
-                    if error_indicators.first.is_visible():
-                        # Cố gắng đọc nội dung lỗi từ các container text phổ biến
-                        err_text = ""
+                    if popup.is_visible():
+                        # Lấy toàn bộ text để phân tích
+                        text = popup.inner_text().lower()
+                        clean_text = text.replace("\n", " ").strip()[:150] # Lấy 150 ký tự đầu
                         
-                        # Ưu tiên 1: Validation Message của SweetAlert (Thường chứa lỗi CSV)
-                        if page.locator("#swal2-validation-message").is_visible():
-                            err_text = page.locator("#swal2-validation-message").inner_text()
+                        # A. Phân tích: SUCCESS
+                        if "success" in text or "hoàn thành" in text:
+                            print("      ✅ Success detected!")
+                            return True, "Success"
                         
-                        # Ưu tiên 2: HTML Container chính
-                        elif page.locator("#swal2-html-container").is_visible():
-                            err_text = page.locator("#swal2-html-container").inner_text()
-                            
-                        # Ưu tiên 3: Nếu là modal Bootstrap
-                        elif page.locator(".modal-body").is_visible():
-                            err_text = page.locator(".modal-body").inner_text()
-                            
-                        # Fallback: Lấy text từ chính element phát hiện lỗi (nếu nó là text)
-                        if not err_text:
-                            err_text = error_indicators.first.inner_text()
-                            
-                        if not err_text: err_text = "Unknown Error (Icon detected but no text)"
-                        
-                        print(f"      ❌ Error detected: {err_text[:100]}")
-                        return False, f"Upload Failed: {err_text[:100]}"
+                        # B. Phân tích: ERROR
+                        # Nếu thấy từ khóa lỗi -> Return False ngay (đừng bấm OK vội)
+                        error_keywords = ["failed", "error", "invalid", "duplicate", "missing", "required", "not found", "lỗi", "thất bại", "warning"]
+                        if any(k in text for k in error_keywords) and "confirm" not in text:
+                            print(f"      ❌ Error detected: {clean_text}")
+                            return False, f"Upload Failed: {clean_text}"
 
-                    # C. Check Confirm Button (Nếu cần bấm thêm bước xác nhận)
-                    confirm_btn = page.locator(".modal.show button.btn-primary:has-text('Upload'), button.swal2-confirm, button:has-text('Confirm')").first
-                    if confirm_btn.is_visible():
-                        confirm_btn.click(force=True)
-                        time.sleep(1)
-                        continue 
-
+                        # C. Phân tích: CONFIRM (Chỉ bấm nếu là câu hỏi xác nhận)
+                        # Tìm nút bấm
+                        confirm_btn = popup.locator("button.swal2-confirm, button.btn-primary").first
+                        if confirm_btn.is_visible():
+                            btn_text = confirm_btn.inner_text().lower()
+                            
+                            # Chỉ bấm nếu nút là "Upload", "Confirm", "Yes", "Save"
+                            # HOẶC nếu text popup có chứa câu hỏi "are you sure", "confirm"
+                            is_action_btn = any(x in btn_text for x in ["upload", "confirm", "yes", "save"])
+                            is_confirm_msg = any(x in text for x in ["are you sure", "overwrite", "tiếp tục"])
+                            
+                            if is_action_btn or is_confirm_msg:
+                                print(f"      👉 Confirming Upload: {btn_text}")
+                                confirm_btn.click(force=True)
+                                time.sleep(1)
+                                continue
+                            
+                            # Nếu là nút "OK" đơn thuần mà không có từ khóa Error/Success -> Có thể là Info
+                            # Robot sẽ chờ thêm chút nữa xem có thay đổi gì không
+                    
                     time.sleep(0.5)
                 
                 print("      ⚠️ Timeout waiting for response. Retrying...")
@@ -175,7 +183,8 @@ class SmartTesterMixin:
             print("      🛡️ Analyzing Error Popup...")
             popup_text = ""
             try:
-                any_popup = page.locator(".swal2-popup, .modal-content").first
+                # Đọc lỗi kỹ hơn cho Fuzzing phase
+                any_popup = page.locator(".swal2-popup, .modal-content, .alert-danger").first
                 if any_popup.is_visible(): popup_text = any_popup.inner_text().lower()
                 else: popup_text = "no popup appeared"
                 self._ensure_popup_closed(page)
@@ -187,20 +196,47 @@ class SmartTesterMixin:
                 else: res = "FAIL"; detail = f"Missed: '{expected}'"
                 logs.append({"step": f"Test Case #{idx+1}", "test_case": row["TEST_CASE"], "status": "EXECUTED", "result": res, "details": detail})
 
-            # 3. Phase 2: Valid Data
+            # 3. Phase 2: Valid Data (FIX #2 & #3)
             print("   ✨ PHASE 2: Verify Valid Import...")
             valid_df = original_df.iloc[[0]].copy()
             current_timestamp = int(time.time())
             
-            # Logic sinh ID
+            # --- LOGIC SINH ID THÔNG MINH (SMART PREFIX) ---
             for col in valid_df.columns:
                 col_lower = col.lower()
+                
+                # tab_id: Là Enum cố định (feature, prize_wall...)
+                # group_id: Thường là FK, không nên random
+                exclude_list = ["tab_id", "tabid", "group_id", "parent_id"]
+                if any(ex in col_lower for ex in exclude_list):
+                    print(f"      ℹ️ Skipping ID generation for excluded column: '{col}'")
+                    continue
+                # Chỉ xử lý các cột là Key hoặc ID
                 if "id" in col_lower or "key" in col_lower:
-                    if "bagid" in col_lower: new_id = f"Grabbag_Auto_{current_timestamp}"
-                    else: new_id = f"Auto_{current_timestamp}"
-                    valid_df[col] = new_id
+                    original_val = valid_df.iloc[0][col]
+                    
+                    # FIX #2: Nếu cột gốc RỖNG, thì KHÔNG sinh giá trị mới (Giữ nguyên rỗng)
+                    if pd.isna(original_val) or str(original_val).strip() == "":
+                        continue 
 
-            # Logic ShowInStore
+                    # FIX #3: Prefix động dựa theo tên cột
+                    prefix = "" # Mặc định
+                    
+                    if "bagid" in col_lower: prefix = "Grabbag_"
+                    elif "boost" in col_lower: prefix = "Boost_"
+                    elif "wrestler" in col_lower: prefix = "Wrestler_"
+                    elif "skin" in col_lower: prefix = "Skin_"
+                    elif "perk" in col_lower: prefix = "Perk_"
+                    elif "gear" in col_lower: prefix = "Gear_"
+                    elif "offer" in col_lower: prefix = "offer_"
+                    elif "section" in col_lower in col_lower: prefix = "Section_" # Ví dụ OfferSectionID
+                    
+                    # Tạo ID mới: Prefix + Auto + Timestamp
+                    new_id = f"{prefix}Auto_{current_timestamp}"
+                    valid_df[col] = new_id
+                    print(f"      ℹ️ Generated ID for '{col}': {new_id}")
+
+            # Logic ShowInStore (Giữ nguyên)
             show_col = next((c for c in valid_df.columns if c.lower() == "showinstore"), None)
             if show_col:
                 val = str(valid_df.iloc[0][show_col]).strip()
