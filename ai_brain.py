@@ -240,3 +240,15 @@ def parse_command_to_json(user_command, context_plan=None):
         print(f"   ❌ Lỗi Parse JSON từ Qwen: {e}")
         print(f"   Raw output: {json_output}")
         return []
+
+
+def unload_model(model_name):
+    # Gửi request rỗng với keep_alive=0 để unload ngay lập tức
+    try:
+        requests.post(
+            "http://localhost:11434/api/generate",
+            json={"model": model_name, "keep_alive": 0},
+        )
+        print(f"   🧹 Đã giải phóng VRAM model: {model_name}")
+    except:
+        pass
