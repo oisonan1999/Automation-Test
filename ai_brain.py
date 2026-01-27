@@ -12,33 +12,38 @@ MODEL_FORMATTING = "qwen2.5-coder:14b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = "scenarios.json"
 
+
 def load_scenarios():
-    if not os.path.exists(SCENARIO_FILE): return {}
+    if not os.path.exists(SCENARIO_FILE):
+        return {}
     try:
-        with open(SCENARIO_FILE, 'r', encoding='utf-8') as f:
+        with open(SCENARIO_FILE, "r", encoding="utf-8") as f:
             content = f.read().strip()
             return json.loads(content) if content else {}
-    except: return {}
+    except:
+        return {}
+
 
 def save_scenario(name, plan, user_command=""):
     data = load_scenarios()
     # Lưu cả câu lệnh gốc và kế hoạch JSON
-    data[name] = {
-        "command": user_command,
-        "plan": plan
-    }
-    with open(SCENARIO_FILE, 'w', encoding='utf-8') as f:
+    data[name] = {"command": user_command, "plan": plan}
+    with open(SCENARIO_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+
 def clean_json_string(text):
-    if not text: return "[]"
+    if not text:
+        return "[]"
     # Xử lý các trường hợp model trả về markdown
     text = text.replace("```json", "").replace("```", "").strip()
-    
+
     # Dùng regex tìm đoạn JSON list [...] nằm ngoài cùng
-    match = re.search(r'\[.*\]', text, re.DOTALL)
-    if match: return match.group(0)
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if match:
+        return match.group(0)
     return text
+
 
 def call_ollama(model_name, prompt, stream=False):
     """Hàm gọi API Ollama chung cho cả 2 model"""
@@ -47,20 +52,21 @@ def call_ollama(model_name, prompt, stream=False):
         "prompt": prompt,
         "stream": stream,
         "options": {
-            "temperature": 0.1, # Giữ nhiệt độ thấp để kết quả ổn định
-            "num_ctx": 4096     # Tăng context window nếu lệnh dài
-        }
+            "temperature": 0.1,  # Giữ nhiệt độ thấp để kết quả ổn định
+            "num_ctx": 4096,  # Tăng context window nếu lệnh dài
+        },
     }
     try:
         response = requests.post(OLLAMA_URL, json=payload)
         if response.status_code == 200:
-            return response.json().get('response', '')
+            return response.json().get("response", "")
         else:
             print(f"⚠️ Error calling {model_name}: {response.text}")
             return None
     except Exception as e:
         print(f"❌ Connection Error ({model_name}): {e}")
         return None
+
 
 def parse_command_to_json(user_command, context_plan=None):
     print("\n🧠 AI Pipeline Started...")
@@ -70,7 +76,7 @@ def parse_command_to_json(user_command, context_plan=None):
     # Nhiệm vụ: Hiểu tiếng Việt, phân tích logic, phá giải các yêu cầu phức tạp.
     # =========================================================================
     print(f"   1️⃣  DeepSeek-R1 đang suy nghĩ phân tích yêu cầu...")
-    
+
     reasoning_prompt = f"""
     Analyze the following QA Automation Command provided by the user.
     
@@ -92,19 +98,26 @@ def parse_command_to_json(user_command, context_plan=None):
        - "Thêm dòng... vào file" -> Manipulate CSV action.
     6. Extract Data:
        - If adding rows: Extract Column Name and Values (e.g., BagID = A, B).
+    7. "Scan tabs..." -> Means we are inside a detail page and need to check multiple tabs.
+    8. "Sửa Cost..., Sửa Stock..." -> Means we are filling a form.
 
     Output ONLY the logical analysis/plan in plain text. Do NOT generate JSON yet.
     """
-    
+
     # Gọi DeepSeek
     raw_analysis = call_ollama(MODEL_REASONING, reasoning_prompt)
-    if not raw_analysis: return []
+    if not raw_analysis:
+        return []
 
     # Lọc bỏ thẻ <think>...</think> đặc trưng của DeepSeek-R1 để tránh gây nhiễu cho bước sau
-    analysis_clean = re.sub(r'<think>.*?</think>', '', raw_analysis, flags=re.DOTALL).strip()
-    
+    analysis_clean = re.sub(
+        r"<think>.*?</think>", "", raw_analysis, flags=re.DOTALL
+    ).strip()
+
     # In ra một phần suy nghĩ để bạn theo dõi (Debug)
-    print(f"      📝 Phân tích từ DeepSeek: {analysis_clean[:100].replace(chr(10), ' ')}...")
+    print(
+        f"      📝 Phân tích từ DeepSeek: {analysis_clean[:100].replace(chr(10), ' ')}..."
+    )
 
     # =========================================================================
     # BƯỚC 2: ĐỊNH DẠNG (FORMATTING PHASE) - Model: Qwen2.5-Coder
@@ -140,7 +153,10 @@ def parse_command_to_json(user_command, context_plan=None):
        - Used to fill forms/popups. 
        - MUST extract ALL fields mentioned in user command.
     10. "save_form": {{ "action": "save_form" }}
-
+    11. "scan_tabs": 
+        - Rule: Use when user says "Scan tabs", "Quét các tab", "Duyệt qua các tab".
+        - IMPORTANT: If user lists fields to update immediately after "Scan tabs", PUT THEM INSIDE "data".
+        - Format: {{ "action": "scan_tabs", "data": {{ "Field1": "Val1", "Field2": "Val2" }} }}
     CRITICAL RULES:
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
        - "Go to A -> B -> Clone C" => 1. navigate [A,B], 2. clone C.
@@ -168,6 +184,26 @@ def parse_command_to_json(user_command, context_plan=None):
            {{ "action": "update_form", "data": {{ "ID": "B", "Gate": "C", ... }} }},
            {{ "action": "save_form" }}
          ]
+    4. **TABLE vs FORM DISTINCTION**:
+       - Command: "Bấm nút Edit của BagID: ABC" 
+         -> CORRECT: {{ "action": "edit_row", "target": "ABC" }}
+         -> WRONG:   {{ "action": "update_form", "data": {{ "BagID": "ABC" }} }} (Do NOT do this)
+    5. **SEQUENCE**:
+       - "Edit A -> Scan tabs -> Set B" 
+         => 1. edit_row(A), 2. scan_tabs(B)
+    CRITICAL EXAMPLES:
+    
+    Ex 1: "Edit ID ABC -> Quét các tab -> Sửa Cost: 10, Sửa Stock: 5"
+    WRONG: [{{ "action": "edit_row" }}, {{ "action": "scan_tabs", "data": {{}} }}, {{ "action": "update_form", "data": {{ "Cost": "10" }} }}]
+    CORRECT: [
+      {{ "action": "edit_row", "target": "ABC" }},
+      {{ "action": "scan_tabs", "data": {{ "Cost": "10", "Stock": "5" }} }}  <-- MERGED HERE
+    ]
+
+    Ex 2: "... -> Vào tab Pulls -> Sửa Quantity: 10"
+    CORRECT: [
+      {{ "action": "update_form", "data": {{ "Tab": "Pulls", "Quantity": "10" }} }}
+    ]
 
     INPUT CONTEXT:
     - Original Command: "{user_command}"
@@ -182,17 +218,23 @@ def parse_command_to_json(user_command, context_plan=None):
 
     # Gọi Qwen
     json_output = call_ollama(MODEL_FORMATTING, formatting_prompt)
-    
+
     # Làm sạch và Parse JSON
     final_json_str = clean_json_string(json_output)
-    
+
     try:
         plan = json.loads(final_json_str)
         print(f"   ✅ Đã tạo thành công {len(plan)} bước hành động.")
-        if plan and plan[-1].get("action") == "manipulate_csv" and "Import" in user_command:
-             print("   ⚠️ Auto-fix: Adding missing Upload step.")
-             target_file = plan[-1].get("target")
-             plan.append({"action": "upload", "target": "Import CSV", "value": target_file})
+        if (
+            plan
+            and plan[-1].get("action") == "manipulate_csv"
+            and "Import" in user_command
+        ):
+            print("   ⚠️ Auto-fix: Adding missing Upload step.")
+            target_file = plan[-1].get("target")
+            plan.append(
+                {"action": "upload", "target": "Import CSV", "value": target_file}
+            )
         return plan
     except json.JSONDecodeError as e:
         print(f"   ❌ Lỗi Parse JSON từ Qwen: {e}")

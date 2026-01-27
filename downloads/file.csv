@@ -1,4 +1,0 @@
-﻿SectionID,gate,title,subtitle,tooltip,weight,StartDate,EndDate,RepeatWeekly,header_color,background_color,texture,title_icon,is_prize_wall,tab_id
-Section_Nov2025_PW_Armory,nov2025_live,!!SECTION_MAR2025_CHAMP_PW_MIDWK_NAME,!!SECTION_JUN2025_PW_ARMORY_DESC,!!SECTION_JUN2025_PW_ARMORY_DESC,1000003,10/24/2025 20:00,12/10/2025 20:00,,Purple,Blue,UI/StoreV2/OfferSections/Header_Premium_2025,,true,prize_wall
-Section_Oct2025_Wknd2,oct2025_wknd2,!!SECTION_OCT2025_WKND2_NAME,!!SECTION_OCT2025_WKND2_DESC,,1103008643,,,,Teal,DarkBlue,UI/StoreV2/OfferSections/Header_Standard_Generic_Orange_A_2025,,false,feature
-Section_Sep2025_ML_Special,sep2025_live,!!OFFER_SECTION_SEP2025_ML_SPECIAL_NAME,!!SECTION_MAR2023_ML_SPECIAL_DESC,!!SECTION_MAR2023_ML_SPECIAL_DESC,1112900525,,,,Purple,Blue,UI/StoreV2/OfferSections/Header_Premium_2025,,false,feature

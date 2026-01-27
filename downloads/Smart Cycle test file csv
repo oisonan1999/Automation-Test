@@ -1,7 +1,0 @@
-﻿SectionID,gate,title,subtitle,tooltip,weight,StartDate,EndDate,RepeatWeekly,header_color,background_color,texture,title_icon,is_prize_wall,tab_id
-Section_Jan2026_ML,jan2026_live,!!OFFER_SECTION_JAN2026_ML_NAME,!!SECTION_JUL2025_ML_DESC,!!SECTION_JUL2025_ML_DESC,1000004,,,,Purple,Blue,UI/StoreV2/OfferSections/Header_Premium_2025,,false,feature
-Section_Jan2026_PC_PW,jan2026_live,!!OFFER_SECTION_JAN2026_PC_PW_NAME,!!OFFER_SECTION_JAN2026_PC_PW_DESC,!!OFFER_SECTION_JAN2026_PC_PW_DESC,2147483647,01/20/2026 20:00,01/24/2026 20:00,,Blue,Blue,UI/StoreV2/OfferSections/Header_Premium_2025,,true,prize_wall
-Section_Jan2026_Weeklong_PW,jan2026_weeklong,!!SECTION_JAN2026_WEEKLONG_PW,!!SECTION_JAN2026_WEEKLONG_PW_DESC,!!SECTION_JAN2026_WEEKLONG_PW_DESC,1000007999,01/26/2026 20:00,01/31/2026 20:00,,Purple,Blue,UI/StoreV2/OfferSections/Header_HoFS_Premium,,true,prize_wall
-Section_Nov2025_Weeklong,nov2025_weeklong,!!SECTION_NOV2025_WEEKLONG,!!SECTION_NOV2025_WEEKLONG_DESC,!!SECTION_NOV2025_WEEKLONG_DESC,1000006,,,,DarkBlue,Blue,UI/StoreV2/OfferSections/Header_HoFS_Premium,,false,feature
-Section_Nov2025_Wknd3_PW,nov2025_wknd3,!!SECTION_NOV2025_WKND3_PW_NAME,!!SECTION_NOV2025_WKND3_PW_DESC,!!SECTION_NOV2025_WKND3_PW_DESC,1003008641,11/21/2025 20:00,11/25/2025 20:00,,DarkBlue,DarkBlue,UI/StoreV2/OfferSections/Header_Premium_2025,,true,prize_wall
-Section_Nov2025_Wknd5,nov2025_wknd5,!!SECTION_NOV2025_WKND5_NAME,!!SECTION_NOV2025_WKND5_DESC,!!SECTION_NOV2025_WKND5_DESC,1000010,,,,DarkBlue,DarkBlue,UI/StoreV2/OfferSections/Header_Purple_2025,,false,feature
