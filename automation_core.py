@@ -70,7 +70,40 @@ class BrickAutomation(
                     if act == "navigate":
                         self._smart_navigate_path(page, step.get("path", [tgt, val]))
                     elif act == "checkbox":
-                        report_logs.extend(self.handle_checkbox(page, tgt, val))
+                        # CHIẾN THUẬT MỚI: Check xem có phải Form Toggle không TRƯỚC
+                        print(f"      🔍 Checking if '{tgt}' is a Form Toggle...")
+                        form_el = self._find_input_element(page, tgt)
+
+                        if form_el:
+                            # Nếu tìm thấy trong Form -> Xử lý như Toggle Form
+                            print(
+                                f"      👉 Found in Form! Switching to Form Handler..."
+                            )
+                            self._smart_update_form(page, {tgt: val})
+                            report_logs.append(
+                                {
+                                    "step": "Form Toggle",
+                                    "status": "PASS",
+                                    "details": f"Toggle {tgt} -> {val}",
+                                }
+                            )
+                        else:
+                            # Nếu không thấy trong Form -> Mới tìm trong Bảng
+                            print(
+                                f"      👉 Not found in Form. Trying Table Checkbox..."
+                            )
+                            try:
+                                logs = self.handle_checkbox(page, tgt, val)
+                                report_logs.extend(logs)
+                            except Exception as e:
+                                print(f"      ⚠️ Table Checkbox failed: {e}")
+                                report_logs.append(
+                                    {
+                                        "step": "Checkbox",
+                                        "status": "FAIL",
+                                        "details": str(e),
+                                    }
+                                )
                     elif act == "edit_row":
                         self._click_icon_in_row(page, tgt, "edit")
                     elif act == "clone_row":

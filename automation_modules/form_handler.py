@@ -230,6 +230,10 @@ class FormHandlerMixin:
         print(f"   📝 Updating Form (Strict={strict_mode}): {data_dict}")
         self._handle_locked_item_popup(page)
 
+        if "Tab" in data_dict:
+            tab_name = data_dict.pop("Tab")
+            self._switch_to_tab(page, tab_name)
+
         # 1. SCOPE
         try:
             modal = page.locator(
@@ -300,6 +304,12 @@ class FormHandlerMixin:
         # 3. LOOP DATA
         for key, value in data_dict.items():
             print(f"      👉 Xử lý '{key}' -> '{value}'")
+            target = self._find_input_element(page, key)
+            if target:
+                self._fill_element_smartly(page, target, value)
+            else:
+                print(f"      ❌ Give up: Cannot find field '{key}'")
+
             target_input = None
 
             # --- RETRY LOOP (Thử 3 lần, mỗi lần chờ 1s để bảng render) ---
@@ -615,60 +625,152 @@ class FormHandlerMixin:
     # ============================
     # 6. HELPERS
     # ============================
-    def _save_form(self, page):
-        print("   💾 Saving/Cloning...")
+    def _save_form(self, page, mode="continue"):
+        """
+        Hợp nhất:
+        1. Ưu tiên tuyệt đối attribute 'data-continue' (Fix lỗi hiện tại).
+        2. Fallback về logic tìm text linh hoạt của bạn (Create/Clone/Update...).
+        3. Hỗ trợ scope Modal.
+        """
+
+        def handle_dialog(dialog):
+            print(f"      🚨 Browser Alert detected: {dialog.message}")
+            dialog.accept()  # Bấm OK để tắt alert đi
+
+        # Xóa listener cũ (nếu có) để tránh duplicate
         try:
+            page.remove_listener("dialog", handle_dialog)
+        except:
+            pass
+
+        page.on("dialog", handle_dialog)
+
+        print(f"   💾 Action: Save/Submit (Mode: {mode})...")
+
+        try:
+            # 1. Xác định phạm vi (Scope) - Giữ logic của bạn
             scope = page
+            # Nếu có modal đang mở, chỉ tìm trong modal
             if page.locator(".modal.show").count() > 0:
                 scope = page.locator(".modal.show").last
 
-            # 1. Ưu tiên tìm nút "Save & Continue" trước
-            continue_btn = scope.locator(
-                "button:has-text('Save & Continue'), a:has-text('Save & Continue')"
-            ).last
-            if continue_btn.is_visible():
-                print("      👉 Click nút: 'Save & Continue'")
-                continue_btn.click()
-                self._wait_after_save(page)
-                return "Continue"
+            target_btn = None
 
-            # 2. Nếu không có, tìm các nút Save/Create/Clone thường
-            target_texts = [
-                "Save All",
-                "Save",
-                "Create",
-                "Update",
-                "Submit",
-                "Duplicate",
-                "Clone",
-            ]
-            for text in target_texts:
+            # =========================================================
+            # CHIẾN THUẬT 1: TÌM CHÍNH XÁC "SAVE & CONTINUE" (ƯU TIÊN SỐ 1)
+            # =========================================================
+            if mode == "continue":
+                # Tìm bằng "chìa khóa vàng" data-continue='1'
                 btn = scope.locator(
-                    f"button:has-text('{text}'), a.btn:has-text('{text}')"
+                    "button[data-continue='1'], input[data-continue='1']"
                 ).last
                 if btn.is_visible():
-                    print(f"      👉 Click nút: '{text}'")
-                    btn.click()
-                    self._wait_after_save(page)
-                    return "Save"
+                    print("      🎯 Found 'Save & Continue' via [data-continue='1']")
+                    target_btn = btn
+                else:
+                    # Fallback Regex: Chấp nhận icon hoặc khoảng trắng lạ
+                    # r"Save.*Continue" tìm chữ Save rồi đến Continue bất kể ở giữa là gì
+                    print("      ⚠️ Fallback: Tìm text 'Save...Continue'")
+                    regex = re.compile(r"Save.*Continue", re.IGNORECASE)
+                    target_btn = scope.locator("button, a").filter(has_text=regex).last
 
-            # 3. Fallback theo class
-            class_selectors = [
-                "button.btn-primary",
-                "button.btn-success",
-                "input[type='submit']",
-            ]
-            for sel in class_selectors:
-                btn = scope.locator(sel).last
-                if btn.is_visible():
-                    btn.click()
-                    self._wait_after_save(page)
-                    return "Save"
+            # =========================================================
+            # CHIẾN THUẬT 2: TÌM CÁC NÚT KHÁC (SAVE, CLONE, CREATE...)
+            # =========================================================
+            else:  # mode == "save" hoặc mặc định
+                # 2.1. Tìm nút Save chuẩn (Tránh nhầm nút Continue)
+                # Tìm nút .btn-save hoặc nút có chữ Save nhưng KHÔNG có chữ Continue
+                save_regex = re.compile(r"Save(?!.*Continue)", re.IGNORECASE)
 
-            print("      ❌ Không tìm thấy nút Save/Clone nào khả thi.")
-        except:
-            pass
-        return "Fail"
+                # Ưu tiên class .btn-save chuẩn của Brick
+                btn_class = scope.locator(".btn-save:not([data-continue='1'])").last
+
+                if btn_class.is_visible():
+                    target_btn = btn_class
+                elif (
+                    scope.locator("button")
+                    .filter(has_text=save_regex)
+                    .last.is_visible()
+                ):
+                    target_btn = (
+                        scope.locator("button").filter(has_text=save_regex).last
+                    )
+
+                # 2.2. Nếu không phải Save, tìm các hành động khác (Logic cũ của bạn)
+                if not target_btn or not target_btn.is_visible():
+                    target_texts = [
+                        "Save All",
+                        "Create",
+                        "Update",
+                        "Submit",
+                        "Duplicate",
+                        "Clone",
+                        "Confirm",
+                        "Yes",
+                        "Acquire Lock",
+                    ]
+                    for text in target_texts:
+                        # Dùng regex biên \b để tìm chính xác từ (tránh tìm nhầm)
+                        # VD: Tìm "Create" sẽ không bắt nhầm "Created By"
+                        btn = (
+                            scope.locator(f"button, a.btn, input[type='submit']")
+                            .filter(has_text=re.compile(re.escape(text), re.IGNORECASE))
+                            .last
+                        )
+                        if btn.is_visible():
+                            print(f"      👉 Found generic button: '{text}'")
+                            target_btn = btn
+                            break
+
+            # =========================================================
+            # CHIẾN THUẬT 3: FALLBACK THEO CLASS (CŨNG CỦA BẠN)
+            # =========================================================
+            if not target_btn or not target_btn.is_visible():
+                class_selectors = [
+                    "button.btn-primary",
+                    "button.btn-success",
+                    "input[type='submit']",
+                ]
+                for sel in class_selectors:
+                    btn = scope.locator(sel).last
+                    if btn.is_visible():
+                        target_btn = btn
+                        print(f"      ⚠️ Fallback class match: {sel}")
+                        break
+
+            # =========================================================
+            # THỰC HIỆN CLICK
+            # =========================================================
+            if target_btn and target_btn.is_visible():
+                target_btn.scroll_into_view_if_needed()
+                time.sleep(0.5)
+                target_btn.click(force=True)
+                print("      ✅ Clicked successfully.")
+
+                # Gọi hàm wait của bạn (nếu class có method này)
+                if hasattr(self, "_wait_after_save"):
+                    self._wait_after_save(page)
+                else:
+                    # Logic wait mặc định nếu chưa có hàm riêng
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=3000)
+                    except:
+                        time.sleep(2)
+
+                return "Success"
+
+            print("      ❌ Không tìm thấy nút Save/Action nào khả thi.")
+            return "Fail"
+
+        except Exception as e:
+            print(f"      ⚠️ Save Error: {e}")
+            return "Error"
+        finally:
+            # Gỡ listener để không ảnh hưởng các bước sau
+            try:
+                page.remove_listener("dialog", handle_dialog)
+            except:
+                pass
 
     def _wait_after_save(self, page):
         """Hàm phụ: Chờ thông báo thành công hoặc Popup đóng lại"""
@@ -690,23 +792,28 @@ class FormHandlerMixin:
 
     def _handle_locked_item_popup(self, page):
         try:
+            # Tìm popup có chứa text "locked this item"
             popup = (
-                page.locator(".modal-content, .popover")
+                page.locator(".modal-content, .swal2-popup")
                 .filter(has_text="locked this item")
-                .first
+                .last
             )
-            if popup.is_visible(timeout=2000):
-                print("   ⚠️ Locked Item Popup detected.")
-                btn = (
+
+            if popup.is_visible(timeout=2000):  # Check nhanh 2s
+                print("      🔒 Detected Locked Item Popup.")
+                # Tìm nút Acquire Lock
+                acquire_btn = (
                     popup.locator("button, a")
-                    .filter(has_text=re.compile("Acquire|Unlock|Edit", re.IGNORECASE))
+                    .filter(has_text=re.compile("Acquire Lock|Unlock", re.IGNORECASE))
                     .first
                 )
-                if btn.is_visible():
-                    btn.click()
-                    time.sleep(2)
+
+                if acquire_btn.is_visible():
+                    print("      🔓 Clicking 'Acquire Lock'...")
+                    acquire_btn.click()
+                    time.sleep(1.5)  # Chờ reload
                 else:
-                    popup.locator("button:has-text('Close')").click()
+                    print("      ⚠️ Locked but no Acquire button found!")
         except:
             pass
 
@@ -855,3 +962,200 @@ class FormHandlerMixin:
 
             except Exception as e:
                 print(f"         ⚠️ Skip tab: {e}")
+
+    def _find_input_element(self, page, key):
+        """Tìm Input thông minh với logic ưu tiên ID và Clean Key"""
+
+        # 1. HARDCODE CHO TRƯỜNG HỢP ĐẶC BIỆT (Dựa trên ảnh HTML)
+        key_lower = key.lower()
+
+        # Case: Paid-Only Loot -> ID #category (trong div#premium-loot)
+        if "paid-only" in key_lower or "paid only" in key_lower:
+            print(f"         🔍 Detect Special Key '{key}' -> Target ID #category")
+            # Tìm input có id="category" (Input gốc của toggle)
+            tgl = page.locator("#category").first
+            if tgl.count() > 0:
+                return tgl
+            # Fallback: Tìm qua container cha
+            tgl_container = page.locator("#premium-loot input").first
+            if tgl_container.count() > 0:
+                return tgl_container
+
+        # Case: Gate -> ID #gate
+        if key_lower == "gate":
+            gate = page.locator("#gate").first
+            if gate.count() > 0:
+                return gate
+
+        # 2. TÌM BẰNG TỪ KHÓA ĐÃ LÀM SẠCH
+        # "Toggle Paid-Only Loot" -> "paid-only loot"
+        clean_key = self._clean_key(key)
+        if not clean_key:
+            clean_key = key  # Nếu xóa hết thì giữ nguyên
+
+        lbl_regex = re.compile(re.escape(clean_key), re.IGNORECASE)
+
+        # Tìm Label chứa text (Partial match)
+        labels = (
+            page.locator("label.control-label, label").filter(has_text=lbl_regex).all()
+        )
+        visible_labels = [l for l in labels if l.is_visible()]
+
+        for lbl in visible_labels:
+            # Tìm Parent Group
+            group = lbl.locator(
+                "xpath=ancestor::div[contains(@class, 'control-group')][1]"
+            )
+            if group.count() > 0:
+                # A. Toggle
+                tgl = group.locator("input.tgl, input.tgl-ios").first
+                if tgl.count() > 0:
+                    return tgl
+                # B. Select2
+                sel2 = group.locator("select.select2-hidden-accessible").first
+                if sel2.count() > 0:
+                    return sel2
+                # C. Input thường
+                inp = group.locator(
+                    "input:not([type='hidden']), select, textarea"
+                ).first
+                if inp.is_visible():
+                    return inp
+
+        # 3. FALLBACK ID/SIBLING
+        if visible_labels:
+            target_lbl = visible_labels[-1]
+            for_attr = target_lbl.get_attribute("for")
+            if for_attr:
+                by_id = page.locator(f"#{for_attr}").first
+                if by_id.count() > 0:
+                    return by_id
+
+        return None
+
+    def _fill_element_smartly(self, page, element, value):
+        """Điền dữ liệu (Clean Log, No Double Select2)"""
+        try:
+            # Lấy thông tin element an toàn
+            info = element.evaluate(
+                """e => ({
+                cls: e.className || '',
+                tag: e.tagName.toLowerCase(),
+                type: e.getAttribute('type'),
+                id: e.id,
+                visible: (e.offsetWidth > 0 && e.offsetHeight > 0)
+            })"""
+            )
+
+            cls = info["cls"]
+            tag = info["tag"]
+            input_id = info["id"]
+
+            # --- CASE 1: SELECT2 ---
+            # Chỉ xử lý nếu class chứa select2
+            if "select2" in cls:
+                print(f"         ↳ Action: Select2 '{value}'")  # Log 1 lần duy nhất
+
+                # Nếu là thẻ Select ẩn -> Click Container kế bên
+                if "select2-hidden-accessible" in cls or not info["visible"]:
+                    container = element.locator(
+                        "xpath=following-sibling::span[contains(@class, 'select2-container')]"
+                    ).first
+                    if container.is_visible():
+                        container.click()
+                    else:
+                        # Fallback JS click nếu container chưa load kịp
+                        page.evaluate(
+                            "e => { var s = e.nextElementSibling; if(s && s.classList.contains('select2')) s.click(); }",
+                            element,
+                        )
+                else:
+                    # Nếu là container -> Click trực tiếp
+                    element.click()
+
+                # Điền search
+                time.sleep(0.5)
+                search_box = page.locator(
+                    ".select2-search__field, input.select2-input"
+                ).last
+                if search_box.is_visible():
+                    search_box.fill(str(value))
+                    time.sleep(1.0)
+                    page.keyboard.press("Enter")
+                return  # Return ngay để không chạy xuống dưới
+
+            # --- CASE 2: TOGGLE / CHECKBOX ---
+            is_tgl = "tgl" in cls or "toggle" in cls
+            is_checkbox = tag == "input" and info["type"] == "checkbox"
+
+            if is_tgl or is_checkbox:
+                print(f"         ↳ Action: Toggle '{value}'")
+                want_checked = str(value).lower() in ["true", "on", "yes", "1"]
+                is_currently_checked = element.evaluate("e => e.checked")
+
+                if is_currently_checked != want_checked:
+                    # Nếu là TGL-IOS (Input ẩn -> Click Label)
+                    if "tgl" in cls and input_id:
+                        # Tìm label theo for attribute
+                        btn_label = page.locator(f"label.tgl-btn[for='{input_id}']")
+                        if btn_label.is_visible():
+                            btn_label.click()
+                            return
+
+                    # Checkbox thường
+                    if info["visible"]:
+                        element.click(force=True)
+                    else:
+                        element.evaluate("e => e.click()")
+                return
+
+            # --- CASE 3: INPUT THƯỜNG ---
+            if not info["visible"]:
+                # Skip log warning cho select2 hidden (đã xử lý ở trên)
+                if "select2" not in cls:
+                    print(f"         ⚠️ Element hidden, cannot fill.")
+                return
+
+            print(f"         ↳ Action: Fill Text '{value}'")
+            element.click(force=True)
+            element.fill("")
+            element.fill(str(value))
+            element.evaluate(
+                "e => e.dispatchEvent(new Event('change', {bubbles: true}))"
+            )
+            element.press("Tab")
+
+        except Exception as e:
+            print(f"         ⚠️ Fill Error: {e}")
+
+    def _switch_to_tab(self, page, tab_name):
+        print(f"      🧭 Switching to Tab: '{tab_name}'")
+        # Tìm trong sidebar hoặc nav-link
+        tab = (
+            page.locator(f".nav-link, .list-group-item, .sidebar a")
+            .filter(has_text=tab_name)
+            .last
+        )
+        if tab.is_visible():
+            tab.click()
+            time.sleep(1.0)  # Chờ content bên phải render
+        else:
+            print(f"      ⚠️ Tab '{tab_name}' not found.")
+
+    def _clean_key(self, key):
+        """Loại bỏ các từ khóa hành động thừa để tăng tỷ lệ tìm kiếm thành công"""
+        # Xóa các từ: Toggle, Input, Select, Edit, Sửa, Chọn...
+        trash_words = [
+            "toggle",
+            "input",
+            "select",
+            "edit",
+            "sửa",
+            "chọn",
+            "tick",
+            "check",
+        ]
+        clean_key = key.lower()
+        for word in trash_words:
+            clean_key = clean_key.replace(word, "")
+        return clean_key.strip()

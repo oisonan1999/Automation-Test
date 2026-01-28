@@ -138,3 +138,81 @@ class NavigatorMixin:
             page.wait_for_load_state("domcontentloaded", timeout=5000)
         except:
             pass
+
+    def _handle_locked_item_popup(self, page):
+        """
+        Xử lý popup Locked Item.
+        Target chính xác vào class .btn-acquire-lock dựa trên HTML.
+        """
+        try:
+            # --- ƯU TIÊN 1: SELECTOR CHÍNH XÁC (Dựa trên ảnh HTML) ---
+            # Tìm nút có class .btn-acquire-lock (thường là thẻ <a>)
+            lock_btn = page.locator(".btn-acquire-lock").first
+
+            # Check visible với timeout ngắn
+            if lock_btn.is_visible(timeout=2000):
+                print("      🔒 Phát hiện Locked Item (Class match).")
+                print("      🔓 Đang bấm 'Acquire Lock'...")
+
+                # Force click để đảm bảo bấm được dù có overlay
+                lock_btn.click(force=True)
+
+                # Chờ loading sau khi acquire (thường trang sẽ reload)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                except:
+                    time.sleep(2.0)
+                return
+
+            # --- ƯU TIÊN 2: QUÉT TEXT (Fallback cho các modal kiểu khác) ---
+            popup = (
+                page.locator(".modal-content, #vit_locker, .swal2-popup")
+                .filter(has_text=re.compile("locked|is locked", re.IGNORECASE))
+                .last
+            )
+
+            if popup.is_visible(timeout=1000):
+                print("      🔒 Phát hiện Locked Item (Text match).")
+                # Tìm nút bấm chứa text Acquire hoặc Unlock hoặc Kick
+                btn = (
+                    popup.locator("a, button")
+                    .filter(has_text=re.compile("Acquire|Unlock|Kick", re.IGNORECASE))
+                    .first
+                )
+
+                if btn.is_visible():
+                    btn.click(force=True)
+                    time.sleep(2.0)
+
+        except Exception as e:
+            # print(f"      ⚠️ Lỗi check lock: {e}")
+            pass
+
+    def process_deployment(self, page, options=[]):
+        print(f"   🚀 Deploy: {options}")
+        try:
+            logo = page.locator(".brand-link, .logo, a.navbar-brand").first
+            if not logo.is_visible():
+                logo = page.locator("a").filter(has_text="The Brick").first
+            logo.click()
+            page.wait_for_selector("text=Process Blueprints", timeout=10000)
+            for opt in options:
+                lbl = (
+                    page.locator("label")
+                    .filter(has_text=re.compile(opt, re.IGNORECASE))
+                    .first
+                )
+                if lbl.is_visible():
+                    chk = lbl.locator("input[type='checkbox']").first
+                    if not chk.is_visible():
+                        id_v = lbl.get_attribute("for")
+                        if id_v:
+                            chk = page.locator(f"#{id_v}")
+                    if chk.is_visible() and not chk.is_checked():
+                        chk.check()
+
+            btn = page.locator("button:has-text('Process')").first
+            if btn.is_visible():
+                btn.click()
+        except:
+            pass

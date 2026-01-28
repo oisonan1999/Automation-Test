@@ -153,11 +153,15 @@ def parse_command_to_json(user_command, context_plan=None):
     9. "update_form": {{ "action": "update_form", "data": {{ "Label": "Value", ... }} }}
        - Used to fill forms/popups. 
        - MUST extract ALL fields mentioned in user command.
+       - Use "Tab" key if user says "Go to tab X".
+       - Use "Field" keys for Inputs, Selects, Toggles.
     10. "save_form": {{ "action": "save_form" }}
     11. "scan_tabs": 
         - Rule: Use when user says "Scan tabs", "Quét các tab", "Duyệt qua các tab".
         - IMPORTANT: If user lists fields to update immediately after "Scan tabs", PUT THEM INSIDE "data".
         - Format: {{ "action": "scan_tabs", "data": {{ "Field1": "Val1", "Field2": "Val2" }} }}
+    12. "process_deployment": {{ "action": "process_deployment", "options": ["Option1", "Option2"] }}
+        - Use when user says: "Click The Brick", "Process", "Deploy", "Tick X then Process".
     CRITICAL RULES:
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
        - "Go to A -> B -> Clone C" => 1. navigate [A,B], 2. clone C.
@@ -205,6 +209,18 @@ def parse_command_to_json(user_command, context_plan=None):
     CORRECT: [
       {{ "action": "update_form", "data": {{ "Tab": "Pulls", "Quantity": "10" }} }}
     ]
+    
+    Ex 3: "User: "Vào Gacha Info sửa Cost 10 -> Save & Continue -> Vào tab Milestones"
+    JSON: [
+      {{ "action": "update_form", "data": {{ "Tab": "Gacha Info", "Cost": "10" }} }},
+      {{ "action": "save_form", "mode": "continue" }},
+      {{ "action": "update_form", "data": {{ "Tab": "Milestones" }} }}
+    ]"
+    
+    Ex 4: "User: "Bấm nút The Brick -> Tick chọn 'Hyper Blueprint' -> Bấm Process"
+    JSON: [
+      {{ "action": "process_deployment", "options": ["Hyper Blueprint"] }}
+    ]"
 
     INPUT CONTEXT:
     - Original Command: "{user_command}"
