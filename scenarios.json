@@ -131,5 +131,33 @@
         "value": "file.csv"
       }
     ]
+  },
+  "Clone Gacha": {
+    "command": "Vào Data Configs -> Gacha Event -> Gacha Event -> Clone ID: \"EventGacha_HieuNM_Tesst -> Gate: LiveopsTest, ID: HieuNM_1, Use another currency, Currency: GachaShard_Feb2026_ML_Armory_Loot",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Data Configs",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "EventGacha_HieuNM_Tesst"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Gate": "LiveopsTest",
+          "ID": "HieuNM_1",
+          "Currency": "GachaShard_Feb2026_ML_Armory_Loot"
+        }
+      },
+      {
+        "action": "save_form"
+      }
+    ]
   }
 }

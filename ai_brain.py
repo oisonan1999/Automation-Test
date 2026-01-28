@@ -106,6 +106,7 @@ def parse_command_to_json(user_command, context_plan=None):
 
     # Gọi DeepSeek
     raw_analysis = call_ollama(MODEL_REASONING, reasoning_prompt)
+    unload_model(MODEL_REASONING)
     if not raw_analysis:
         return []
 
@@ -218,6 +219,7 @@ def parse_command_to_json(user_command, context_plan=None):
 
     # Gọi Qwen
     json_output = call_ollama(MODEL_FORMATTING, formatting_prompt)
+    unload_model(MODEL_FORMATTING)
 
     # Làm sạch và Parse JSON
     final_json_str = clean_json_string(json_output)
