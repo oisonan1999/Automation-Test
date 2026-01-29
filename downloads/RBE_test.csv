@@ -1,0 +1,121 @@
+﻿[RBE_CONFIGURATION]
+EventID,EventType,Gate,PointCurrencyID,EventName,EventDescription,StartTime,EndTime,PreviewTime,ExpiredTime,EventIcon,EventHubBannerTexture,EventSidebarIcon,GradientImage,PrizeWallOffer,PrizeWallOfferSection,Deeplink,IsFeeder,ParentEventID
+RBE_Dec2025_Wknd5_Fac_Feeder,Faction,dec2025_wknd5,PointCurrency_RBE_Dec2025_Wknd5_Fac_Feeder,!!RBE_DEC2025_WKND5_FAC_FEEDER_NAME,!!RBE_DEC2025_WKND5_FAC_FEEDER_NAME,1/11/2026 20:00,1/14/2026 20:00,,259200,RBE_Icon_Dec2025_Wknd5,RBE_Fac_Feeder_Dec2025_Wknd5,RBE_Icon_Dec2025_Wknd5,RBE_banner_1_purple,,,,true,RBE_Dec2025_Wknd5_Solo_Wrapper
+RBE_Dec2025_Wknd5_Solo_Wrapper,Individual,dec2025_wknd5,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper,!!RBE_DEC2025_WKND5_SOLO_WRAPPER_NAME,!!RBE_DEC2025_WKND5_SOLO_WRAPPER_NAME,1/11/2026 20:00,1/14/2026 20:00,,259200,RBE_Icon_Dec2025_Wknd5,RBE_Solo_Wrapper_Dec2025_Wknd5,RBE_Icon_Dec2025_Wknd5,RBE_banner_1_red,,,,false,
+
+[FEEDER_EVENTS]
+ParentEventID,FeederEventID,ParentRBEID,FeederRBEID,CreatedAt,UpdatedAt
+RBE_Dec2025_Wknd5_Solo_Wrapper,RBE_Dec2025_Wknd5_Fac_Feeder,7814,7815,,
+
+[TASKS_RBE_Dec2025_Wknd5_Fac_Feeder]
+Condition,Description,Count,Complete Types 1,Complete Types 2,Score,Deeplink,Deeplink Description,Start Time,End Time,Min League,Max League,Attempt,Is Hidden,Accumulated
+obtainItem,!!OFFERS_20_OCT2025_ML_BACKSTAGE_TP_W2,1,currency:PointCurrency_RBE_Dec2025_Wknd5_Fac_Feeder,,1,whiplash://dat.Action.store,!!BLANK,,,0,9999,0,yes,no
+Signpost,!!RBE_PTD_NOV2025_WKND2_FB_FEEDER,1,,,0,,,"01/09/2026, 20:00","01/12/2026, 20:00",0,9999,0,no,no
+Signpost,!!RBE_PTD_NOV2025_WKND2_FB_SCHEDULE,1,,,0,,,"01/10/2026, 22:00","01/11/2026, 22:00",0,9999,0,no,no
+obtainItem,!!RBE_PTD_NOV2025_WKND2_SHOP,1,currency:BossShopCurrency,,2,whiplash://dat.Action.store,!!R44_TASK_OPENITEM_DESCRIPT,"01/09/2026, 20:00","01/12/2026, 20:00",0,9999,0,no,no
+winBossBattle,!!RBE_PTD_NOV2025_WKND2_TIEBREAKER,1,difficulty:23,,500,whiplash://dat.Action.faction_boss,,"01/10/2026, 22:00","01/12/2026, 20:00",0,9999,0,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_10_1,1,difficulty:10,group:Brand_Raw,15000,whiplash://dat.Action.faction_boss,,"01/10/2026, 22:00","01/12/2026, 20:00",0,9999,100,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_10_2,1,difficulty:10,group:Stable_NWO,10000,whiplash://dat.Action.faction_boss,,"01/11/2026, 10:00","01/12/2026, 20:00",0,9999,100,no,no
+winBossBattle,!!RBE_PTD_NOV2025_WKND2_WIN_10_3,1,difficulty:10,group:Era_Attitude,10000,whiplash://dat.Action.faction_boss,,"01/11/2026, 22:00","01/12/2026, 20:00",0,9999,100,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_18_1,1,difficulty:18,group:Body_BrutusBeefcake,50000,whiplash://dat.Action.faction_boss,,"01/11/2026, 10:00","01/12/2026, 20:00",0,9999,50,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_18_2,1,difficulty:18,group:Family_SamoanLegacy,50000,whiplash://dat.Action.faction_boss,,"01/11/2026, 22:00","01/12/2026, 20:00",0,9999,50,no,no
+winBossBattle,!!RBE_PTD_NOV2025_WKND2_WIN_23_1,1,difficulty:23,superstar:SS_Kamala_Giant,200000,whiplash://dat.Action.faction_boss,,"01/11/2026, 10:00","01/12/2026, 20:00",0,9999,30,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_23_2,1,difficulty:23,superstar:SS_RFenix_King,200000,whiplash://dat.Action.faction_boss,,"01/11/2026, 22:00","01/12/2026, 20:00",0,9999,30,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_10_ATIER,1,difficulty:10,superstar:SS_MarkHenry_SC,15000,whiplash://dat.Action.faction_boss,,"01/10/2026, 22:00","01/12/2026, 20:00",0,9999,100,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_18_ATIER,1,difficulty:18,superstar:SS_MarkHenry_SC,100000,whiplash://dat.Action.faction_boss,,"01/10/2026, 22:00","01/12/2026, 20:00",0,9999,75,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_23_ATIER,1,difficulty:23,superstar:SS_MarkHenry_SC,200000,whiplash://dat.Action.faction_boss,,"01/10/2026, 22:00","01/12/2026, 20:00",0,9999,30,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_15_DEBUT,1,difficulty:15,superstar:SS_ROrton_Veteran,400000,whiplash://dat.Action.faction_boss,,"01/10/2026, 22:00","01/12/2026, 20:00",0,9999,30,no,no
+
+[TASKS_RBE_Dec2025_Wknd5_Solo_Wrapper]
+Condition,Description,Count,Complete Types 1,Complete Types 2,Score,Deeplink,Deeplink Description,Start Time,End Time,Min League,Max League,Attempt,Is Hidden,Accumulated
+obtainItem,!!BLANK,1,currency:PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper,,1,,!!BLANK,,,7,24,0,yes,no
+Signpost,!!RBE_PTD_DEC2025_WKND5_TOUR,1,,,0,,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,0,no,no
+Signpost,!!RBE_PTD_NOV2025_WKND2_FB,1,,,0,,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,0,no,no
+Signpost,!!RBE_PTD_NOV2025_WKND2_STAMPCARD,1,,,0,,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,0,no,no
+Signpost,!!RBE_PTD_DMJD__MAMI_100,1,,,0,,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,0,no,no
+expendItem,!!RBE_PTD_DEC2025_WKND5_LOOT,1,currency:GachaShard_Dec2025_Wknd5_Main,,25000,whiplash://dat.Action.store,!!R44_TASK_EXPENDITEM_DESCRIPT_DEFAULT,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,0,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_DEBUT_23,1,difficulty:23,superstar:SS_ROrton_Veteran,1500000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_DEBUT_14,1,difficulty:14,superstar:SS_ROrton_Veteran,750000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_ML_18,1,difficulty:18,superstar:SS_AJStyles_Face,200000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_ML_14,1,difficulty:14,superstar:SS_BReed_Thief,175000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+win,!!RBE_PTD_DEC2025_WKND5_WIN_PREVDEBUT,1,quest:LTPVE_Dec2025_Wknd5_6_4,superstar:SS_RMysterio_WCP,150000,whiplash://dat.Action.quests/LTPVE_Dec2025_Wknd5_6/LTPVE_Dec2025_Wknd5_6_4,!!R44_TASK_WIN_DESCRIPT_DEFAULT,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_15,1,difficulty:15,group:Era_HallofFame,250000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_16,1,difficulty:16,group:Color_Black,250000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_17,1,difficulty:17,group:Color_Purple,250000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_20,1,difficulty:20,group:Color_Blue,1500000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_21,1,difficulty:21,group:Color_Yellow,1500000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+winBossBattle,!!RBE_PTD_DEC2025_WKND5_WIN_22,1,difficulty:22,group:Color_Purple,1500000,whiplash://dat.Action.faction_boss,,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,1,no,no
+obtainItem,!!RBE_PTD_FB,1,currency:BossShopCurrency,,2,whiplash://dat.Action.store,!!R44_TASK_OPENITEM_DESCRIPT,"01/09/2026, 20:00","01/12/2026, 20:00",7,24,0,no,no
+
+[MILESTONES_RBE_Dec2025_Wknd5_Fac_Feeder]
+Min League/League,Point,Highlight,Chest Icon,Chase Milestone,MilestoneRewards,Last Free Milestone
+7,50000000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"SoftCurrency:2000000,BagToken_Dec2025_Wknd5_Fac:1,Bagtoken_EvoToken_6Star_Gold:4",
+7,40000000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"SoftCurrency:1100000,Bagtoken_Feb2025_T6_Medal:1,Bagtoken_EvoToken_6Star_Gold:3",
+7,30000000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"SoftCurrency:750000,Feb2025_Strap_Ultimate_Prizing_v2:2,Bagtoken_EvoToken_6Star_Gold:2",
+7,20000000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"SoftCurrency:500000,Bagtoken_Feb2025_T6_Medal:1,Bagtoken_EvoToken_6Star_Gold:1",
+7,15000000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"SoftCurrency:250000,Feb2025_Strap_Ultimate_Prizing_v2:1,Bagtoken_EvoToken_6Star_Gold:1",
+7,10000000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:150,Bagtoken_Feb2025_T6_Medal:1,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:765000,Currency_Dec2025_Wknd5_PW_Prem:1000,Shard_MarkHenry_SC:40,Shard_Roxanne_JD:50",
+7,8400000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:125,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:600000,Currency_Dec2025_Wknd5_PW_Prem:700",
+7,6900000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:100,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:400000,Currency_Dec2025_Wknd5_PW_Prem:500",
+7,5600000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:240000,Currency_Dec2025_Wknd5_PW_Prem:500",
+7,4300000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:100,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:180000,Currency_Dec2025_Wknd5_PW_Prem:200",
+7,3200000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:120000,Currency_Dec2025_Wknd5_PW_Prem:100",
+7,2100000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:50,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:90000",
+7,1300000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:25,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:60000",
+7,600000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:30000,
+7,200000,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,PointCurrency_RBE_Dec2025_Wknd5_Solo_Wrapper:15000,
+
+[MILESTONES_RBE_Dec2025_Wknd5_Solo_Wrapper]
+Min League/League,Point,Highlight,Chest Icon,Chase Milestone,MilestoneRewards,Last Free Milestone
+7,15000000,RBE_Banner_Gold_Milestone,Currency_container_Tier4_SRSM2020,no,"Shard_ROrton_Veteran:200,Shard_Roxanne_JD:50,Currency_Dec2025_Wknd5_PW_Prem:1900,Bagtoken_EvoToken_6Star_Gold:2,Bagtoken_EvoToken_6Star_Silver:2",
+7,13319799,RBE_Banner_Gold_Milestone,Currency_container_Tier4_SRSM2020,no,"Shard_ROrton_Veteran:100,Currency_Dec2025_Wknd5_PW_Prem:1600,Bagtoken_EvoToken_6Star_Gold:1,Bagtoken_EvoToken_6Star_Bronze:2",
+7,12331399,RBE_Banner_Gold_Milestone,Currency_container_Tier4_SRSM2020,no,"Currency_Dec2025_Wknd5_PW_Prem:1500,SoftCurrency:12000000,Bagtoken_EvoToken_6Star_Silver:1",
+7,11639499,RBE_Banner_Gold_Milestone,Currency_container_Tier4_SRSM2020,no,"SoftCurrency:8000000,Bagtoken_EvoToken_6Star_Bronze:1",
+7,11165099,RBE_Banner_Silver_Milestone,Currency_container_Tier3_SRSM2020,no,"Shard_MarkHenry_SC:50,SoftCurrency:6000000,Bagtoken_EvoToken_5Star_Emerald:7",
+7,10868599,RBE_Banner_Silver_Milestone,Currency_container_Tier3_SRSM2020,no,"SoftCurrency:5000000,GrabBagToken_EvoToken_5Star_Diamond:3",
+7,10670899,RBE_Banner_Silver_Milestone,Currency_container_Tier3_SRSM2020,no,"SoftCurrency:4000000,Bagtoken_EvoToken_5Star_Emerald:5",
+7,10522599,RBE_Banner_Silver_Milestone,Currency_container_Tier3_SRSM2020,no,"SoftCurrency:3000000,GrabBagToken_EvoToken_5Star_Diamond:2",
+7,10374299,RBE_Banner_Silver_Milestone,Currency_container_Tier3_SRSM2020,no,"SoftCurrency:2500000,Bagtoken_EvoToken_5Star_Emerald:5",
+7,10225999,RBE_Banner_Silver_Milestone,Currency_container_Tier3_SRSM2020,no,"SoftCurrency:2000000,GrabBagToken_MainToken_HoF_Random_New:5",
+7,10154799,RBE_Banner_Silver_Milestone,Currency_container_Tier3_SRSM2020,no,"SoftCurrency:1500000,GrabBagToken_MainToken_HoF_Random_New:5,GrabBagToken_SecToken_HoF_Random_New:5",
+7,10095499,RBE_Banner_Silver_Milestone,Currency_container_Tier3_SRSM2020,no,"Currency_Dec2025_Wknd5_PW_Prem:1400,SoftCurrency:1000000,GrabBagToken_SecToken_HoF_Random_New:5,GrabBagToken_MainToken_HW_Random_New:10",
+7,10049999,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:445,Shard_MarkHenry_SC:40,BagToken_Dec2025_Wknd5_Solo:1,Bagtoken_Feb2025_T6_Medal:2,Shard_Roxanne_JD:50",
+7,8007299,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:355,Shard_MarkHenry_SC:20,Currency_Dec2025_Wknd5_PW_Prem:980,Bagtoken_Feb2025_T6_Medal:1",
+7,5964599,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:285,Currency_Dec2025_Wknd5_PW_Prem:685",
+7,3921999,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:230,Currency_Dec2025_Wknd5_PW_Prem:480",
+7,3046499,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:185,Currency_Dec2025_Wknd5_PW_Prem:335",
+7,2171099,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:145,Currency_Dec2025_Wknd5_PW_Prem:235",
+7,1295599,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:115,Currency_Dec2025_Wknd5_PW_Prem:165",
+7,770399,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,"Shard_ROrton_Veteran:95,Currency_Dec2025_Wknd5_PW_Prem:115",
+7,245099,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,Shard_ROrton_Veteran:75,
+7,186799,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,Shard_ROrton_Veteran:60,
+7,128399,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,Shard_ROrton_Veteran:50,
+7,69999,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,Shard_ROrton_Veteran:40,
+7,34999,RBE_Banner_Bronze_Milestone,Currency_container_Tier2_SRSM2020,no,Shard_ROrton_Veteran:30,
+
+[LEADERBOARDS_RBE_Dec2025_Wknd5_Fac_Feeder]
+Leaderboard,Leaderboard League Min,Leaderboard League Max,Min Rank,Max Rank,LeaderboardRewards
+Leaderboard 1,,99,1,1,Currency_Dec2025_Wknd5_PW_Prem:10000
+Leaderboard 1,,99,2,2,Currency_Dec2025_Wknd5_PW_Prem:9000
+Leaderboard 1,,99,3,3,Currency_Dec2025_Wknd5_PW_Prem:8000
+Leaderboard 1,,99,4,10,Currency_Dec2025_Wknd5_PW_Prem:7000
+Leaderboard 1,,99,11,20,Currency_Dec2025_Wknd5_PW_Prem:6000
+Leaderboard 1,,99,21,50,Currency_Dec2025_Wknd5_PW_Prem:5000
+Leaderboard 1,,99,51,100,Currency_Dec2025_Wknd5_PW_Prem:4000
+Leaderboard 1,,99,101,200,Currency_Dec2025_Wknd5_PW_Prem:3000
+Leaderboard 1,,99,201,300,Currency_Dec2025_Wknd5_PW_Prem:2000
+Leaderboard 1,,99,301,400,Currency_Dec2025_Wknd5_PW_Prem:1500
+Leaderboard 1,,99,401,500,Currency_Dec2025_Wknd5_PW_Prem:1000
+Leaderboard 1,,99,501,1000,Currency_Dec2025_Wknd5_PW_Prem:800
+Leaderboard 1,,99,1001,10000,Currency_Dec2025_Wknd5_PW_Prem:600
+
+[LEADERBOARDS_RBE_Dec2025_Wknd5_Solo_Wrapper]
+Leaderboard,Leaderboard League Min,Leaderboard League Max,Min Rank,Max Rank,LeaderboardRewards
+Leaderboard 1,7,24,1,1,"Poster_ROrton_Veteran_6Star_Gold:1,Shard_ROrton_Veteran:5000,Currency_Dec2025_Wknd5_PW_Prem:30000,SoftCurrency:75000000"
+Leaderboard 1,7,24,2,2,"Poster_ROrton_Veteran_6Star_Silver:1,Shard_ROrton_Veteran:4000,Currency_Dec2025_Wknd5_PW_Prem:24000,SoftCurrency:50000000"
+Leaderboard 1,7,24,3,3,"Poster_ROrton_Veteran_6Star_Bronze:1,Shard_ROrton_Veteran:3000,Currency_Dec2025_Wknd5_PW_Prem:20000,SoftCurrency:40000000"
+Leaderboard 1,7,24,4,10,"Poster_ROrton_Veteran_5Star_Gold:1,Shard_ROrton_Veteran:2000,Currency_Dec2025_Wknd5_PW_Prem:14000,SoftCurrency:30000000"
+Leaderboard 1,7,24,11,20,"Currency_Dec2025_Wknd5_PW_Prem:10000,SoftCurrency:25000000"
+Leaderboard 1,7,24,21,50,"Currency_Dec2025_Wknd5_PW_Prem:7000,SoftCurrency:20000000"
+Leaderboard 1,7,24,51,100,"Currency_Dec2025_Wknd5_PW_Prem:6000,SoftCurrency:15000000"
+Leaderboard 1,7,24,101,200,"Currency_Dec2025_Wknd5_PW_Prem:5000,SoftCurrency:10000000"

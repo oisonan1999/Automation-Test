@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL_REASONING = "deepseek-r1:14b"
+MODEL_REASONING = "deepseek-r1:14b-qwen-distill-q4_K_M"
 MODEL_FORMATTING = "qwen2.5-coder:14b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = "scenarios.json"

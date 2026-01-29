@@ -70,33 +70,52 @@ class BrickAutomation(
                     if act == "navigate":
                         self._smart_navigate_path(page, step.get("path", [tgt, val]))
                     elif act == "checkbox":
-                        # CHIẾN THUẬT MỚI: Check xem có phải Form Toggle không TRƯỚC
-                        print(f"      🔍 Checking if '{tgt}' is a Form Toggle...")
-                        form_el = self._find_input_element(page, tgt)
+                        val_lower = val.lower().strip()
 
-                        if form_el:
-                            # Nếu tìm thấy trong Form -> Xử lý như Toggle Form
+                        # 1. Các giá trị TOGGLE FORM (Boolean)
+                        is_form_toggle = val_lower in [
+                            "on",
+                            "off",
+                            "true",
+                            "false",
+                            "1",
+                            "0",
+                            "yes",
+                            "no",
+                            "enable",
+                            "disable",
+                        ]
+
+                        # 2. Các giá trị TABLE SELECT (Random/All/Specific ID)
+                        # Nếu không phải toggle -> Mặc định là tìm dòng trong bảng
+                        is_table_selection = not is_form_toggle
+
+                        if is_form_toggle:
                             print(
-                                f"      👉 Found in Form! Switching to Form Handler..."
+                                f"      🔄 Detect Toggle Value ('{val}'). Priority: FORM."
                             )
                             self._smart_update_form(page, {tgt: val})
                             report_logs.append(
                                 {
                                     "step": "Form Toggle",
                                     "status": "PASS",
-                                    "details": f"Toggle {tgt} -> {val}",
+                                    "details": f"{tgt}={val}",
                                 }
                             )
-                        else:
-                            # Nếu không thấy trong Form -> Mới tìm trong Bảng
+
+                        elif is_table_selection:
                             print(
-                                f"      👉 Not found in Form. Trying Table Checkbox..."
+                                f"      📊 Detect Selection Value ('{val}'). Priority: TABLE."
                             )
                             try:
+                                # Gọi hàm xử lý bảng (có tích hợp Search & Filter)
                                 logs = self.handle_checkbox(page, tgt, val)
                                 report_logs.extend(logs)
                             except Exception as e:
                                 print(f"      ⚠️ Table Checkbox failed: {e}")
+                                # Chỉ fallback sang Form nếu thực sự thất bại ở bảng
+                                # (Phòng trường hợp input text bình thường mà user gọi nhầm lệnh checkbox)
+                                self._smart_update_form(page, {tgt: val})
                                 report_logs.append(
                                     {
                                         "step": "Checkbox",
@@ -159,7 +178,6 @@ class BrickAutomation(
 
                     elif act == "smart_test_cycle":
                         logs = self.smart_test_cycle(page, val)
-                        logs.extend(self.smart_test_cycle(page, val))
                         report_logs.extend(logs)
 
                     elif act == "upload":
