@@ -92,32 +92,15 @@ class BrickAutomation(
                     print(f"▶️ Executing: {act} -> {tgt} {val}")
 
                     if act == "navigate":
-                        # Lấy path hoặc target
                         nav_data = step.get("path") if step.get("path") else tgt
-
-                        # FIX AN TOÀN: Nếu là String nhưng nhìn giống List "['A', 'B']"
-                        # Trường hợp AI trả về string thay vì list thật
-                        if (
-                            isinstance(nav_data, str)
-                            and nav_data.strip().startswith("[")
-                            and nav_data.strip().endswith("]")
+                        if isinstance(nav_data, str) and nav_data.strip().startswith(
+                            "["
                         ):
                             try:
                                 nav_data = ast.literal_eval(nav_data)
                             except:
                                 pass
-
-                        # Xử lý Logic
-                        if isinstance(nav_data, list):
-                            print(
-                                f"      🔗 Detected Breadcrumb Navigation: {nav_data}"
-                            )
-                            for item in nav_data:
-                                # Click từng thành phần trong chuỗi điều hướng
-                                self.smart_click(page, str(item))
-                        else:
-                            # Điều hướng đơn lẻ
-                            self._smart_navigate_path(page, str(nav_data))
+                        self.smart_navigate(page, nav_data)
                     elif act == "checkbox":
                         val_lower = val.lower().strip()
 

@@ -13,14 +13,43 @@ class NavigatorMixin:
         safe_text = re.escape(str(text)).replace(r"\ ", r"\s+")
         return re.compile(safe_text, re.IGNORECASE)
 
+    def smart_navigate(self, page, target):
+        """
+        Điều hướng thông minh:
+        - Nếu target là List (VD: ["Menu", "SubMenu"]) -> Gọi _smart_navigate_path (Của bạn)
+        - Nếu target là String (VD: "Menu") -> Gọi smart_click hoặc goto
+        """
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=3000)
+        except:
+            pass
+        # CASE 1: BREADCRUMB LIST (Path Navigation)
+        if isinstance(target, list):
+            # Gọi hàm chuyên biệt của bạn
+            self._smart_navigate_path(page, target)
+            return
+
+        # CASE 2: SINGLE TARGET (String)
+        print(f"      🧭 Navigating to: {target}")
+        target_str = str(target)
+        try:
+            if "/" not in target_str and "http" not in target_str:
+                self.smart_click(page, target_str)
+            else:
+                page.goto(target_str)
+                self._wait_for_long_loading(page)
+        except:
+            print(f"      ⚠️ Navigation fallback failed for {target}")
+
     def _smart_navigate_path(self, page, path_list):
         print(f"📍 Nav: {'->'.join(path_list)}")
-        if "/" not in path_list:
-            self.smart_click(page, path_list)
-        else:
-            page.goto(path_list)
+        try:
+            page.wait_for_load_state("networkidle", timeout=2000)
+        except:
+            pass
 
         for i, item_name in enumerate(path_list):
+            item_name = str(item_name).strip()
             is_first_step = i == 0
             is_last_step = i == len(path_list) - 1
             regex_name = self._safe_compile(item_name)
@@ -32,7 +61,7 @@ class NavigatorMixin:
                 # Thêm div[class*='menu'] để bắt các menu div nếu có
                 raw_candidates = (
                     page.locator(
-                        "a, button, .dropdown-item, .nav-link, [role='menuitem'], div[role='button']"
+                        "a, button, div, span, li, b, strong, h1, h2, h3, h4, h5, h6, .dropdown-item, .nav-link, [role='menuitem'], [role='button']"
                     )
                     .filter(has_text=regex_name)
                     .all()

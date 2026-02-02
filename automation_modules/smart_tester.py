@@ -447,12 +447,14 @@ class SmartTesterMixin:
                         prefix = "Perk_"
                     elif "offer" in col_lower:
                         prefix = "Offer_"
+                    elif "objectiveid" in col_lower:
+                        prefix = "Objective_"
                     else:
                         prefix = "Auto_"
 
                     # Tạo ID mới: Prefix + Auto + timestamp
                     # VD: Grabbag_Auto_170000123
-                    new_id = f"{prefix}Auto_{current_timestamp}"
+                    new_id = f"{prefix}{current_timestamp}"
                     valid_df.at[valid_df.index[0], col] = new_id
                     print(f"      ℹ️ Generated new ID for '{col}': {new_id}")
 
