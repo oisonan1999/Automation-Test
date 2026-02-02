@@ -375,9 +375,9 @@ class NavigatorMixin:
                 f"         🔄 Spinner DETECTED: '{active_spinner}'. Waiting for it to finish..."
             )
             try:
-                # Chờ tối đa 60s để spinner biến mất
+                # Chờ tối đa 6s để spinner biến mất
                 page.locator(active_spinner).first.wait_for(
-                    state="hidden", timeout=60000
+                    state="hidden", timeout=6000
                 )
                 print("         ✅ Spinner finished (Main content loaded).")
             except:

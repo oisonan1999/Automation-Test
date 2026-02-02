@@ -1,7 +1,9 @@
 # automation_modules/smart_tester.py
 from copy import copy as cp, deepcopy
+from glob import glob
 import io
 import os
+import random as rd
 import time
 import pandas as pd
 import re
@@ -230,8 +232,8 @@ class SmartTesterMixin:
                         text = popup.inner_text().lower()
                         clean_text = text.replace("\n", " ").strip()[:200]
 
-                        print("      ⏳ Popup detected, waiting 30s...")
-                        time.sleep(30.0)  # Chờ thêm 30s để chắc chắn popup đã ổn định
+                        print("      ⏳ Popup detected, waiting 10s...")
+                        time.sleep(10.0)  # Chờ thêm 10s để chắc chắn popup đã ổn định
                         # Tìm nút OK (.swal2-confirm) và click luôn
                         page.evaluate(
                             """
@@ -279,6 +281,103 @@ class SmartTesterMixin:
 
         return False, "Max retries exceeded"
 
+    def _upload_single_attempt(self, page, target_text, file_name):
+        full_path = os.path.join(DOWNLOAD_DIR, file_name)
+        try:
+            # 1. Tìm nút Upload
+            btn = page.locator(
+                f"button:has-text('{target_text}'), a.btn:has-text('{target_text}'), label:has-text('{target_text}'), input[type='file']"
+            ).first
+            if not btn.is_visible():
+                btn = page.locator(
+                    f"xpath=//*[contains(text(), '{target_text}')]/ancestor::button | //*[contains(text(), '{target_text}')]/ancestor::a"
+                ).first
+            if not btn.is_visible():
+                return False, "Import Button not found"
+
+            # 2. Upload
+            if btn.get_attribute("type") == "file":
+                btn.set_input_files(full_path)
+            else:
+                with page.expect_file_chooser(timeout=3000) as fc_info:
+                    btn.click()
+                fc_info.value.set_files(full_path)
+
+            # 3. Confirm Popup
+            try:
+                confirm = page.locator(
+                    ".swal2-confirm, button:has-text('Upload'), button:has-text('Confirm')"
+                ).first
+                if confirm.is_visible(timeout=2000):
+                    confirm.click()
+            except:
+                pass
+
+            # 4. Polling Result (Toast/Popup)
+            start_time = time.time()
+            seen_loading = False
+
+            while time.time() - start_time < 90:
+                res_found, res_type, res_text = self._scan_for_result_popup(page)
+                if res_found:
+                    self._ensure_popup_closed(page)
+                    return (res_type == "PASS"), str(res_text or "Success (No text)")
+
+                loading = page.locator(
+                    ".swal2-loading, .spinner, .loading, .fa-spin, div:has-text('Uploading')"
+                ).first
+                if loading.is_visible():
+                    seen_loading = True
+                    time.sleep(0.5)
+                    continue
+
+                if seen_loading and not loading.is_visible():
+                    time.sleep(1.0)
+                    res_found, res_type, res_text = self._scan_for_result_popup(page)
+                    if res_found:
+                        self._ensure_popup_closed(page)
+                        return (res_type == "PASS"), res_text
+                time.sleep(0.5)
+
+            return False, "Timeout"
+
+        except Exception as e:
+            return False, str(e)
+
+    def _scan_for_result_popup(self, page):
+        try:
+            # Selector Error
+            errs = [
+                ".swal2-error",
+                ".alert-danger",
+                ".toast-error",
+                ".notification-error",
+                "div:has-text('Failed'):visible",
+                "div:has-text('Error'):visible",
+            ]
+            for sel in errs:
+                el = page.locator(sel).first
+                if el.is_visible():
+                    return True, "FAIL", el.inner_text().strip()[:100]
+
+            # Selector Success
+            succs = [
+                ".swal2-success",
+                ".alert-success",
+                ".toast-success",
+                ".notification-success",
+                "div:has-text('Success'):visible",
+                "div:has-text('Completed'):visible",
+            ]
+            for sel in succs:
+                el = page.locator(sel).first
+                if el.is_visible():
+                    return True, "PASS", el.inner_text().strip()[:100]
+
+            return False, "UNKNOWN", "No popup text"
+        except:
+            return False, "ERROR", "Popup scan crashed"
+
     # ============================
     # FIX 1: HÀM DỌN DẸP POPUP (DÙNG JS)
     # ============================
@@ -319,77 +418,75 @@ class SmartTesterMixin:
     def _test_generic_csv(self, page, target_csv):
         logs = []
         try:
-            # 1. Chuẩn bị file (Lấy file mới nhất trong thư mục Download)
+            # 1. Chuẩn bị file
             file_path = os.path.join(DOWNLOAD_DIR, target_csv)
             if not os.path.exists(file_path):
+                # Tìm file mới nhất nếu không thấy tên chính xác
                 files = sorted(
-                    os.listdir(DOWNLOAD_DIR),
-                    key=lambda x: os.path.getmtime(os.path.join(DOWNLOAD_DIR, x)),
+                    glob.glob(os.path.join(DOWNLOAD_DIR, "*.csv")), key=os.path.getmtime
                 )
                 if files:
-                    target_csv = files[-1]
-                    file_path = os.path.join(DOWNLOAD_DIR, files[-1])
+                    file_path = files[-1]
+                    target_csv = os.path.basename(file_path)
 
-            # Đọc file gốc (dữ liệu User)
-            original_df = pd.read_csv(
-                file_path, dtype=str
-            )  # Đọc str để bảo toàn format
+            if not os.path.exists(file_path):
+                return [{"step": "Init", "status": "FAIL", "details": "File not found"}]
+
             print(f"   📂 Testing with Base File: {target_csv}")
 
-            # 2. Phase 1: Fuzzing (Giữ nguyên logic cũ)
-            print("   🧪 PHASE 1: Running Fuzz Tests...")
-            fuzzed_df = self._generate_fuzzed_data(original_df)
-            fuzz_path = os.path.join(DOWNLOAD_DIR, f"fuzzed_{target_csv}")
-            meta_cols = ["TEST_CASE", "EXPECTED_KEYWORD"]
-            save_cols = [c for c in fuzzed_df.columns if c not in meta_cols]
-            fuzzed_df[save_cols].to_csv(fuzz_path, index=False)
+            # ==================================================================
+            # PHASE 1: FUZZING (DÙNG GENERIC FUZZER MỚI)
+            # ==================================================================
+            print("   🧪 PHASE 1: Running AI Fuzz Tests...")
+
+            # Khởi tạo Fuzzer
+            fuzzer = GenericCSVFuzzer(file_path)
+            mutations = fuzzer.generate_generic_all_cases()
+
+            for i, case in enumerate(mutations):
+                case_name = case["name"]
+                print(f"      🔸 [Case {i+1}/{len(mutations)}] {case_name}...")
+
+                temp_file = fuzzer.save_mutation_to_generic_file(case)
+
+                # Upload (Dùng hàm upload bắt được Toast/Popup)
+                self._ensure_popup_closed(page)
+                success, msg = self._upload_single_attempt(
+                    page, "Import CSV", temp_file
+                )
+                safe_msg = str(msg) if msg is not None else "No details available"
+
+                # Đánh giá kết quả
+                if not success:
+                    print(f"         ✅ Blocked: {safe_msg}")
+                    logs.append(
+                        {
+                            "step": f"Fuzz: {case_name}",
+                            "status": "PASS",
+                            "details": f"Blocked: {safe_msg}",
+                        }
+                    )
+                else:
+                    print(f"         🚨 Accepted: {safe_msg}")
+                    logs.append(
+                        {
+                            "step": f"Fuzz: {case_name}",
+                            "status": "WARNING",
+                            "details": "System accepted invalid data",
+                        }
+                    )
+
+                # Cleanup
+                try:
+                    os.remove(os.path.join(DOWNLOAD_DIR, temp_file))
+                except:
+                    pass
 
             self._ensure_popup_closed(page)
-            # Upload Fuzz File (Expect Fail)
-            self._perform_upload_action(page, fuzz_path)
-            logs.append(
-                {
-                    "step": "Fuzzing",
-                    "status": "EXECUTED",
-                    "details": "Uploaded bad data & handled error popups",
-                }
-            )
-
-            # Check Error message
-            print("      🛡️ Analyzing Error Popup...")
-            popup_text = ""
-            try:
-                any_popup = page.locator(
-                    ".swal2-popup, .modal-content, .alert-danger, .toast-error"
-                ).first
-                if any_popup.is_visible():
-                    popup_text = any_popup.inner_text().lower()
-                else:
-                    popup_text = "no popup"
-                self._ensure_popup_closed(page)
-            except:
-                popup_text = "error reading"
-
-            for idx, row in fuzzed_df.iterrows():
-                expected = str(row["EXPECTED_KEYWORD"]).lower()
-                if expected in popup_text:
-                    res = "PASS"
-                    detail = f"Caught: '{expected}'"
-                else:
-                    res = "FAIL"
-                    detail = f"Missed: '{expected}'"
-                logs.append(
-                    {
-                        "step": f"Test Case #{idx+1}",
-                        "test_case": row["TEST_CASE"],
-                        "status": "EXECUTED",
-                        "result": res,
-                        "details": detail,
-                    }
-                )
 
             # 3. Phase 2: Valid Data (FIX #2 & #3: Valid Import Logic)
             print("   ✨ PHASE 2: Verify Valid Import (User Data Preservation)...")
+            original_df = pd.read_csv(file_path, dtype=str)
 
             # Logic: Lấy dòng cuối cùng (thường là dòng User mới thêm) để làm mẫu
             # Hoặc lấy dòng đầu tiên nếu file chỉ có 1 dòng
@@ -488,10 +585,7 @@ class SmartTesterMixin:
             # Upload Valid File (Expect Success)
             is_success, msg = self._perform_upload_action(page, valid_path)
 
-            final_res = "PASS" if is_success else "FAIL"
-            final_detail = (
-                "Successfully imported valid user data" if is_success else msg
-            )
+            final_msg = str(msg) if msg is not None else "Unknown result"
 
             # Quan trọng: Nếu thành công, lưu lại tên file này vào memory để các bước sau (Edit Row) dùng ID mới này
             if is_success:
@@ -503,10 +597,10 @@ class SmartTesterMixin:
             logs.append(
                 {
                     "step": "Final Sanity Check",
-                    "test_case": "Import Valid User Data",
-                    "status": "EXECUTED",
-                    "result": final_res,
-                    "details": final_detail,
+                    # "test_case": REMOVED
+                    # "result": REMOVED (Merged into status)
+                    "status": "PASS" if is_success else "FAIL",
+                    "details": final_msg,
                 }
             )
 
@@ -962,4 +1056,98 @@ class RBEFuzzGenerator:
                 df.to_csv(f, index=False)
                 f.write("\n")
 
+        return file_name
+
+
+class GenericCSVFuzzer:
+    """
+    Class này tự động phân tích CSV bất kỳ và sinh ra các test case phá hoại
+    dựa trên kiểu dữ liệu của từng cột.
+    """
+
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.original_df = pd.read_csv(file_path, on_bad_lines="skip")
+        self.mutations = []
+
+    def generate_generic_all_cases(self):
+        self.mutations = []
+        df = self.original_df.copy()
+
+        # Nếu file rỗng, bỏ qua
+        if df.empty:
+            return []
+
+        print(f"      🧠 AI Analyzing CSV Structure ({len(df.columns)} columns)...")
+
+        # 1. CASE: EMPTY / NULL VALUES (Xóa dữ liệu bắt buộc)
+        # Chọn ngẫu nhiên 1 dòng và xóa giá trị của cột đầu tiên (thường là ID)
+        if len(df) > 0:
+            df_empty = df.copy()
+            target_col = df.columns[0]
+            df_empty.at[0, target_col] = ""  # Xóa dữ liệu
+            self._add_case(f"Empty_Column_{target_col}", df_empty)
+
+        # 2. DUYỆT QUA TỪNG CỘT ĐỂ TÌM ĐIỂM YẾU
+        for col in df.columns:
+            # Lấy mẫu dữ liệu để đoán kiểu
+            sample_val = df[col].dropna().iloc[0] if not df[col].dropna().empty else ""
+            dtype = df[col].dtype
+
+            # --- A. NẾU LÀ SỐ (NUMERIC) ---
+            if (
+                pd.api.types.is_numeric_dtype(dtype)
+                or str(sample_val).replace(".", "", 1).isdigit()
+            ):
+                # Test 1: Số Âm (Negative)
+                df_neg = df.copy()
+                df_neg[col] = -100
+                self._add_case(f"Negative_Value_{col}", df_neg)
+
+                # Test 2: Text vào trường Số (Type Mismatch)
+                df_txt = df.copy()
+                df_txt[col] = "INVALID_TEXT"
+                self._add_case(f"Text_In_Numeric_{col}", df_txt)
+
+                # Test 3: Số cực lớn (Overflow)
+                df_huge = df.copy()
+                df_huge[col] = 999999999999
+                self._add_case(f"Overflow_Value_{col}", df_huge)
+
+            # --- B. NẾU LÀ CHỮ (STRING) ---
+            else:
+                # Test 4: SQL Injection đơn giản
+                df_sql = df.copy()
+                df_sql.at[0, col] = "' OR '1'='1"
+                self._add_case(f"SQL_Injection_{col}", df_sql)
+
+                # Test 5: Special Characters (Emojis, Symbols)
+                df_special = df.copy()
+                df_special.at[0, col] = "⚠️💀 Test @#%^"
+                self._add_case(f"Special_Chars_{col}", df_special)
+
+                # Test 6: Buffer Overflow (Chuỗi siêu dài 1000 ký tự)
+                df_long = df.copy()
+                long_str = "A" * 2000
+                df_long.at[0, col] = long_str
+                self._add_case(f"Buffer_Overflow_{col}", df_long)
+
+        # 3. CASE: DUPLICATE ROWS (Check trùng khóa)
+        if len(df) > 0:
+            df_dup = pd.concat([df.iloc[[0]], df], ignore_index=True)
+            self._add_case("Duplicate_Rows", df_dup)
+
+        print(f"      🧠 AI Generated {len(self.mutations)} Fuzz Cases.")
+        return self.mutations
+
+    def _add_case(self, name, modified_df):
+        # Giới hạn số lượng case để không test quá lâu (Max 10 case ngẫu nhiên nếu quá nhiều)
+        self.mutations.append({"name": name, "df": modified_df})
+
+    def save_mutation_to_generic_file(self, mutation_data):
+        file_name = f"FUZZ_{mutation_data['name']}.csv"
+        # Làm sạch tên file (bỏ ký tự lạ)
+        file_name = re.sub(r"[^\w\-_\.]", "_", file_name)
+        full_path = os.path.join(DOWNLOAD_DIR, file_name)
+        mutation_data["df"].to_csv(full_path, index=False)
         return file_name

@@ -239,7 +239,10 @@ class BrickAutomation(
 
                     elif act == "smart_test_cycle":
                         logs = self.smart_test_cycle(page, val)
-                        report_logs.extend(logs)
+                        if logs and isinstance(logs, list):
+                            report_logs.extend(logs)
+                        else:
+                            print("      ⚠️ Smart Test returned no logs.")
 
                     elif act == "upload":
                         upload_logs = self.handle_upload(page, tgt, val)

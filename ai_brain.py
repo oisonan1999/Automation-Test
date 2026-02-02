@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL_REASONING = "deepseek-r1:14b"
+MODEL_REASONING = "deepseek-r1:14b-qwen-distill-q4_K_M"
 MODEL_FORMATTING = "qwen2.5-coder:14b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = "scenarios.json"
@@ -33,16 +33,42 @@ def save_scenario(name, plan, user_command=""):
 
 
 def clean_json_string(text):
+    """
+    Hàm làm sạch chuỗi JSON (Nuclear Cleaning):
+    Loại bỏ mọi thứ không phải là cú pháp JSON hợp lệ để tránh lỗi parse.
+    """
     if not text:
         return "[]"
-    # Xử lý các trường hợp model trả về markdown
-    text = text.replace("```json", "").replace("```", "").strip()
 
-    # Dùng regex tìm đoạn JSON list [...] nằm ngoài cùng
-    match = re.search(r"\[.*\]", text, re.DOTALL)
-    if match:
-        return match.group(0)
-    return text
+    # 1. Xóa Markdown code block (```json ... ```)
+    text = re.sub(r"```json|```", "", text)
+
+    # 2. Xóa comment HTML (ĐÂY LÀ NGUYÊN NHÂN GÂY LỖI CỦA BẠN)
+    # Sử dụng [\s\S] để bắt cả ký tự xuống dòng
+    text = re.sub(r"", "", text)
+
+    # 3. Xóa comment Block kiểu C /* ... */
+    text = re.sub(r"/\*[\s\S]*?\*/", "", text)
+
+    # 4. Xóa comment dòng kiểu JS // ...
+    # (Dùng cờ MULTILINE để xóa từ // đến hết dòng)
+    text = re.sub(r"//.*$", "", text, flags=re.MULTILINE)
+
+    # 5. Trích xuất đoạn JSON list [...] hoặc object {...} nằm ngoài cùng
+    match_list = re.search(r"\[[\s\S]*\]", text)
+    if match_list:
+        text = match_list.group(0)
+    else:
+        # Nếu không thấy list, thử tìm object {}
+        match_obj = re.search(r"\{[\s\S]*\}", text)
+        if match_obj:
+            text = match_obj.group(0)
+
+    # 6. Xóa dấu phẩy thừa ở cuối (Trailing commas) - Lỗi phổ biến của LLM
+    # VD: { "a": 1, } -> { "a": 1 }
+    text = re.sub(r",\s*(\}|\])", r"\1", text)
+
+    return text.strip()
 
 
 def call_ollama(model_name, prompt, stream=False):
@@ -52,7 +78,7 @@ def call_ollama(model_name, prompt, stream=False):
         "prompt": prompt,
         "stream": stream,
         "options": {
-            "temperature": 0.1,  # Giữ nhiệt độ thấp để kết quả ổn định
+            "temperature": 0.0,  # Giữ nhiệt độ thấp để kết quả ổn định
             "num_ctx": 4096,  # Tăng context window nếu lệnh dài
         },
     }
@@ -75,8 +101,8 @@ def parse_command_to_json(user_command, context_plan=None):
     # BƯỚC 1: SUY LUẬN (REASONING PHASE) - Model: DeepSeek-R1
     # Nhiệm vụ: Hiểu tiếng Việt, phân tích logic, phá giải các yêu cầu phức tạp.
     # =========================================================================
-    print(f"   1️⃣  DeepSeek-R1 đang suy nghĩ phân tích yêu cầu...")
-
+    print(f"   1️⃣  DeepSeek-R1 are currently analyzing the requirements...")
+    #   4. Identify any implicit steps (e.g., "Export" usually means we need to wait a few seconds for a download).
     reasoning_prompt = f"""
     Analyze the following QA Automation Command provided by the user.
     
@@ -90,7 +116,7 @@ def parse_command_to_json(user_command, context_plan=None):
        - File names (e.g., "file2.csv").
        - Specific actions (Upload, Export, Add rows).
        - Data values (e.g., "BagID=Grabbag_hnm").
-    4. Identify any implicit steps (e.g., "Export" usually means we need to wait for a download).
+    
     5. Identify specific actions:
        - "Chọn/Tick X dòng" -> Checkbox action.
        - "Bất kỳ/Random" -> Value should imply random.
@@ -121,14 +147,14 @@ def parse_command_to_json(user_command, context_plan=None):
 
     # In ra một phần suy nghĩ để bạn theo dõi (Debug)
     print(
-        f"      📝 Phân tích từ DeepSeek: {analysis_clean[:100].replace(chr(10), ' ')}..."
+        f"      📝 Analysis from DeepSeek: {analysis_clean[:100].replace(chr(10), ' ')}..."
     )
 
     # =========================================================================
     # BƯỚC 2: ĐỊNH DẠNG (FORMATTING PHASE) - Model: Qwen2.5-Coder
     # Nhiệm vụ: Nhìn vào bản phân tích của DeepSeek và viết code JSON chuẩn xác.
     # =========================================================================
-    print(f"   2️⃣  Qwen2.5-Coder đang chuyển đổi sang JSON Action Plan...")
+    print(f"   2️⃣  Qwen2.5-Coder is converting to JSON Action Plan...")
 
     formatting_prompt = f"""
     You are a Senior QA Automation AI and a Strict JSON Converter.
