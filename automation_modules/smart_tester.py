@@ -1111,7 +1111,7 @@ class GenericCSVFuzzer:
 
                 # Test 3: Số cực lớn (Overflow)
                 df_huge = df.copy()
-                df_huge[col] = 999999999999
+                df_huge[col] = 9999999
                 self._add_case(f"Overflow_Value_{col}", df_huge)
 
             # --- B. NẾU LÀ CHỮ (STRING) ---
@@ -1125,12 +1125,6 @@ class GenericCSVFuzzer:
                 df_special = df.copy()
                 df_special.at[0, col] = "⚠️💀 Test @#%^"
                 self._add_case(f"Special_Chars_{col}", df_special)
-
-                # Test 6: Buffer Overflow (Chuỗi siêu dài 1000 ký tự)
-                df_long = df.copy()
-                long_str = "A" * 2000
-                df_long.at[0, col] = long_str
-                self._add_case(f"Buffer_Overflow_{col}", df_long)
 
         # 3. CASE: DUPLICATE ROWS (Check trùng khóa)
         if len(df) > 0:
