@@ -1,4 +1,6 @@
 # automation_modules/smart_tester.py
+from copy import copy as cp, deepcopy
+import io
 import os
 import time
 import pandas as pd
@@ -12,6 +14,104 @@ from .constants import DOWNLOAD_DIR
 
 class SmartTesterMixin:
     """Chứa logic Smart Cycle, Upload, Fuzzing"""
+
+    def smart_test_cycle(self, page, file_name):
+        """
+        MAIN DISPATCHER: Phân luồng kiểm thử dựa trên tên file.
+        """
+        # Làm sạch tên file (đề phòng lệnh AI kèm theo chữ 'Import CSV')
+        clean_name = (
+            file_name.replace("Import CSV", "").replace("Export CSV", "").strip()
+        )
+        full_path = os.path.join(DOWNLOAD_DIR, clean_name)
+
+        print(f"   🤖 Smart Test Dispatcher: '{clean_name}'")
+
+        # --- LUỒNG 1: RBE FILE (ƯU TIÊN CAO) ---
+        # Kiểm tra tên file hoặc nội dung header
+        is_rbe = False
+        if "rbe" in clean_name.lower():
+            is_rbe = True
+        else:
+            # Check nội dung dòng đầu tiên nếu tên file không rõ
+            try:
+                if os.path.exists(full_path):
+                    with open(full_path, "r", encoding="utf-8-sig") as f:
+                        if "[RBE_CONFIGURATION]" in f.read(100):
+                            is_rbe = True
+            except:
+                pass
+
+        if is_rbe:
+            print("      👉 Detected RBE File. Running RBE Specialized Test.")
+            return self._run_rbe_fuzz_campaign(page, clean_name)
+        else:
+            # --- LUỒNG 2: GENERIC FILE (FILE KHÁC) ---
+            print("      👉 Detected Generic CSV. Running Standard Check.")
+        return self._test_generic_csv(page, clean_name)
+
+    # ---------------------------------------------------------
+    # HÀM TEST CHUYÊN BIỆT CHO RBE (Mới thêm theo yêu cầu)
+    # ---------------------------------------------------------
+    # ---------------------------------------------------------
+    # HÀM THỰC THI TEST RBE
+    # ---------------------------------------------------------
+    def _smart_test_rbe_csv(self, page, file_name):
+        full_path = os.path.join(DOWNLOAD_DIR, file_name)
+        logs = []
+
+        # BƯỚC 1: TEST OFFLINE (Cấu trúc file)
+        print("      🧪 Phase 1: Offline Validation...")
+        tester = RBESmartTester(full_path)
+        raw_results = tester.run_tests()
+
+        has_critical_error = False
+        for line in raw_results:
+            parts = line.split("] ", 1)
+            status = "PASS" if "[PASS" in parts[0] else "FAIL"
+            details = parts[1] if len(parts) > 1 else line
+
+            if status == "FAIL" and "Structure" in line:
+                has_critical_error = True
+
+            print(f"         {line}")
+            logs.append(
+                {"step": "RBE Offline Test", "status": status, "details": details}
+            )
+
+        # Nếu lỗi cấu trúc nghiêm trọng -> Dừng, không upload
+        if has_critical_error:
+            print("      ⛔ Critical Structure Error. Skipping Upload.")
+            logs.append(
+                {
+                    "step": "RBE Upload",
+                    "status": "SKIPPED",
+                    "details": "Critical Offline Failure",
+                }
+            )
+            return logs
+
+        # BƯỚC 2: TEST ONLINE (Upload thử lên web)
+        # Tận dụng hàm handle_upload có sẵn trong DataHandlerMixin (qua self)
+        print("      🚀 Phase 2: Online Upload Verification...")
+        try:
+            # Tìm nút Import RBE CSV (hoặc Import CSV chung)
+            target_btn_name = "Import RBE CSV"
+
+            # Gọi hàm upload của hệ thống
+            upload_logs = self.handle_upload(page, target_btn_name, file_name)
+            logs.extend(upload_logs)
+
+            # Kiểm tra kết quả upload
+            if any(l["status"] == "PASS" for l in upload_logs):
+                print("         ✅ Upload Success.")
+            else:
+                print("         ❌ Upload Failed on Web.")
+
+        except Exception as e:
+            print(f"         ❌ Upload Error: {e}")
+            logs.append({"step": "RBE Upload", "status": "FAIL", "details": str(e)})
+        return logs
 
     def _generate_fuzzed_data(self, original_df):
         fuzzed_rows = []
@@ -130,8 +230,8 @@ class SmartTesterMixin:
                         text = popup.inner_text().lower()
                         clean_text = text.replace("\n", " ").strip()[:200]
 
-                        print("      ⏳ Popup detected, waiting 2s...")
-                        time.sleep(2.0)  # Chờ thêm 2s để chắc chắn popup đã ổn định
+                        print("      ⏳ Popup detected, waiting 30s...")
+                        time.sleep(30.0)  # Chờ thêm 30s để chắc chắn popup đã ổn định
                         # Tìm nút OK (.swal2-confirm) và click luôn
                         page.evaluate(
                             """
@@ -216,7 +316,7 @@ class SmartTesterMixin:
             pass
         time.sleep(0.2)
 
-    def smart_test_cycle(self, page, target_csv):
+    def _test_generic_csv(self, page, target_csv):
         logs = []
         try:
             # 1. Chuẩn bị file (Lấy file mới nhất trong thư mục Download)
@@ -347,12 +447,14 @@ class SmartTesterMixin:
                         prefix = "Perk_"
                     elif "offer" in col_lower:
                         prefix = "Offer_"
+                    elif "objectiveid" in col_lower:
+                        prefix = "Objective_"
                     else:
                         prefix = "Auto_"
 
                     # Tạo ID mới: Prefix + Auto + timestamp
                     # VD: Grabbag_Auto_170000123
-                    new_id = f"{prefix}Auto_{current_timestamp}"
+                    new_id = f"{prefix}{current_timestamp}"
                     valid_df.at[valid_df.index[0], col] = new_id
                     print(f"      ℹ️ Generated new ID for '{col}': {new_id}")
 
@@ -472,3 +574,392 @@ class SmartTesterMixin:
         return page.locator(
             "button:has(i[class*='import']), button:has(i[class*='upload'])"
         ).first
+
+    def _run_rbe_fuzz_campaign(self, page, base_file_name):
+        full_path = os.path.join(DOWNLOAD_DIR, base_file_name)
+        logs = []
+
+        print(f"   📂 Testing with Base File: {base_file_name}")
+        parser = RBESmartTester(full_path)
+
+        # PHASE 1: PRE-FLIGHT CHECK (Đảm bảo file gốc sạch)
+        static_res = parser.run_tests()
+        if any("FAIL" in l for l in static_res):
+            print("      ⛔ Base file invalid. Aborting Fuzzing.")
+            return [
+                {"step": "Pre-flight", "status": "FAIL", "details": str(static_res)}
+            ]
+
+        # PHASE 2: FUZZING (Dùng hàm upload nhanh, KHÔNG RETRY)
+        print("   🧪 PHASE 2: Fuzz Tests (Negative)...")
+        fuzzer = RBEFuzzGenerator(parser)
+        mutations = fuzzer.generate_all_cases()
+
+        for case in mutations:
+            print(f"      🔸 Testing Case: {case['name']}...")
+            temp_file = fuzzer.save_mutation_to_file(case)
+
+            # Upload NHANH (Không retry để tiết kiệm thời gian)
+            success, msg = self._upload_fast(page, "Import RBE CSV", temp_file)
+
+            # Logic ngược: Upload FAIL = PASS, Upload PASS = WARNING
+            if not success:
+                print(f"         ✅ Blocked: {msg}")
+                logs.append(
+                    {
+                        "step": f"Fuzz: {case['name']}",
+                        "status": "PASS",
+                        "details": f"Blocked: {msg}",
+                    }
+                )
+            else:
+                print(f"         🚨 CRITICAL: Allowed!")
+                logs.append(
+                    {
+                        "step": f"Fuzz: {case['name']}",
+                        "status": "WARNING",
+                        "details": "⚠️ SYSTEM ACCEPTED INVALID DATA",
+                    }
+                )
+
+            try:
+                os.remove(os.path.join(DOWNLOAD_DIR, temp_file))
+            except:
+                pass
+            self._ensure_popup_closed(page)
+            time.sleep(0.5)
+
+        # PHASE 3: SANITY CHECK (Cắt vòng lặp AI bằng status WARNING)
+        print("   ✨ PHASE 3: Sanity Check...")
+        success, msg = self._upload_fast(page, "Import RBE CSV", base_file_name)
+
+        if success:
+            print(f"         ✅ Passed.")
+            logs.append(
+                {"step": "Sanity Check", "status": "PASS", "details": "Healthy"}
+            )
+        else:
+            print(f"         ❌ Failed: {msg}")
+            # FIX: Trả về WARNING để AI không tự động Retry vòng lặp
+            logs.append(
+                {
+                    "step": "Sanity Check",
+                    "status": "WARNING",
+                    "details": f"Check Failed: {msg}",
+                }
+            )
+
+        return logs
+
+    def _upload_fast(self, page, target_text, file_name):
+        """
+        Upload thông minh với Log thời gian thực.
+        """
+        full_path = os.path.join(DOWNLOAD_DIR, file_name)
+        try:
+            # 1. Tìm & Chọn File
+            print(f"         📤 Selecting file: {file_name}...")  # LOG NGAY
+            btn = page.locator(
+                f"button:has-text('{target_text}'), a.btn:has-text('{target_text}'), input[type='file']"
+            ).first
+            if not btn.is_visible():
+                return False, "Button not found"
+
+            if btn.get_attribute("type") == "file":
+                btn.set_input_files(full_path)
+            else:
+                with page.expect_file_chooser(timeout=3000) as fc_info:
+                    btn.click()
+                fc_info.value.set_files(full_path)
+
+            # 2. Confirm Upload (Xử lý Popup Confirm)
+            # LOG TRƯỚC KHI CLICK để biết AI đang làm gì
+            print("         👆 Checking for Confirm popup...")
+            try:
+                confirm = page.locator(
+                    ".swal2-confirm, button.btn-primary:has-text('Upload')"
+                ).first
+                if confirm.is_visible(timeout=2000):
+                    print("         🖱 Clicking Confirm Upload...")
+                    # force=True để click bất chấp overlay
+                    confirm.click(force=True)
+            except:
+                pass
+
+            # 3. POLLING LOOP (Tối đa 90s)
+            # Log này sẽ hiện ngay sau khi click confirm
+            print("         👀 Watching for result (Loading/Success/Fail)...")
+
+            start_time = time.time()
+            seen_loading = False
+
+            while time.time() - start_time < 90:
+                # A. ƯU TIÊN 1: Check Kết Quả (Success/Fail) trước
+                # Để bắt dính ngay khi popup vừa hiện
+                res_found, res_type, res_text = self._check_result_text(page)
+
+                if res_found:
+                    print(f"         📢 Found Result: {res_type}")
+                    self._ensure_popup_closed(page)
+                    return (res_type == "PASS"), res_text
+
+                # B. ƯU TIÊN 2: Check Loading
+                loading = page.locator(
+                    ".swal2-loading, .spinner, .loading-mask, div:has-text('Importing'), div:has-text('Uploading')"
+                ).first
+                is_loading_visible = loading.is_visible()
+
+                if is_loading_visible:
+                    if not seen_loading:
+                        print("         ⏳ System is Importing (Loading detected)...")
+                        seen_loading = True
+                    time.sleep(0.5)
+                    continue
+
+                # C. Logic thoát nhanh:
+                # Nếu đã từng Loading, mà giờ hết Loading, và cũng không tìm thấy popup kết quả
+                if seen_loading and not is_loading_visible:
+                    print(
+                        "         🏁 Loading finished. Checking result one last time..."
+                    )
+                    # Đợi thêm 1s để chắc chắn popup render
+                    time.sleep(1.0)
+                    res_found, res_type, res_text = self._check_result_text(page)
+                    if res_found:
+                        self._ensure_popup_closed(page)
+                        return (res_type == "PASS"), res_text
+
+                    # Nếu vẫn không thấy popup -> Có thể đã bị tắt hoặc web lỗi
+                    return False, "Process finished but No Popup found"
+
+                time.sleep(0.5)
+
+            return False, "Timeout (90s)"
+
+        except Exception as e:
+            return False, str(e)
+
+    def _check_result_text(self, page):
+        """Helper tìm text Success/Error trên màn hình"""
+        try:
+            # Check Error
+            err = page.locator(
+                ".swal2-error, .toast-error, .alert-danger, div.error-message, h2:has-text('Error'), div:has-text('Failed')"
+            ).first
+            if err.is_visible():
+                return True, "FAIL", err.inner_text().strip()[:50]
+
+            # Check Success
+            succ = page.locator(
+                ".swal2-success, .toast-success, .alert-success, div:has-text('Success'), div:has-text('Completed')"
+            ).first
+            if succ.is_visible():
+                return True, "PASS", succ.inner_text().strip()[:50]
+
+            return False, None, None
+        except:
+            return False, None, None
+
+
+class RBESmartTester:
+    """Class Logic chuyên biệt để parse và test file RBE CSV"""
+
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.sections = {}
+        self.report = []
+        self.config_df = None
+        self.tasks_df = None
+        self.milestones_df = None
+
+    def log(self, test_name, status, details=""):
+        # Format log chuẩn để Core hiển thị đẹp
+        icon = "✅" if status == "PASS" else "❌"
+        self.report.append(f"[{status}] {test_name}: {details}")
+
+    def parse_file(self):
+        try:
+            if not os.path.exists(self.file_path):
+                self.log("File Check", "FAIL", f"File not found: {self.file_path}")
+                return False
+
+            # FIX QUAN TRỌNG: Dùng 'utf-8-sig' để xử lý BOM (Byte Order Mark) từ Excel
+            with open(self.file_path, "r", encoding="utf-8-sig") as f:
+                lines = f.readlines()
+
+            # Logic cắt file Multi-section
+            section_indices = [
+                i for i, line in enumerate(lines) if line.strip().startswith("[")
+            ]
+            section_indices.append(len(lines))
+
+            if len(section_indices) <= 1:
+                self.log(
+                    "File Parsing",
+                    "FAIL",
+                    "No [SECTIONS] found. Check encoding or file format.",
+                )
+                return False
+
+            for i in range(len(section_indices) - 1):
+                start = section_indices[i]
+                end = section_indices[i + 1]
+                # Lấy tên section và clean kỹ càng
+                header = lines[start].strip().split(",")[0].strip("[]").strip()
+                content = "".join(lines[start + 1 : end])
+
+                if content.strip():
+                    try:
+                        self.sections[header] = pd.read_csv(
+                            io.StringIO(content)
+                        ).dropna(how="all")
+                    except Exception as e:
+                        self.log(
+                            "CSV Read",
+                            "WARNING",
+                            f"Error reading section {header}: {e}",
+                        )
+
+            self.config_df = self.sections.get("RBE_CONFIGURATION")
+            for k in self.sections:
+                if k.startswith("TASKS_"):
+                    self.tasks_df = self.sections[k]
+                elif k.startswith("MILESTONES_"):
+                    self.milestones_df = self.sections[k]
+
+            return True
+        except Exception as e:
+            self.log("File Parsing", "FAIL", str(e))
+            return False
+
+    def run_tests(self):
+        if not self.parse_file():
+            return self.report
+
+        # 1. Structure Check
+        missing = [
+            s
+            for s in ["RBE_CONFIGURATION", "TASKS", "MILESTONES"]
+            if (s == "RBE_CONFIGURATION" and self.config_df is None)
+            or (
+                s != "RBE_CONFIGURATION"
+                and not any(k.startswith(s) for k in self.sections)
+            )
+        ]
+
+        if missing:
+            self.log("Structure", "FAIL", f"Missing: {missing}")
+        else:
+            self.log("Structure", "PASS", "Full 3 required sections found.")
+
+        # 2. Logic Check
+        try:
+            if self.config_df is not None:
+                cfg_id = self.config_df["EventID"].iloc[0]
+                task_match = any(
+                    cfg_id in k for k in self.sections if k.startswith("TASKS")
+                )
+                if not task_match:
+                    self.log("EventID Sync", "FAIL", f"ConfigID mismatch")
+                else:
+                    self.log("EventID Sync", "PASS", f"ID matched: {cfg_id}")
+        except:
+            pass
+
+        # 3. Milestone Logic
+        if self.milestones_df is not None and "Point" in self.milestones_df.columns:
+            try:
+                pts = (
+                    pd.to_numeric(self.milestones_df["Point"], errors="coerce")
+                    .dropna()
+                    .tolist()
+                )
+                if not pts:
+                    self.log("Milestone Logic", "WARNING", "No points found")
+                elif all(x >= y for x, y in zip(pts, pts[1:])) or all(
+                    x <= y for x, y in zip(pts, pts[1:])
+                ):
+                    self.log("Milestone Logic", "PASS", "Points sorted correctly")
+                else:
+                    self.log("Milestone Logic", "FAIL", "Points not sorted")
+            except:
+                pass
+
+        return self.report
+
+
+class RBEFuzzGenerator:
+    """Class chuyên tạo ra các biến thể lỗi (Mutations) từ file gốc"""
+
+    def __init__(self, parser):
+        self.parser = parser
+        self.mutations = []
+
+    def generate_all_cases(self):
+        """Sinh ra tất cả các kịch bản test lỗi"""
+        self.mutations = []
+
+        # 1. CASE: DATE LOGIC (Start > End)
+        df = self.parser.config_df.copy()
+        df["StartTime"] = "2030-01-01 00:00"
+        df["EndTime"] = "2020-01-01 00:00"
+        self._add_case("Invalid_Date_Range", df, "RBE_CONFIGURATION")
+
+        # 2. CASE: MISSING REQUIRED COLUMN (Xóa EventID)
+        df = self.parser.config_df.copy()
+        if "EventID" in df.columns:
+            df = df.drop(columns=["EventID"])
+            self._add_case("Missing_Column_EventID", df, "RBE_CONFIGURATION")
+
+        # 3. CASE: NEGATIVE NUMBERS (Điểm âm)
+        if self.parser.milestones_df is not None:
+            df = self.parser.milestones_df.copy()
+            if "Point" in df.columns:
+                df.iloc[0, df.columns.get_loc("Point")] = -100
+                self._add_case("Negative_Milestone_Point", df, "MILESTONES")
+
+        # 4. CASE: INVALID REWARD SYNTAX (Sai format Item:Qty)
+        if self.parser.milestones_df is not None:
+            df = self.parser.milestones_df.copy()
+            if "MilestoneRewards" in df.columns:
+                df.iloc[0, df.columns.get_loc("MilestoneRewards")] = (
+                    "InvalidItemNameNoQty"
+                )
+                self._add_case("Invalid_Reward_Syntax", df, "MILESTONES")
+
+        # 5. CASE: EMPTY EVENT NAME (Trường bắt buộc rỗng)
+        df = self.parser.config_df.copy()
+        if "EventName" in df.columns:
+            df.iloc[0, df.columns.get_loc("EventName")] = ""
+            self._add_case("Empty_Event_Name", df, "RBE_CONFIGURATION")
+
+        return self.mutations
+
+    def _add_case(self, name, modified_df, section_name):
+        """Lưu lại kịch bản để tạo file"""
+        sections_copy = deepcopy(self.parser.sections)
+        target_key = None
+        if section_name in sections_copy:
+            target_key = section_name
+        else:
+            for k in sections_copy:
+                if k.startswith(section_name):
+                    target_key = k
+                    break
+
+        if target_key:
+            sections_copy[target_key] = modified_df
+            self.mutations.append({"name": name, "sections": sections_copy})
+
+    def save_mutation_to_file(self, mutation_data):
+        """Ghi ra file CSV tạm"""
+        file_name = f"FUZZ_{mutation_data['name']}.csv"
+        full_path = os.path.join(DOWNLOAD_DIR, file_name)
+
+        with open(full_path, "w", encoding="utf-8-sig", newline="") as f:
+            for header, df in mutation_data["sections"].items():
+                f.write(f"[{header}]\n")
+                df.to_csv(f, index=False)
+                f.write("\n")
+
+        return file_name

@@ -100,6 +100,10 @@ def parse_command_to_json(user_command, context_plan=None):
        - If adding rows: Extract Column Name and Values (e.g., BagID = A, B).
     7. "Scan tabs..." -> Means we are inside a detail page and need to check multiple tabs.
     8. "Sửa Cost..., Sửa Stock..." -> Means we are filling a form.
+    9. Identify actions: navigate, click, wait, download, upload.
+    10. "Chọn League 5" -> Click on Sidebar "League 5".
+    11. "Đợi trang load" -> Wait action.
+    12. "Export CSV" -> Download action.
 
     Output ONLY the logical analysis/plan in plain text. Do NOT generate JSON yet.
     """
@@ -153,14 +157,23 @@ def parse_command_to_json(user_command, context_plan=None):
     9. "update_form": {{ "action": "update_form", "data": {{ "Label": "Value", ... }} }}
        - Used to fill forms/popups. 
        - MUST extract ALL fields mentioned in user command.
+       - Use "Tab" key if user says "Go to tab X".
+       - Use "Field" keys for Inputs, Selects, Toggles.
     10. "save_form": {{ "action": "save_form" }}
     11. "scan_tabs": 
         - Rule: Use when user says "Scan tabs", "Quét các tab", "Duyệt qua các tab".
         - IMPORTANT: If user lists fields to update immediately after "Scan tabs", PUT THEM INSIDE "data".
         - Format: {{ "action": "scan_tabs", "data": {{ "Field1": "Val1", "Field2": "Val2" }} }}
+    12. "process_deployment": {{ "action": "process_deployment", "options": ["Option1", "Option2"] }}
+        - Use when user says: "Click The Brick", "Process", "Deploy", "Tick X then Process".
+    13. "click": {{ "action": "click", "target": "Name" }}
+    14. "wait": {{ "action": "wait" }}
     CRITICAL RULES:
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
        - "Go to A -> B -> Clone C" => 1. navigate [A,B], 2. clone C.
+    2. **STRICT JSON ONLY**: Output ONLY the JSON array.
+    3. **NO COMMENTS**: Do NOT output // or . If you do, the system will crash.
+    4. **NO MARKDOWN**: No ```json tags.
 
     2. **FORM DATA EXTRACTION (CRITICAL)**:
        - Command: "Set ID: A, Gate: B, Currency: C and Currency Value: D"
@@ -205,6 +218,18 @@ def parse_command_to_json(user_command, context_plan=None):
     CORRECT: [
       {{ "action": "update_form", "data": {{ "Tab": "Pulls", "Quantity": "10" }} }}
     ]
+    
+    Ex 3: "User: "Vào Gacha Info sửa Cost 10 -> Save & Continue -> Vào tab Milestones"
+    JSON: [
+      {{ "action": "update_form", "data": {{ "Tab": "Gacha Info", "Cost": "10" }} }},
+      {{ "action": "save_form", "mode": "continue" }},
+      {{ "action": "update_form", "data": {{ "Tab": "Milestones" }} }}
+    ]"
+    
+    Ex 4: "User: "Bấm nút The Brick -> Tick chọn 'Hyper Blueprint' -> Bấm Process"
+    JSON: [
+      {{ "action": "process_deployment", "options": ["Hyper Blueprint"] }}
+    ]"
 
     INPUT CONTEXT:
     - Original Command: "{user_command}"

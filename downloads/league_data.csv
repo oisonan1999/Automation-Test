@@ -1,0 +1,7 @@
+PlayerLeagueID,ObjectiveID,Title,Description,Condition,CompleteType1,CompleteType2,CompleteCount,Rewards,DeepLink,Order
+5,L5_Obj_1295175062,!!R42_OBJ_LEAGUE5_1_TITLE,!!R42_OBJ_LEAGUE5_1_DESC,win,quest:Q_ICB_B_006,difficulty:Normal,1,GrabBagToken_Sec_Tier3_Single:5,whiplash://dat.Action.quests/League_ICBelt_B/Q_ICB_B_006,1
+5,L5_Obj_1336824581,!!R42_OBJ_LEAGUE5_2_TITLE,!!R42_OBJ_LEAGUE5_2_DESC_2021,win,quest:Q_ICB_007,difficulty:Normal,1,SoftCurrency:100000,whiplash://dat.Action.quests/League_ICBelt/Q_ICB_007,2
+5,L5_Obj_5752656948,!!R42_OBJ_LEAGUE5_3_TITLE,!!R42_OBJ_LEAGUE5_3_DESC,win,quest:The_road_female_4_3,difficulty:Normal,1,TP_Color_25_All:1,whiplash://dat.Action.quests/The_road_female_4/The_road_female_4_3,3
+5,L5_Obj_2558477847,!!R42_OBJ_LEAGUE5_4_TITLE,!!R42_OBJ_LEAGUE5_4_DESC,collectSS,rarity:2;tier:Gold,,1,GrabBagToken_Sec_Tier3_Single:5,whiplash://dat.Action.roster,4
+5,L5_Obj_7594645453,!!R42_OBJ_LEAGUE5_6_TITLE,!!R42_OBJ_LEAGUE5_6_DESC_2021,win,questline:Daily,,10,SoftCurrency:50000,whiplash://dat.Action.pvedaily,5
+5,L5_Obj_6127424193,!!R42_OBJ_LEAGUE5_7_TITLE,!!R42_OBJ_LEAGUE5_7_DESC_2023,win,pvp,,2,TP_Color_10_All:1,whiplash://dat.Action.career,6

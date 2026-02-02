@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Tạo thư mục chứa profile riêng cho Bot để không ảnh hưởng Chrome chính của bạn
-mkdir -p chrome_profile
+# Tạo một thư mục cố định cho Profile (Ví dụ: tại /tmp/chrome-debug hoặc trong thư mục dự án)
+PROFILE_DIR="/tmp/chrome-debug-profile"
+mkdir -p "$PROFILE_DIR"
 
-# Đường dẫn Chrome trên macOS
-CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+echo "🚀 Starting Chrome with Remote Debugging on Port 9222..."
+echo "📂 User Data Dir: $PROFILE_DIR"
 
-# Mở Chrome với cổng Debug 9222 và Profile riêng
-"$CHROME" \
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --remote-debugging-port=9222 \
-  --user-data-dir="$(pwd)/chrome_profile" \
   --no-first-run \
-  --no-default-browser-check
+  --no-default-browser-check \
+  --user-data-dir="$PROFILE_DIR"

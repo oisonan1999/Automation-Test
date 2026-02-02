@@ -1,4 +1,5 @@
 # automation_core.py
+import ast
 import time
 import re
 import os
@@ -46,6 +47,21 @@ class BrickAutomation(
     # ============================
     def execute_action(self, action_plan):
         report_logs = []
+        if isinstance(action_plan, str):
+            try:
+                # Clean sơ bộ comment
+                text = re.sub(r"", "", action_plan, flags=re.DOTALL)
+                text = re.sub(r"//.*$", "", text, flags=re.MULTILINE)
+                action_plan = json.loads(text)
+            except:
+                return [
+                    {
+                        "step": "System",
+                        "status": "FAIL",
+                        "details": "JSON Parse Error in Core",
+                    }
+                ]
+
         if isinstance(action_plan, dict):
             action_plan = [action_plan]
 
@@ -54,8 +70,16 @@ class BrickAutomation(
                 browser, page = self.get_existing_page(p)
                 for step in action_plan:
                     act = step.get("action")
-                    tgt = str(step.get("target", ""))
-                    val = str(step.get("value", ""))
+                    tgt = (
+                        str(step.get("target", ""))
+                        if step.get("target", None) is not None
+                        else ""
+                    )
+                    val = (
+                        str(step.get("value", ""))
+                        if step.get("target", None) is not None
+                        else ""
+                    )
                     data = step.get("data", {})
                     op = step.get("operation", "")
                     data_instr = step.get("data", "")
@@ -68,9 +92,98 @@ class BrickAutomation(
                     print(f"▶️ Executing: {act} -> {tgt} {val}")
 
                     if act == "navigate":
-                        self._smart_navigate_path(page, step.get("path", [tgt, val]))
+                        nav_data = step.get("path") if step.get("path") else tgt
+                        if isinstance(nav_data, str) and nav_data.strip().startswith(
+                            "["
+                        ):
+                            try:
+                                nav_data = ast.literal_eval(nav_data)
+                            except:
+                                pass
+                        self.smart_navigate(page, nav_data)
                     elif act == "checkbox":
-                        report_logs.extend(self.handle_checkbox(page, tgt, val))
+                        val_lower = val.lower().strip()
+
+                        # 1. Các giá trị TOGGLE FORM (Boolean)
+                        is_form_toggle = val_lower in [
+                            "on",
+                            "off",
+                            "true",
+                            "false",
+                            "1",
+                            "0",
+                            "yes",
+                            "no",
+                            "enable",
+                            "disable",
+                        ]
+
+                        # 2. Các giá trị TABLE SELECT (Random/All/Specific ID)
+                        # Nếu không phải toggle -> Mặc định là tìm dòng trong bảng
+                        is_table_selection = not is_form_toggle
+                        if not is_form_toggle and self._is_sidebar_item(page, tgt):
+                            print(
+                                f"      🔄 Detect Sidebar Item '{tgt}' in Checkbox command. Switching to CLICK."
+                            )
+                            self.smart_click(page, tgt)
+                            report_logs.append(
+                                {
+                                    "step": "Sidebar Click",
+                                    "status": "PASS",
+                                    "details": f"Redirected from Checkbox: {tgt}",
+                                }
+                            )
+
+                        if is_form_toggle:
+                            print(
+                                f"      🔄 Detect Toggle Value ('{val}'). Priority: FORM."
+                            )
+                            self._smart_update_form(page, {tgt: val})
+                            report_logs.append(
+                                {
+                                    "step": "Form Toggle",
+                                    "status": "PASS",
+                                    "details": f"{tgt}={val}",
+                                }
+                            )
+
+                        elif is_table_selection:
+                            print(
+                                f"      📊 Detect Selection Value ('{val}'). Priority: TABLE."
+                            )
+                            try:
+                                # Gọi hàm xử lý bảng (có tích hợp Search & Filter)
+                                logs = self.handle_checkbox(page, tgt, val)
+                                report_logs.extend(logs)
+                            except Exception as e:
+                                print(f"      ⚠️ Table Checkbox failed: {e}")
+                                # Chỉ fallback sang Form nếu thực sự thất bại ở bảng
+                                # (Phòng trường hợp input text bình thường mà user gọi nhầm lệnh checkbox)
+                                self._smart_update_form(page, {tgt: val})
+                                report_logs.append(
+                                    {
+                                        "step": "Checkbox",
+                                        "status": "FAIL",
+                                        "details": str(e),
+                                    }
+                                )
+                    elif act == "click" or act == "select":
+                        # Ưu tiên dùng hàm smart_click chuyên biệt
+                        self.smart_click(page, tgt)
+                        report_logs.append(
+                            {"step": "Click", "status": "PASS", "details": tgt}
+                        )
+                    elif act == "wait" or act == "wait_for_page_load":
+                        print("      ⏳ Explicit WAIT requested...")
+                        # Gọi hàm chờ Loading chuyên dụng
+                        self._wait_for_long_loading(page)
+                        report_logs.append(
+                            {
+                                "step": "Wait",
+                                "status": "PASS",
+                                "details": "Waited for Spinner",
+                            }
+                        )
                     elif act == "edit_row":
                         self._click_icon_in_row(page, tgt, "edit")
                     elif act == "clone_row":
@@ -126,7 +239,6 @@ class BrickAutomation(
 
                     elif act == "smart_test_cycle":
                         logs = self.smart_test_cycle(page, val)
-                        logs.extend(self.smart_test_cycle(page, val))
                         report_logs.extend(logs)
 
                     elif act == "upload":
