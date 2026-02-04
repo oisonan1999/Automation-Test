@@ -43,10 +43,7 @@ class NavigatorMixin:
 
     def _smart_navigate_path(self, page, path_list):
         print(f"📍 Nav: {'->'.join(path_list)}")
-        try:
-            page.wait_for_load_state("networkidle", timeout=2000)
-        except:
-            pass
+        # Bỏ networkidle wait để tăng tốc, menu thường đã sẵn sàng
 
         for i, item_name in enumerate(path_list):
             item_name = str(item_name).strip()
@@ -87,13 +84,21 @@ class NavigatorMixin:
                         # - Bước 1 (Menu Cha): Chọn cái ĐẦU TIÊN (thường là Parent Menu trên thanh chính)
                         # - Bước >1 (Menu Con): Chọn cái CUỐI CÙNG (thường là Child Menu vừa xổ ra)
                         #   (Điều này giải quyết được cả vụ Boost -> Boost trùng tên)
-                        if is_first_step:
+                        need_parent = is_first_step
+                        if not is_last_step and i + 1 < len(path_list):
+                            next_name = str(path_list[i + 1]).strip()
+                            if next_name.lower() == item_name.lower():
+                                need_parent = True
+                                print(
+                                    f"   🔄 Detected Parent of same-name submenu. Selecting Parent [0]."
+                                )
+
+                        if need_parent:
                             target_element = exact_matches[0]
                         else:
                             target_element = exact_matches[-1]
-                        print(
-                            f"   ⚡️ Chọn kết quả khớp chính xác (Exact Match): '{item_name}'"
-                        )
+
+                        print(f"   ⚡️ Exact Match Selected: '{item_name}'")
 
                     else:
                         # Nếu KHÔNG có khớp chính xác (User gõ tắt hoặc tên dài):
@@ -129,36 +134,69 @@ class NavigatorMixin:
             # --- THAO TÁC ---
             target_element.scroll_into_view_if_needed()
             if not is_first_step:
-                time.sleep(0.5)  # Chờ menu xổ xuống
+                time.sleep(0.1)  # Giảm từ 0.5s xuống 0.1s
 
             target_element.hover(force=True)
-            time.sleep(0.2)
+            time.sleep(0.05)  # Giảm từ 0.2s xuống 0.05s
 
             if not is_last_step:
                 next_item = path_list[i + 1]
-                # Kiểm tra xem menu con đã hiện chưa.
-                # Nếu chưa HOẶC nếu menu con trùng tên cha (Perk -> Perk), click để mở.
-                next_regex = self._safe_compile(next_item)
 
-                should_click = True
-                try:
-                    # Nếu tìm thấy menu con KHỚP CHÍNH XÁC đang hiện -> Không cần click
-                    # (Tránh trường hợp click lại làm đóng menu)
-                    next_cand = page.get_by_text(next_regex, exact=True).all()
-                    for n in next_cand:
-                        if n.is_visible():
-                            should_click = False
-                            break
-                except:
-                    pass
-
-                # Với trường hợp trùng tên (Perk -> Perk), luôn Click cha để chắc chắn
-                if item_name.lower() == next_item.lower():
-                    should_click = True
-
-                if should_click:
+                # LOGIC CHÍNH XÁC: Kiểm tra trùng tên TRƯỚC (Highest Priority)
+                # Nếu menu con trùng tên menu cha (Perk -> Perk), LUÔN CLICK để toggle
+                if item_name.lower() == str(next_item).strip().lower():
+                    print(
+                        f"   🔄 Same-name submenu detected: '{item_name}' -> '{next_item}'. FORCE CLICK."
+                    )
                     target_element.click()
-                    time.sleep(0.5)
+                    time.sleep(0.3)  # Giảm từ 1.0s xuống 0.3s
+
+                    # Chờ cho đến khi submenu xuất hiện (tối đa 2s)
+                    wait_start = time.time()
+                    submenu_found = False
+                    while time.time() - wait_start < 2:  # Giảm từ 3s xuống 2s
+                        try:
+                            # Đếm số element visible - phải có ít nhất 2 (cha + con)
+                            next_regex = self._safe_compile(next_item)
+                            all_matches = page.get_by_text(next_regex, exact=True).all()
+                            visible_count = sum(
+                                1 for el in all_matches if el.is_visible()
+                            )
+                            if visible_count >= 2:
+                                print(
+                                    f"   ✅ Submenu '{next_item}' appeared ({visible_count} visible)."
+                                )
+                                submenu_found = True
+                                break
+                        except:
+                            pass
+                        time.sleep(0.1)  # Giảm từ 0.2s xuống 0.1s
+
+                    if not submenu_found:
+                        print(
+                            f"   ⚠️ Warning: Submenu '{next_item}' may not be visible yet."
+                        )
+                else:
+                    # Nếu KHÔNG trùng tên, kiểm tra xem menu con đã hiện chưa
+                    should_click = True
+                    try:
+                        next_regex = self._safe_compile(next_item)
+                        # Tìm menu con KHỚP CHÍNH XÁC
+                        next_cand = page.get_by_text(next_regex, exact=True).all()
+                        for n in next_cand:
+                            if n.is_visible():
+                                # Menu con đã mở rồi, không cần click
+                                should_click = False
+                                print(
+                                    f"   ℹ️ Submenu '{next_item}' already visible. Skip click."
+                                )
+                                break
+                    except:
+                        pass
+
+                    if should_click:
+                        target_element.click()
+                        time.sleep(0.2)  # Giảm từ 0.5s xuống 0.2s
             else:
                 # Bước cuối
                 print(f"   🎯 Click: {item_name}")

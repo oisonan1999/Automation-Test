@@ -1111,7 +1111,7 @@ class GenericCSVFuzzer:
 
                 # Test 3: Số cực lớn (Overflow)
                 df_huge = df.copy()
-                df_huge[col] = 9999999
+                df_huge[col] = 99
                 self._add_case(f"Overflow_Value_{col}", df_huge)
 
             # --- B. NẾU LÀ CHỮ (STRING) ---

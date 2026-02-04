@@ -1,0 +1,8 @@
+﻿id,level,gate,name,icon,event_type,start_time,end_time,boost,Cost
+Jan2026_ML_LT_Perk_PvE,1,jan2026_live,!!PERK_JAN2026_ML_PVE,UI/R24/Flag/icon_perk_MoveGenerate_Self_Abs,PVE,1/13/2026 19:30,2/3/2026 19:30,Perk_Increase_Health_Perc_5,Perk_Jan2026_ML_pve:1
+Jan2026_ML_LT_Perk_PvE,2,jan2026_live,!!PERK_JAN2026_ML_PVE,UI/R24/Flag/icon_perk_MoveGenerate_Self_Abs,PVE,1/13/2026 19:30,2/3/2026 19:30,Perk_Increase_Health_Perc_10,Perk_Jan2026_ML_pve:1
+Jan2026_ML_LT_Perk_PvE,3,jan2026_live,!!PERK_JAN2026_ML_PVE,UI/R24/Flag/icon_perk_MoveGenerate_Self_Abs,PVE,1/13/2026 19:30,2/3/2026 19:30,"Perk_Increase_Health_Perc_15,Perk_Starting_ExtraMP_All_1",Perk_Jan2026_ML_pve:1
+Jan2026_ML_LT_Perk_PvE,4,jan2026_live,!!PERK_JAN2026_ML_PVE,UI/R24/Flag/icon_perk_MoveGenerate_Self_Abs,PVE,1/13/2026 19:30,2/3/2026 19:30,"Perk_Increase_Health_Perc_20,Perk_Starting_ExtraMP_All_1",Perk_Jan2026_ML_pve:1
+Jan2026_ML_LT_Perk_PvE,5,jan2026_live,!!PERK_JAN2026_ML_PVE,UI/R24/Flag/icon_perk_MoveGenerate_Self_Abs,PVE,1/13/2026 19:30,2/3/2026 19:30,"Perk_Increase_Health_Perc_20,Perk_Starting_ExtraMP_All_2,Perk_ExtraMP_All_1",Perk_Jan2026_ML_pve:1
+Jan2026_ML_LT_Perk_PvE,6,jan2026_live,!!PERK_JAN2026_ML_PVE,UI/R24/Flag/icon_perk_MoveGenerate_Self_Abs,PVE,1/13/2026 19:30,2/3/2026 19:30,"Perk_Increase_Health_Perc_30,Perk_Starting_ExtraMP_All_3,Perk_ExtraMP_All_2",Perk_Jan2026_ML_pve:1
+test_perk_2,1,delete,!!JAN2026_PERK_STIPULATION_99MP_NAME,UI/R24/Flag/SSR_Perk_PVE,PVE,1/26/2026 20:00,2/3/2026 20:00,FightCard_Starting_ExtraMP_All_99,Perk_Jan2026_ML_stip_wk3:1

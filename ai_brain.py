@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL_REASONING = "deepseek-r1:14b-qwen-distill-q4_K_M"
+MODEL_REASONING = "deepseek-r1:14b"
 MODEL_FORMATTING = "qwen2.5-coder:14b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = "scenarios.json"
@@ -112,7 +112,7 @@ def parse_command_to_json(user_command, context_plan=None):
     1. Understand the user's intent in Vietnamese/English.
     2. Break it down into a logical sequence of steps.
     3. Extract key details like:
-       - Menu paths (e.g., "Data Configs -> Grab Bag").
+       - Menu paths (e.g., "Data Configs -> Perk -> Perk", "Live Events -> Offer -> Offer").
        - File names (e.g., "file2.csv").
        - Specific actions (Upload, Export, Add rows).
        - Data values (e.g., "BagID=Grabbag_hnm").
@@ -163,7 +163,7 @@ def parse_command_to_json(user_command, context_plan=None):
     Task: Convert them into a detailed, sequential JSON Action Plan.
 
     AVAILABLE ACTIONS:
-    1. "navigate": {{ "action": "navigate", "path": ["Menu1", "Menu2"] }}
+    1. "navigate": {{ "action": "navigate", "path": ["Menu1", "Menu2", "Menu3] }}
     2. "checkbox": 
        - Rule: Use for "Chọn", "Tick", "Select".
        - Format: {{ "action": "checkbox", "target": "ColumnName", "value": "random_N" or "all" }}
@@ -196,7 +196,7 @@ def parse_command_to_json(user_command, context_plan=None):
     14. "wait": {{ "action": "wait" }}
     CRITICAL RULES:
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
-       - "Go to A -> B -> Clone C" => 1. navigate [A,B], 2. clone C.
+       - "Go to A -> B -> C -> Clone D" => 1. navigate [A,B,C], 2. clone D.
     2. **STRICT JSON ONLY**: Output ONLY the JSON array.
     3. **NO COMMENTS**: Do NOT output // or . If you do, the system will crash.
     4. **NO MARKDOWN**: No ```json tags.
