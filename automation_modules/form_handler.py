@@ -269,13 +269,35 @@ class FormHandlerMixin:
         # Chờ form ổn định
         try:
             page.wait_for_load_state("domcontentloaded")
-            time.sleep(0.5)
+            time.sleep(1)
         except:
             pass
 
         for label, value in data.items():
             print(f"         ↳ Processing '{label}' -> '{value}'")
             try:
+                value_lower = str(value).lower().strip()
+
+                # ========================================
+                # SPECIAL CASE 1: RADIO BUTTON BY LABEL TEXT
+                # CHỈ khi value là signal của radio: "select", "true", "on", "1", "yes", "checked"
+                # VD: "Use another currency": "select" -> Click radio có label này
+                # ========================================
+                is_radio_signal = value_lower in [
+                    "select",
+                    "true",
+                    "on",
+                    "1",
+                    "yes",
+                    "checked",
+                    "click",
+                ]
+                if is_radio_signal:
+                    if self._try_click_radio_by_label(page, label, value):
+                        print(f"         ✅ Radio '{label}' clicked successfully")
+                        time.sleep(3)  # Chờ UI update (VD: hiện Currency dropdown)
+                        continue
+
                 # Bước 1: Tìm Element
                 target_element = self._find_input_element(page, label)
 
@@ -284,19 +306,105 @@ class FormHandlerMixin:
                     success = self._fill_element_smartly(page, target_element, value)
                     if not success:
                         print(f"         ❌ Action Failed for '{label}'")
+                    else:
+                        # Chờ 3s sau mỗi field để dropdown/data load xong
+                        time.sleep(3)
                 else:
                     print(f"         ❌ Give up: Cannot find field '{label}'")
             except Exception as e:
                 print(f"         ❌ Error filling '{label}': {e}")
 
+    def _try_click_radio_by_label(self, page, label_text, value):
+        """
+        Tìm và click RADIO BUTTON dựa trên label text.
+        QUAN TRỌNG: Phải tìm EXACT MATCH hoặc match tốt nhất để tránh nhầm.
+        """
+        try:
+            label_lower = label_text.lower().strip()
+
+            # ========================================
+            # STRATEGY 1: Tìm tất cả radio buttons visible trên trang
+            # Sau đó check text gần nhất với mỗi radio
+            # ========================================
+            all_radios = page.locator("input[type='radio']").all()
+            best_match = None
+            best_score = 0
+
+            for radio in all_radios:
+                if not radio.is_visible():
+                    continue
+
+                # Lấy text của parent element (thường chứa label text)
+                try:
+                    parent = radio.locator("xpath=..").first
+                    parent_text = parent.inner_text().strip().lower()
+
+                    # Tính điểm match
+                    # EXACT MATCH = 100 điểm
+                    # CONTAINS = 50 điểm
+                    # PARTIAL = 10 điểm
+                    score = 0
+                    if parent_text == label_lower:
+                        score = 100
+                    elif label_lower in parent_text:
+                        # Ưu tiên match ngắn hơn (tránh "Auto Generate a new currency" khi tìm "Use another currency")
+                        score = 50 - len(parent_text) / 10
+                    elif any(word in parent_text for word in label_lower.split()):
+                        score = 10
+
+                    if score > best_score:
+                        best_score = score
+                        best_match = radio
+
+                except:
+                    pass
+
+            # Nếu tìm được match tốt (score >= 50), click vào
+            if best_match and best_score >= 50:
+                if not best_match.is_checked():
+                    best_match.click(force=True)
+                    print(f"         🔘 Radio clicked (score={best_score})")
+                return True
+
+            # ========================================
+            # STRATEGY 2: Tìm qua label element với EXACT text match
+            # ========================================
+            # Tìm label có text CHÍNH XÁC (không phải contains)
+            all_labels = page.locator("label").all()
+            for lbl in all_labels:
+                if not lbl.is_visible():
+                    continue
+                lbl_text = lbl.inner_text().strip().lower()
+
+                # EXACT MATCH
+                if lbl_text == label_lower:
+                    # Tìm radio bên trong hoặc liên kết
+                    radio_inside = lbl.locator("input[type='radio']").first
+                    if radio_inside.count() > 0:
+                        if not radio_inside.is_checked():
+                            lbl.click()
+                        return True
+
+                    for_attr = lbl.get_attribute("for")
+                    if for_attr:
+                        radio_by_id = page.locator(f"#{for_attr}").first
+                        if radio_by_id.count() > 0 and not radio_by_id.is_checked():
+                            lbl.click()
+                            return True
+
+            return False
+        except Exception as e:
+            print(f"         ⚠️ Radio search error: {e}")
+            return False
+
     # ============================
     # 6. HELPERS
     # ============================
-    def _save_form(self, page, mode="continue"):
+    def _save_form(self, page, mode="save"):
         """
         Hợp nhất:
-        1. Ưu tiên tuyệt đối attribute 'data-continue' (Fix lỗi hiện tại).
-        2. Fallback về logic tìm text linh hoạt của bạn (Create/Clone/Update...).
+        1. Ưu tiên tìm nút theo context (Clone, Create, Save...)
+        2. Fallback về logic tìm text linh hoạt.
         3. Hỗ trợ scope Modal.
         """
 
@@ -315,92 +423,58 @@ class FormHandlerMixin:
         print(f"   💾 Action: Save/Submit (Mode: {mode})...")
 
         try:
-            # 1. Xác định phạm vi (Scope) - Giữ logic của bạn
+            # 1. Xác định phạm vi (Scope) - Ưu tiên Modal nếu đang mở
             scope = page
-            # Nếu có modal đang mở, chỉ tìm trong modal
             if page.locator(".modal.show").count() > 0:
                 scope = page.locator(".modal.show").last
+                print("      📍 Scope: Modal detected")
 
             target_btn = None
 
             # =========================================================
-            # CHIẾN THUẬT 1: TÌM CHÍNH XÁC "SAVE & CONTINUE" (ƯU TIÊN SỐ 1)
+            # CHIẾN THUẬT 1: TÌM NÚT THEO THỨ TỰ ƯU TIÊN CAO
+            # Clone > Create > Save > Update > Submit
             # =========================================================
-            if mode == "continue":
-                # Tìm bằng "chìa khóa vàng" data-continue='1'
-                btn = scope.locator(
-                    "button[data-continue='1'], input[data-continue='1']"
-                ).last
-                if btn.is_visible():
-                    print("      🎯 Found 'Save & Continue' via [data-continue='1']")
-                    target_btn = btn
-                else:
-                    # Fallback Regex: Chấp nhận icon hoặc khoảng trắng lạ
-                    # r"Save.*Continue" tìm chữ Save rồi đến Continue bất kể ở giữa là gì
-                    print("      ⚠️ Fallback: Tìm text 'Save...Continue'")
-                    regex = re.compile(r"Save.*Continue", re.IGNORECASE)
-                    target_btn = scope.locator("button, a").filter(has_text=regex).last
+            priority_buttons = [
+                "Clone",  # Clone form
+                "Create",
+                "Save",
+                "Update",
+                "Submit",
+                "Confirm",
+                "OK",
+                "Yes",
+            ]
 
-            # =========================================================
-            # CHIẾN THUẬT 2: TÌM CÁC NÚT KHÁC (SAVE, CLONE, CREATE...)
-            # =========================================================
-            else:  # mode == "save" hoặc mặc định
-                # 2.1. Tìm nút Save chuẩn (Tránh nhầm nút Continue)
-                # Tìm nút .btn-save hoặc nút có chữ Save nhưng KHÔNG có chữ Continue
-                save_regex = re.compile(r"Save(?!.*Continue)", re.IGNORECASE)
-
-                # Ưu tiên class .btn-save chuẩn của Brick
-                btn_class = scope.locator(".btn-save:not([data-continue='1'])").last
-
-                if btn_class.is_visible():
-                    target_btn = btn_class
-                elif (
-                    scope.locator("button")
-                    .filter(has_text=save_regex)
-                    .last.is_visible()
-                ):
-                    target_btn = (
-                        scope.locator("button").filter(has_text=save_regex).last
-                    )
-
-                # 2.2. Nếu không phải Save, tìm các hành động khác (Logic cũ của bạn)
-                if not target_btn or not target_btn.is_visible():
-                    target_texts = [
-                        "Save All",
-                        "Create",
-                        "Update",
-                        "Submit",
-                        "Duplicate",
-                        "Clone",
-                        "Confirm",
-                        "Yes",
-                        "Acquire Lock",
-                    ]
-                    for text in target_texts:
-                        # Dùng regex biên \b để tìm chính xác từ (tránh tìm nhầm)
-                        # VD: Tìm "Create" sẽ không bắt nhầm "Created By"
-                        btn = (
-                            scope.locator(f"button, a.btn, input[type='submit']")
-                            .filter(has_text=re.compile(re.escape(text), re.IGNORECASE))
-                            .last
+            for btn_text in priority_buttons:
+                btn = (
+                    scope.locator("button, a.btn, input[type='submit']")
+                    .filter(
+                        has_text=re.compile(
+                            f"^\\s*{re.escape(btn_text)}\\s*$|{re.escape(btn_text)}",
+                            re.IGNORECASE,
                         )
-                        if btn.is_visible():
-                            print(f"      👉 Found generic button: '{text}'")
-                            target_btn = btn
-                            break
+                    )
+                    .last
+                )
+                if btn.count() > 0 and btn.is_visible():
+                    print(f"      🎯 Found button: '{btn_text}'")
+                    target_btn = btn
+                    break
 
             # =========================================================
-            # CHIẾN THUẬT 3: FALLBACK THEO CLASS (CŨNG CỦA BẠN)
+            # CHIẾN THUẬT 2: TÌM THEO CLASS
             # =========================================================
             if not target_btn or not target_btn.is_visible():
                 class_selectors = [
                     "button.btn-primary",
                     "button.btn-success",
+                    "button.btn-info",
                     "input[type='submit']",
                 ]
                 for sel in class_selectors:
                     btn = scope.locator(sel).last
-                    if btn.is_visible():
+                    if btn.count() > 0 and btn.is_visible():
                         target_btn = btn
                         print(f"      ⚠️ Fallback class match: {sel}")
                         break
@@ -631,6 +705,31 @@ class FormHandlerMixin:
                 print(f"         ⚠️ Skip tab: {e}")
 
     def _find_input_element(self, page, label_text):
+        label_lower = label_text.lower().strip()
+
+        # ========================================
+        # SPECIAL CASE: "New Event ID" hoặc "New ID"
+        # Form Clone có input với placeholder chứa "suffix"
+        # ========================================
+        if "new" in label_lower and "id" in label_lower:
+            # Tìm input có placeholder chứa "suffix"
+            suffix_input = page.locator("input[placeholder*='suffix' i]").first
+            if suffix_input.count() > 0 and suffix_input.is_visible():
+                print(f"         🎯 Found suffix input for '{label_text}'")
+                return suffix_input
+            # Fallback: Tìm input trong row chứa label "New Event ID"
+            row = (
+                page.locator("tr, div.form-group, div.row")
+                .filter(has_text=re.compile("New.*Event.*ID|New.*ID", re.IGNORECASE))
+                .first
+            )
+            if row.count() > 0:
+                input_in_row = row.locator(
+                    "input[type='text']"
+                ).last  # Lấy cái cuối (suffix)
+                if input_in_row.count() > 0 and input_in_row.is_visible():
+                    return input_in_row
+
         safe_label = re.compile(re.escape(label_text), re.IGNORECASE)
         candidates = (
             page.locator("label, span, h5, th, strong, div, b")
@@ -638,19 +737,43 @@ class FormHandlerMixin:
             .all()
         )
         visible_candidates = [c for c in candidates if c.is_visible()]
-        visible_candidates.sort(
-            key=lambda x: (
-                0 if x.evaluate("el => el.tagName") == "LABEL" else 1,
-                len(x.inner_text()),
-            )
-        )
+
+        # SORT: Ưu tiên EXACT MATCH (text ngắn nhất khớp với label_text)
+        # Sau đó ưu tiên thẻ LABEL
+        def sort_key(el):
+            text = el.inner_text().strip().lower()
+            is_exact = text == label_lower
+            is_label = el.evaluate("el => el.tagName") == "LABEL"
+            text_len = len(text)
+            # Ưu tiên: exact match -> label tag -> text ngắn nhất
+            return (0 if is_exact else 1, 0 if is_label else 1, text_len)
+
+        visible_candidates.sort(key=sort_key)
 
         for label_el in visible_candidates:
+            # ========================================
+            # [FIX] SKIP: Label chứa RADIO BUTTON
+            # Tránh việc tìm "Currency" mà click nhầm vào radio "Auto Generate a new currency"
+            # ========================================
+            has_radio = label_el.locator("input[type='radio']").count() > 0
+            if has_radio:
+                # Chỉ skip nếu text KHÔNG khớp chính xác
+                label_text_actual = label_el.inner_text().strip().lower()
+                if label_text_actual != label_text.lower():
+                    print(
+                        f"         ⏭️ Skip radio label: '{label_el.inner_text().strip()[:30]}...'"
+                    )
+                    continue
+
             # A. Check 'for' attribute
             for_attr = label_el.get_attribute("for")
             if for_attr:
                 target = page.locator(f"#{for_attr}").first
                 if target.count() > 0:
+                    # [FIX] Skip nếu target là radio
+                    target_type = target.get_attribute("type")
+                    if target_type == "radio":
+                        continue
                     # Nếu target bị ẩn (Select), thử tìm wrapper ngay lập tức
                     if (
                         not target.is_visible()
@@ -661,8 +784,10 @@ class FormHandlerMixin:
                             return wrapper
                     return target
 
-            # B. Check Input lồng bên trong
-            nested = label_el.locator("input, select, textarea").first
+            # B. Check Input lồng bên trong (SKIP RADIO)
+            nested = label_el.locator(
+                "input:not([type='radio']), select, textarea"
+            ).first
             if nested.count() > 0:
                 if (
                     not nested.is_visible()
@@ -674,9 +799,9 @@ class FormHandlerMixin:
                 return nested
 
             # C. Check Sibling (Input/Select2/Chosen nằm ngay sau Label)
-            # [FIX]: Thêm .chosen-container vào danh sách tìm kiếm
+            # [FIX]: Loại bỏ radio khỏi xpath
             sibling = label_el.locator(
-                "xpath=following::input | following::select | following::textarea | following::span[contains(@class,'select2-container')] | following::div[contains(@class,'chosen-container')]"
+                "xpath=following::input[not(@type='radio')] | following::select | following::textarea | following::span[contains(@class,'select2-container')] | following::div[contains(@class,'chosen-container')]"
             ).first
 
             if sibling.count() > 0:
@@ -867,43 +992,96 @@ class FormHandlerMixin:
             else:
                 container.click()
 
-            # 2. Tìm ô search (Selector rộng hơn để tránh trượt)
-            # Chosen: input nằm trong .chosen-drop
-            # Select2: input nằm trong .select2-container--open (thường ở cuối body)
+            # ========================================
+            # 2. CHỜ DROPDOWN OPTIONS LOAD XONG
+            # Polling cho đến khi có ít nhất 1 option hiển thị
+            # ========================================
+            print(f"         ⏳ Waiting for dropdown options to load...")
+            wait_start = time.time()
+            max_wait = 5  # Chờ tối đa 5 giây
+            options_loaded = False
+
+            while time.time() - wait_start < max_wait:
+                try:
+                    if lib_type == "chosen":
+                        # Chosen: Tìm .chosen-drop có chứa options
+                        options = container.locator(
+                            ".chosen-drop .active-result, .chosen-drop li"
+                        ).all()
+                    else:
+                        # Select2: Tìm options trong dropdown đang mở
+                        options = page.locator(".select2-results__option").all()
+
+                    visible_options = [opt for opt in options if opt.is_visible()]
+                    if len(visible_options) > 0:
+                        print(
+                            f"         ✅ Dropdown loaded ({len(visible_options)} options visible)"
+                        )
+                        options_loaded = True
+                        break
+                except:
+                    pass
+                time.sleep(0.3)
+
+            if not options_loaded:
+                print(
+                    f"         ⚠️ Dropdown options may not be fully loaded, continuing anyway..."
+                )
+
+            # 3. Tìm ô search
             search_box = None
             if lib_type == "chosen":
                 search_box = container.locator(".chosen-drop input").first
             else:
-                # Tìm input search của Select2 đang mở bất kỳ đâu trên trang
                 search_box = page.locator(
                     ".select2-container--open input.select2-search__field"
                 ).first
 
-            # Đợi 1 chút cho animation dropdown
+            # Đợi search box visible
             try:
-                search_box.wait_for(state="visible", timeout=1000)
+                search_box.wait_for(state="visible", timeout=2000)
             except:
                 pass
 
-            # 3. Điền giá trị
+            # 4. Điền giá trị và chờ filter
             if search_box and search_box.is_visible():
                 search_box.fill(str(value))
-                time.sleep(0.5)  # Đợi filter chạy
 
-                # [QUAN TRỌNG]: Thay vì chỉ Enter, hãy thử CLICK vào kết quả đầu tiên
-                # Điều này giúp đảm bảo sự kiện onClick của JS được kích hoạt
+                # ========================================
+                # CHỜ KẾT QUẢ FILTER HIỂN THỊ
+                # ========================================
+                print(f"         ⏳ Waiting for search results...")
+                time.sleep(1.0)  # Chờ 1s cho filter chạy
+
+                # Chờ thêm cho đến khi có kết quả match
+                wait_start = time.time()
+                while time.time() - wait_start < 3:
+                    try:
+                        if lib_type == "chosen":
+                            results = container.locator(".active-result").all()
+                        else:
+                            results = page.locator(
+                                ".select2-results__option:not(.select2-results__option--load-more)"
+                            ).all()
+
+                        visible_results = [r for r in results if r.is_visible()]
+                        if len(visible_results) > 0:
+                            break
+                    except:
+                        pass
+                    time.sleep(0.3)
+
+                # 5. Click vào kết quả đầu tiên
                 try:
                     if lib_type == "chosen":
-                        # Chọn kết quả active đầu tiên
                         first_result = container.locator(".active-result").first
                         if first_result.is_visible():
                             first_result.click()
                         else:
                             page.keyboard.press("Enter")
                     else:
-                        # Select2 highlighted result
                         first_result = page.locator(
-                            ".select2-results__option--highlighted"
+                            ".select2-results__option--highlighted, .select2-results__option"
                         ).first
                         if first_result.is_visible():
                             first_result.click()
@@ -914,13 +1092,14 @@ class FormHandlerMixin:
 
                 print(f"         ✅ [Dropdown] Đã chọn: '{value}'")
             else:
-                # Fallback gõ mù (Nếu ô search bị ẩn do CSS lạ)
+                # Fallback gõ mù
                 print(f"         ⌨️ Gõ phím trực tiếp: '{value}'")
                 page.keyboard.type(str(value))
-                time.sleep(0.5)
+                time.sleep(1.0)
                 page.keyboard.press("Enter")
 
-            # [QUAN TRỌNG]: Nhấn Tab để đóng dropdown và trigger Save
+            # Nhấn Tab để đóng dropdown
+            time.sleep(0.5)
             page.keyboard.press("Tab")
             return True
 
