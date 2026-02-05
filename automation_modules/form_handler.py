@@ -310,7 +310,19 @@ class FormHandlerMixin:
                         # Chờ 3s sau mỗi field để dropdown/data load xong
                         time.sleep(3)
                 else:
-                    print(f"         ❌ Give up: Cannot find field '{label}'")
+                    print(
+                        f"         ❌ Cannot find field '{label}'. Trying alternative search..."
+                    )
+                    # Debug: In ra các label/legend hiển thị để debug
+                    try:
+                        all_labels = page.locator("label, legend").all()
+                        visible_labels = [l for l in all_labels if l.is_visible()]
+                        label_texts = [
+                            l.inner_text().strip()[:50] for l in visible_labels[:10]
+                        ]
+                        print(f"            Available labels: {label_texts}")
+                    except:
+                        pass
             except Exception as e:
                 print(f"         ❌ Error filling '{label}': {e}")
 
@@ -705,50 +717,84 @@ class FormHandlerMixin:
                 print(f"         ⚠️ Skip tab: {e}")
 
     def _find_input_element(self, page, label_text):
+        print(f"         🔍 Searching for field: '{label_text}'")
         label_lower = label_text.lower().strip()
+        # Tạo version không space/underscore để fuzzy match
+        label_normalized = re.sub(r"[\s_-]+", "", label_lower)
 
         # ========================================
-        # SPECIAL CASE: "New Event ID" hoặc "New ID"
-        # Form Clone có input với placeholder chứa "suffix"
+        # SPECIAL CASE: "New Event ID", "New ID", "New Section ID"
+        # Form Clone có input với placeholder chứa "suffix" hoặc label chứa "New"
         # ========================================
         if "new" in label_lower and "id" in label_lower:
-            # Tìm input có placeholder chứa "suffix"
+            # Case 1: Tìm input có placeholder chứa "suffix"
             suffix_input = page.locator("input[placeholder*='suffix' i]").first
             if suffix_input.count() > 0 and suffix_input.is_visible():
                 print(f"         🎯 Found suffix input for '{label_text}'")
                 return suffix_input
-            # Fallback: Tìm input trong row chứa label "New Event ID"
+
+            # Case 2: Tìm input có placeholder chứa "new" hoặc name chứa "new"
+            new_input = page.locator(
+                "input[placeholder*='new' i], input[name*='new' i]"
+            ).first
+            if new_input.count() > 0 and new_input.is_visible():
+                print(
+                    f"         🎯 Found new input by placeholder/name for '{label_text}'"
+                )
+                return new_input
+
+            # Case 3: Fallback - Tìm input trong row chứa label "New ... ID"
             row = (
-                page.locator("tr, div.form-group, div.row")
-                .filter(has_text=re.compile("New.*Event.*ID|New.*ID", re.IGNORECASE))
+                page.locator("tr, div.form-group, div.row, div.col")
+                .filter(has_text=re.compile(r"New.*ID", re.IGNORECASE))
                 .first
             )
             if row.count() > 0:
                 input_in_row = row.locator(
-                    "input[type='text']"
+                    "input[type='text']:visible"
                 ).last  # Lấy cái cuối (suffix)
-                if input_in_row.count() > 0 and input_in_row.is_visible():
+                if input_in_row.count() > 0:
+                    print(f"         🎯 Found input in row for '{label_text}'")
                     return input_in_row
 
         safe_label = re.compile(re.escape(label_text), re.IGNORECASE)
+
+        # [FIX] Thêm <legend> vào danh sách tìm kiếm (Gate field dùng <legend>)
         candidates = (
-            page.locator("label, span, h5, th, strong, div, b")
+            page.locator("label, legend, span, h5, th, strong, div, b")
             .filter(has_text=safe_label)
             .all()
         )
         visible_candidates = [c for c in candidates if c.is_visible()]
 
+        # [NEW] FUZZY MATCHING: Nếu không tìm thấy exact match, tìm fuzzy match
+        # VD: "New SectionID" sẽ match với "New Section ID"
+        if not visible_candidates:
+            all_labels = page.locator("label, legend, span, h5, th, strong").all()
+            for lbl in all_labels:
+                if lbl.is_visible():
+                    lbl_text = lbl.inner_text().strip().lower()
+                    lbl_normalized = re.sub(r"[\s_-]+", "", lbl_text)
+                    if lbl_normalized == label_normalized:
+                        visible_candidates.append(lbl)
+                        print(
+                            f"         🔍 Fuzzy Match: '{label_text}' matched with '{lbl.inner_text()}'"
+                        )
+
         # SORT: Ưu tiên EXACT MATCH (text ngắn nhất khớp với label_text)
-        # Sau đó ưu tiên thẻ LABEL
+        # Sau đó ưu tiên thẻ LABEL hoặc LEGEND
         def sort_key(el):
             text = el.inner_text().strip().lower()
             is_exact = text == label_lower
-            is_label = el.evaluate("el => el.tagName") == "LABEL"
+            tag = el.evaluate("el => el.tagName")
+            is_label_or_legend = tag in ["LABEL", "LEGEND"]
             text_len = len(text)
-            # Ưu tiên: exact match -> label tag -> text ngắn nhất
-            return (0 if is_exact else 1, 0 if is_label else 1, text_len)
+            # Ưu tiên: exact match -> label/legend tag -> text ngắn nhất
+            return (0 if is_exact else 1, 0 if is_label_or_legend else 1, text_len)
 
         visible_candidates.sort(key=sort_key)
+
+        print(f"         📋 Found {len(visible_candidates)} label candidates")
 
         for label_el in visible_candidates:
             # ========================================
@@ -765,23 +811,63 @@ class FormHandlerMixin:
                     )
                     continue
 
-            # A. Check 'for' attribute
+            # [NEW] SPECIAL: Nếu là LEGEND tag, tìm trong parent fieldset
+            tag = label_el.evaluate("el => el.tagName")
+            if tag == "LEGEND":
+                try:
+                    # Tìm fieldset chứa legend này
+                    fieldset = label_el.locator("xpath=ancestor::fieldset").first
+                    if fieldset.count() > 0:
+                        # Tìm multiselect wrapper trong fieldset
+                        multiselect = fieldset.locator("div.multiselect").first
+                        if multiselect.count() > 0 and multiselect.is_visible():
+                            print(
+                                f"         🎯 Found multiselect in fieldset for legend '{label_text}'"
+                            )
+                            return multiselect
+
+                        # Tìm select/input trong fieldset
+                        field = fieldset.locator(
+                            "select, input:not([type='radio']), textarea"
+                        ).first
+                        if field.count() > 0:
+                            # Nếu select ẩn, tìm wrapper
+                            if (
+                                not field.is_visible()
+                                and field.evaluate("el => el.tagName") == "SELECT"
+                            ):
+                                wrapper = self._find_custom_dropdown_wrapper(field)
+                                if wrapper:
+                                    return wrapper
+                            return field
+                except:
+                    pass
+
+            # A. Check 'for' attribute (HIGHEST PRIORITY)
             for_attr = label_el.get_attribute("for")
             if for_attr:
+                print(f"         🔗 Label has for='{for_attr}'")
                 target = page.locator(f"#{for_attr}").first
                 if target.count() > 0:
                     # [FIX] Skip nếu target là radio
                     target_type = target.get_attribute("type")
                     if target_type == "radio":
+                        print(f"         ⏭️ Skip radio target for '{for_attr}'")
                         continue
+
+                    print(f"         ✅ Found target by for attribute: #{for_attr}")
+
                     # Nếu target bị ẩn (Select), thử tìm wrapper ngay lập tức
-                    if (
-                        not target.is_visible()
-                        and target.evaluate("el => el.tagName") == "SELECT"
-                    ):
-                        wrapper = self._find_custom_dropdown_wrapper(target)
-                        if wrapper:
-                            return wrapper
+                    if not target.is_visible():
+                        tag_name = target.evaluate("el => el.tagName")
+                        if tag_name == "SELECT":
+                            print(
+                                f"         🔍 Target is hidden SELECT, looking for wrapper..."
+                            )
+                            wrapper = self._find_custom_dropdown_wrapper(target)
+                            if wrapper:
+                                print(f"         ✅ Found custom dropdown wrapper")
+                                return wrapper
                     return target
 
             # B. Check Input lồng bên trong (SKIP RADIO)
@@ -798,10 +884,10 @@ class FormHandlerMixin:
                         return wrapper
                 return nested
 
-            # C. Check Sibling (Input/Select2/Chosen nằm ngay sau Label)
-            # [FIX]: Loại bỏ radio khỏi xpath
+            # C. Check Sibling (Input/Select2/Chosen/Multiselect nằm ngay sau Label)
+            # [FIX]: Loại bỏ radio khỏi xpath, thêm multiselect
             sibling = label_el.locator(
-                "xpath=following::input[not(@type='radio')] | following::select | following::textarea | following::span[contains(@class,'select2-container')] | following::div[contains(@class,'chosen-container')]"
+                "xpath=following::input[not(@type='radio')] | following::select | following::textarea | following::span[contains(@class,'select2-container')] | following::div[contains(@class,'chosen-container')] | following::div[contains(@class,'multiselect')]"
             ).first
 
             if sibling.count() > 0:
@@ -810,10 +896,13 @@ class FormHandlerMixin:
                     return sibling
 
                 # Nếu tìm thấy select ẩn -> Tìm wrapper của nó
-                if (
-                    not sibling.is_visible()
-                    and sibling.evaluate("el => el.tagName") == "SELECT"
-                ):
+                tag = None
+                try:
+                    tag = sibling.evaluate("el => el.tagName")
+                except:
+                    pass
+
+                if tag == "SELECT" and not sibling.is_visible():
                     wrapper = self._find_custom_dropdown_wrapper(sibling)
                     if wrapper:
                         return wrapper
@@ -830,6 +919,67 @@ class FormHandlerMixin:
         placeholder = page.locator(f"[placeholder='{label_text}']").first
         if placeholder.count() > 0:
             return placeholder
+
+        # [NEW] Fallback: Tìm dropdown wrapper gần với label text
+        # Dùng cho trường hợp không tìm được bằng cách thông thường
+        try:
+            # Tìm tất cả dropdown wrappers hiển thị
+            wrappers = page.locator(
+                "div.multiselect, div.chosen-container, span.select2-container"
+            ).all()
+            visible_wrappers = [w for w in wrappers if w.is_visible()]
+
+            if visible_wrappers:
+                # Tìm wrapper gần nhất với text label
+                for wrapper in visible_wrappers:
+                    try:
+                        # Check xem có text label gần wrapper này không
+                        parent = wrapper.locator(
+                            "xpath=ancestor::div[@class='form-group'] | ancestor::fieldset | ancestor::div[contains(@class,'col')]"
+                        ).first
+                        if parent.count() > 0:
+                            parent_text = parent.inner_text().lower()
+                            if label_lower in parent_text:
+                                print(
+                                    f"         🎯 Found wrapper by proximity for '{label_text}'"
+                                )
+                                return wrapper
+                    except:
+                        pass
+        except:
+            pass
+
+        # [NEW] Fallback 2: Tìm select element hiển thị có label gần
+        try:
+            selects = page.locator("select:visible").all()
+            for sel in selects:
+                try:
+                    # Tìm label gần select này
+                    parent = sel.locator(
+                        "xpath=ancestor::div[@class='form-group'] | ancestor::div[contains(@class,'col')]"
+                    ).first
+                    if parent.count() > 0:
+                        parent_text = parent.inner_text().lower()
+                        if label_lower in parent_text:
+                            print(
+                                f"         🎯 Found select by proximity for '{label_text}'"
+                            )
+                            return sel
+                except:
+                    pass
+        except:
+            pass
+
+        print(f"         ❌ Could not find input for '{label_text}'")
+        print(f"         💡 Available labels on page:")
+        try:
+            all_page_labels = page.locator("label:visible").all()[:10]  # First 10
+            for lbl in all_page_labels:
+                lbl_text = lbl.inner_text().strip()
+                lbl_for = lbl.get_attribute("for")
+                print(f"            - '{lbl_text[:50]}' (for='{lbl_for}')")
+        except:
+            pass
 
         return None
 
@@ -877,6 +1027,13 @@ class FormHandlerMixin:
             if select2_sib.count() > 0 and select2_sib.is_visible():
                 return select2_sib
 
+            # Vue Multiselect: div.multiselect
+            multiselect_sib = hidden_select.locator(
+                "xpath=following-sibling::div[contains(@class, 'multiselect')]"
+            ).first
+            if multiselect_sib.count() > 0 and multiselect_sib.is_visible():
+                return multiselect_sib
+
         except:
             pass
         return None
@@ -921,18 +1078,78 @@ class FormHandlerMixin:
                 except:
                     pass
 
-            # --- 3. HIDDEN SELECT (Chosen/Select2) ---
+            # --- 2.5. DATETIME INPUT (Flatpickr, Datepicker, etc.) ---
+            is_datetime_picker = (
+                "flatpickr" in class_attr
+                or "datepicker" in class_attr
+                or "datetimepicker" in class_attr
+                or "timepicker" in class_attr
+            )
+
+            if is_datetime_picker and tag_name == "input":
+                print(f"         📅 Xử lý DateTime picker cho '{value}'...")
+                try:
+                    # Clear giá trị cũ
+                    element.fill("")
+                    time.sleep(0.2)
+
+                    # Điền giá trị mới
+                    element.fill(str(value))
+                    time.sleep(0.3)
+
+                    # Trigger blur để đóng picker và apply value
+                    element.blur()
+                    time.sleep(0.3)
+
+                    # Trigger change event
+                    element.evaluate(
+                        "el => { el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                    )
+
+                    print(f"         ✅ [DateTime] Đã điền: '{value}'")
+                    return True
+                except Exception as e:
+                    print(f"         ⚠️ DateTime picker error: {e}, trying fallback...")
+                    # Fallback: Dùng JS set value trực tiếp
+                    element.evaluate(f"el => el.value = '{value}'")
+                    element.evaluate(
+                        "el => { el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                    )
+                    return True
+
+            # --- 3. HIDDEN SELECT (Chosen/Select2/Vue Multiselect) ---
             is_hidden_select = tag_name == "select" and not is_visible
-            is_lib = "select2" in class_attr or "chosen" in class_attr
+            is_lib = (
+                "select2" in class_attr
+                or "chosen" in class_attr
+                or "multiselect" in class_attr
+            )
 
-            if is_hidden_select or is_lib:
+            # [FIX] Nếu element là wrapper trực tiếp (DIV.multiselect, DIV.chosen, SPAN.select2)
+            is_multiselect_div = tag_name == "div" and "multiselect" in class_attr
+            is_chosen_div = tag_name == "div" and "chosen-container" in class_attr
+            is_select2_span = tag_name == "span" and "select2-container" in class_attr
+
+            if (
+                is_hidden_select
+                or is_lib
+                or is_multiselect_div
+                or is_chosen_div
+                or is_select2_span
+            ):
                 print(f"         🕵️ Xử lý Dropdown nâng cao cho '{value}'...")
-                wrapper = self._find_custom_dropdown_wrapper(element)
 
-                if wrapper:
-                    w_class = wrapper.get_attribute("class") or ""
-                    lib_type = "chosen" if "chosen" in w_class else "select2"
-                    return self._handle_js_dropdown(page, wrapper, value, lib_type)
+                # Nếu element chính là wrapper, dùng trực tiếp
+                if is_multiselect_div:
+                    return self._handle_js_dropdown(page, element, value, "multiselect")
+                elif is_chosen_div:
+                    return self._handle_js_dropdown(page, element, value, "chosen")
+                elif is_select2_span:
+                    return self._handle_js_dropdown(page, element, value, "select2")
+                    #     lib_type = "chosen"
+                    # else:
+                    #     lib_type = "select2"
+                    # return self._handle_js_dropdown(page, wrapper, value, lib_type)
 
                 # Fallback JS Force (Chỉ dùng khi cùng đường)
                 print("         ⚠️ Không thấy Wrapper. Dùng JS Force...")
@@ -989,6 +1206,15 @@ class FormHandlerMixin:
                     trigger.click()
                 else:
                     container.click()
+            elif lib_type == "multiselect":
+                # Vue Multiselect: Click vào input hoặc container
+                trigger = container.locator(
+                    ".multiselect__input, .multiselect__tags"
+                ).first
+                if trigger.is_visible():
+                    trigger.click()
+                else:
+                    container.click()
             else:
                 container.click()
 
@@ -998,7 +1224,7 @@ class FormHandlerMixin:
             # ========================================
             print(f"         ⏳ Waiting for dropdown options to load...")
             wait_start = time.time()
-            max_wait = 5  # Chờ tối đa 5 giây
+            max_wait = 2  # Chờ tối đa 2 giây
             options_loaded = False
 
             while time.time() - wait_start < max_wait:
@@ -1007,6 +1233,11 @@ class FormHandlerMixin:
                         # Chosen: Tìm .chosen-drop có chứa options
                         options = container.locator(
                             ".chosen-drop .active-result, .chosen-drop li"
+                        ).all()
+                    elif lib_type == "multiselect":
+                        # Vue Multiselect: Tìm .multiselect__element
+                        options = page.locator(
+                            ".multiselect__element, .multiselect__option"
                         ).all()
                     else:
                         # Select2: Tìm options trong dropdown đang mở
@@ -1032,6 +1263,8 @@ class FormHandlerMixin:
             search_box = None
             if lib_type == "chosen":
                 search_box = container.locator(".chosen-drop input").first
+            elif lib_type == "multiselect":
+                search_box = container.locator(".multiselect__input").first
             else:
                 search_box = page.locator(
                     ".select2-container--open input.select2-search__field"
@@ -1059,6 +1292,10 @@ class FormHandlerMixin:
                     try:
                         if lib_type == "chosen":
                             results = container.locator(".active-result").all()
+                        elif lib_type == "multiselect":
+                            results = page.locator(
+                                ".multiselect__element, .multiselect__option"
+                            ).all()
                         else:
                             results = page.locator(
                                 ".select2-results__option:not(.select2-results__option--load-more)"
@@ -1075,6 +1312,14 @@ class FormHandlerMixin:
                 try:
                     if lib_type == "chosen":
                         first_result = container.locator(".active-result").first
+                        if first_result.is_visible():
+                            first_result.click()
+                        else:
+                            page.keyboard.press("Enter")
+                    elif lib_type == "multiselect":
+                        first_result = page.locator(
+                            ".multiselect__element span, .multiselect__option"
+                        ).first
                         if first_result.is_visible():
                             first_result.click()
                         else:

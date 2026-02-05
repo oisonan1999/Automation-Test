@@ -46,6 +46,10 @@ def clean_json_string(text):
     if not text:
         return "[]"
 
+    # 0. [CRITICAL] Fix double braces từ LLM ({{ -> {, }} -> })
+    # LLM hay copy pattern từ f-string examples và trả về {{ }} thay vì { }
+    text = text.replace("{{", "{").replace("}}", "}")
+
     # 1. Xóa Markdown code block (```json ... ```)
     text = re.sub(r"```json|```", "", text)
 
@@ -61,18 +65,123 @@ def clean_json_string(text):
     text = re.sub(r"//.*$", "", text, flags=re.MULTILINE)
 
     # 5. Trích xuất đoạn JSON list [...] hoặc object {...} nằm ngoài cùng
-    match_list = re.search(r"\[[\s\S]*\]", text)
-    if match_list:
-        text = match_list.group(0)
+    # [FIX] Dùng rfind() thay vì regex để tìm ] cuối cùng
+    first_bracket = text.find("[")
+    last_bracket = text.rfind("]")
+
+    if first_bracket != -1:
+        if last_bracket != -1 and last_bracket > first_bracket:
+            # Có cả [ và ] - extract từ [ đến ]
+            text = text[first_bracket : last_bracket + 1]
+        else:
+            # Có [ nhưng thiếu ] - lấy từ [ đến hết (sẽ fix brackets sau)
+            text = text[first_bracket:]
     else:
         # Nếu không thấy list, thử tìm object {}
-        match_obj = re.search(r"\{[\s\S]*\}", text)
-        if match_obj:
-            text = match_obj.group(0)
+        first_brace = text.find("{")
+        last_brace = text.rfind("}")
+        if first_brace != -1:
+            if last_brace != -1 and last_brace > first_brace:
+                text = text[first_brace : last_brace + 1]
+            else:
+                text = text[first_brace:]
 
-    # 6. Xóa dấu phẩy thừa ở cuối (Trailing commas) - Lỗi phổ biến của LLM
-    # VD: { "a": 1, } -> { "a": 1 }
-    text = re.sub(r",\s*(\}|\])", r"\1", text)
+    # 6. [NEW] Chuyển single quotes thành double quotes (Fix lỗi LLM hay trả về 'key' thay vì "key")
+    # Chỉ chuyển quotes bao quanh keys và string values, không chuyển trong nội dung string
+    # Pattern: Tìm 'text' không nằm trong double quotes
+    def replace_single_quotes(match):
+        s = match.group(0)
+        # Nếu đã có double quote bao ngoài thì giữ nguyên
+        if s.startswith('"'):
+            return s
+        # Chuyển 'text' -> "text"
+        return '"' + s[1:-1] + '"'
+
+    # Pattern match: 'any text' (single quoted strings)
+    text = re.sub(r"'([^'\\]*(\\.[^'\\]*)*)'", replace_single_quotes, text)
+
+    # 8. [NEW] Fix incomplete JSON (bị cắt output)
+    # Nếu JSON không đóng đúng, tự động thêm closing brackets
+    text = text.strip()
+    if text:
+        # 8.1. Xóa dấu phẩy thừa CHỈ KHI ở cuối (trailing comma)
+        # CRITICAL: Chỉ xóa pattern rõ ràng, không xóa comma hợp lệ
+
+        # Safe: Xóa `,]` (trailing comma in array)
+        text = re.sub(r",\s*]", "]", text)
+
+        # DANGER: KHÔNG xóa `,}` vì regex sẽ match nhầm trong `}},`
+        # Chỉ xóa nếu `,}` ở cuối file (end of string)
+        text = re.sub(r",\s*}\s*$", "}", text)
+
+        # Trailing comma ở cuối file
+        text = re.sub(r'"\s*,\s*$', '"', text)
+
+        # 8.2. Fix truncated string values ("hieunm_sec... -> "hieunm_sec")
+        if text and not text.endswith(('"', "}", "]")):
+            # Tìm dấu quote mở cuối cùng
+            last_quote_pos = text.rfind('"')
+            if last_quote_pos != -1:
+                quotes_before = text[:last_quote_pos].count('"')
+                if quotes_before % 2 == 0:  # Số chẵn = quote mở
+                    if text.endswith("..."):
+                        text = text[:-3]
+                    text += '"'
+            else:
+                # Không tìm thấy quote - có thể bị cắt giữa chừng
+                last_colon = text.rfind(":")
+                if last_colon != -1:
+                    text = text[: last_colon + 1] + ' ""'
+
+        # 8.3. Fix incomplete key-value pairs
+        text = re.sub(r':\s*"([^"]*?)$', r': "\1"', text)
+
+        # 8.4. Đếm số mở/đóng ngoặc và thêm thiếu
+        open_braces = text.count("{")
+        close_braces = text.count("}")
+        open_brackets = text.count("[")
+        close_brackets = text.count("]")
+
+        # 8.5. Thêm closing brackets nếu thiếu
+        # Strategy: Phân tích cấu trúc để thêm đúng vị trí
+
+        if open_braces > close_braces:
+            missing_braces = open_braces - close_braces
+            print(f"   🔧 Auto-fix: Need to add {missing_braces} missing '}}'")
+
+            # Tìm vị trí comma cuối cùng trước last object
+            # Pattern: `...},\n    {"action": "save_form"}`
+            # Cần thêm } SAU "r80"} (trước dấu comma đầu tiên sau nó)
+
+            # Find position after last complete data object
+            # Look for pattern: "value"}}, OR "value"},
+            last_complete = max(text.rfind('"}}'), text.rfind('"}},'))
+
+            if last_complete == -1:
+                # Not found - find last "value"},
+                last_complete = text.rfind('"},')
+
+            if last_complete != -1:
+                # Insert after the closing "
+                insert_pos = last_complete + 1  # After "
+                text = text[:insert_pos] + "}" * missing_braces + text[insert_pos:]
+                print(f"   ✅ Inserted }} after position {insert_pos}")
+            else:
+                # Fallback: add before final ]
+                last_bracket_pos = text.rfind("]")
+                if last_bracket_pos != -1:
+                    text = (
+                        text[:last_bracket_pos]
+                        + "}" * missing_braces
+                        + text[last_bracket_pos:]
+                    )
+                else:
+                    text += "}" * missing_braces
+
+        if open_brackets > close_brackets:
+            missing_brackets = open_brackets - close_brackets
+            print(f"   🔧 Auto-fix: Will add {missing_brackets} missing ']'")
+            text += "]" * missing_brackets
 
     return text.strip()
 
@@ -98,8 +207,8 @@ def call_ollama(model_name, prompt, stream=False, optimized=False):
     if optimized:
         options = {
             "temperature": 0.1,
-            "num_ctx": 2048,  # ⬇️ Giảm context window
-            "num_predict": 800,  # ⬇️ Giới hạn output tokens
+            "num_ctx": 8192,  # ⬆️ Tăng lên để đủ chứa prompt + output
+            "num_predict": 4096,  # ⬆️ Tăng lên 4096 để tránh cắt output JSON
             "num_gpu": 99,
         }
 
@@ -178,10 +287,10 @@ def detect_complexity(user_command):
 
     # 2. Đếm số bước (dấu -> hoặc →)
     num_steps = command_lower.count("->") + command_lower.count("→")
-    many_steps = num_steps > 5
+    many_steps = num_steps > 7  # Tăng từ 5 lên 7 để tránh false positive
 
     # 3. Độ dài lệnh (lệnh quá dài thường phức tạp)
-    is_very_long = len(user_command) > 250
+    is_very_long = len(user_command) > 350  # Tăng từ 250 lên 350
 
     # 4. Có chứa nhiều actions khác nhau
     action_keywords = [
@@ -198,7 +307,7 @@ def detect_complexity(user_command):
         "update",
     ]
     action_count = sum(1 for kw in action_keywords if kw in command_lower)
-    many_actions = action_count > 4
+    many_actions = action_count > 6  # Tăng từ 4 lên 6
 
     # KẾT LUẬN
     is_complex = has_complex_logic or many_steps or is_very_long or many_actions
@@ -249,16 +358,27 @@ AVAILABLE ACTIONS:
 
 RULES:
 - Process LEFT to RIGHT
-- Output ONLY JSON array
+- Output ONLY JSON array - MUST be valid, complete JSON
 - NO markdown tags (no ```json)
 - NO comments
+- CRITICAL: Always close all brackets properly {{}}, []
+- CRITICAL: Do NOT truncate the JSON output
 
 EXAMPLES:
 Input: "Vào Data Configs -> Perk -> Perk -> Edit ABC"
 Output: [{{"action":"navigate","path":["Data Configs","Perk","Perk"]}},{{"action":"edit_row","target":"ABC"}}]
 
+Input: "Vào Live Events -> Offer -> Offer Section -> Clone quanvm_section_1 -> New SectionID: hieunm_section_1, gate: r80"
+Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"clone_row","target":"quanvm_section_1"}},{{"action":"update_form","data":{{"New SectionID":"hieunm_section_1","gate":"r80"}}}},{{"action":"save_form"}}]
+
 Input: "Clone EventGacha_ABC -> New ID: test_1, gate: feb2026_live, chọn Use another currency, currency: GachaShard_XYZ"
 Output: [{{"action":"clone_row","target":"EventGacha_ABC"}},{{"action":"update_form","data":{{"New Event ID":"test_1","Gate":"feb2026_live","Use another currency":"select","Currency":"GachaShard_XYZ"}}}},{{"action":"save_form"}}]
+
+Input: "Edit BossEvent_ABC -> Acquire lock -> sửa gate: LiveOpsTest -> Save -> Click menu Boss Details -> sửa Wrestler ID: SS_TheRock"
+Output: [{{"action":"edit_row","target":"BossEvent_ABC"}},{{"action":"click","target":"Acquire lock"}},{{"action":"update_form","data":{{"Gate":"LiveOpsTest"}}}},{{"action":"save_form"}},{{"action":"click","target":"Boss Details"}},{{"action":"update_form","data":{{"Wrestler ID":"SS_TheRock"}}}}]
+
+Input: "Vào Scout Missions tab -> sửa Scout Phase Start Time: 2025-08-20 10:00, End Time: 2025-08-25 15:00"
+Output: [{{"action":"click","target":"Scout Missions"}},{{"action":"update_form","data":{{"Scout Phase Start Time":"2025-08-20 10:00","End Time":"2025-08-25 15:00"}}}}]
 
 Now convert the USER COMMAND above. Output JSON only:"""
 
@@ -269,6 +389,12 @@ Now convert the USER COMMAND above. Output JSON only:"""
     if not json_output:
         return []
 
+    # [DEBUG] Check raw output length
+    if len(json_output) > 3000:
+        print(
+            f"   ⚠️  Warning: Model output is very long ({len(json_output)} chars). May indicate verbosity issue."
+        )
+
     # Parse JSON
     final_json_str = clean_json_string(json_output)
 
@@ -278,7 +404,16 @@ Now convert the USER COMMAND above. Output JSON only:"""
         return plan
     except json.JSONDecodeError as e:
         print(f"   ❌ Fast Mode Parse Error: {e}")
-        print(f"   Raw output: {json_output[:200]}...")
+        print(f"   Raw output (first 500 chars): {json_output[:500]}...")
+        print(f"   Cleaned output (first 500 chars): {final_json_str[:500]}...")
+
+        # [DEBUG] Show full cleaned output if short enough
+        if len(final_json_str) < 2000:
+            print(f"   📝 Full Cleaned JSON:\n{final_json_str}")
+
+        print(
+            f"   ⚠️  Tip: Lệnh này có thể phức tạp, hãy thử tắt Fast Mode và chạy lại."
+        )
         return []
 
 
@@ -475,6 +610,26 @@ def dual_model_pipeline(user_command):
       }}}} }}}},
       {{{{ "action": "save_form" }}}}
     ]
+    
+    Ex 6: "Edit BossEvent_ABC -> Acquire lock -> sửa gate: LiveOpsTest -> Save -> Click menu Boss Details -> sửa Wrestler ID: SS_TheRock"
+    JSON: [
+      {{{{ "action": "edit_row", "target": "BossEvent_ABC" }}}},
+      {{{{ "action": "click", "target": "Acquire lock" }}}},
+      {{{{ "action": "update_form", "data": {{{{ "Gate": "LiveOpsTest" }}}} }}}},
+      {{{{ "action": "save_form" }}}},
+      {{{{ "action": "click", "target": "Boss Details" }}}},
+      {{{{ "action": "update_form", "data": {{{{ "Wrestler ID": "SS_TheRock" }}}} }}}}
+    ]
+    
+    Ex 7: "Vào Scout Missions tab -> sửa Scout Phase Start Time: 2025-08-20 10:00, End Time: 2025-08-25 15:00 -> Save"
+    JSON: [
+      {{{{ "action": "click", "target": "Scout Missions" }}}},
+      {{{{ "action": "update_form", "data": {{{{ 
+          "Scout Phase Start Time": "2025-08-20 10:00",
+          "End Time": "2025-08-25 15:00"
+      }}}} }}}},
+      {{{{ "action": "save_form" }}}}
+    ]
 
     INPUT CONTEXT:
     - Original Command: "{user_command}"
@@ -552,6 +707,11 @@ def parse_command_to_json(user_command, use_fast_mode=True, context_plan=None):
     # BƯỚC 2: Chọn pipeline
     if use_fast_mode:
         plan = single_model_pipeline(user_command)
+
+        # Auto-fallback: Nếu Fast Mode thất bại, tự động chuyển sang Careful Mode
+        if not plan or len(plan) == 0:
+            print("   ⚠️  Fast Mode failed! Auto-switching to Careful Mode...")
+            plan = dual_model_pipeline(user_command)
     else:
         plan = dual_model_pipeline(user_command)
 
