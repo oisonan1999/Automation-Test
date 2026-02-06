@@ -19,12 +19,18 @@ class NavigatorMixin:
         - Nếu target là List (VD: ["Menu", "SubMenu"]) -> Gọi _smart_navigate_path (Của bạn)
         - Nếu target là String (VD: "Menu") -> Gọi smart_click hoặc goto
         """
+        # DEBUG: Print target type and value
+        print(
+            f"   🔍 DEBUG smart_navigate - Type: {type(target).__name__}, Value: {target}"
+        )
+
         try:
             page.wait_for_load_state("domcontentloaded", timeout=3000)
         except:
             pass
         # CASE 1: BREADCRUMB LIST (Path Navigation)
         if isinstance(target, list):
+            print(f"   ✅ Detected LIST path, calling _smart_navigate_path")
             # Gọi hàm chuyên biệt của bạn
             self._smart_navigate_path(page, target)
             return
@@ -262,12 +268,43 @@ class NavigatorMixin:
     def process_deployment(self, page, options=[]):
         print(f"   🚀 Deploy: {options}")
         try:
-            logo = page.locator(".brand-link, .logo, a.navbar-brand").first
-            if not logo.is_visible():
-                logo = page.locator("a").filter(has_text="The Brick").first
-            logo.click()
-            page.wait_for_selector("text=Process Blueprints", timeout=10000)
+            # Kiểm tra xem đã ở trang Home (Process Blueprints) chưa
+            already_home = False
+            try:
+                if page.locator("text=Process Blueprints").first.is_visible(
+                    timeout=1000
+                ):
+                    already_home = True
+                    print(f"      ✅ Already on Home page")
+            except:
+                pass
+
+            # Nếu chưa ở Home -> Click logo The Brick để về
+            if not already_home:
+                print(f"      🏠 Navigating to Home page...")
+                logo = page.locator(".brand-link, .logo, a.navbar-brand").first
+                if not logo.is_visible():
+                    logo = page.locator("a").filter(has_text="The Brick").first
+                if not logo.is_visible():
+                    logo = page.locator(
+                        "nav a:first-child, .navbar a:first-child"
+                    ).first
+
+                if logo.is_visible():
+                    logo.click()
+                    print(f"      ⏳ Waiting for Home page to load (5-10s)...")
+                    time.sleep(7)  # Đợi 7s để trang load hoàn toàn
+                    page.wait_for_selector("text=Process Blueprints", timeout=10000)
+                    print(f"      ✅ Navigated to Home page")
+                else:
+                    raise Exception("Cannot find The Brick logo to navigate home")
+
+            time.sleep(0.5)
+
+            # Tick các checkbox options
             for opt in options:
+                print(f"      🔲 Ticking option: '{opt}'")
+                # Strategy 1: Tìm label chứa text và tick checkbox gần nhất
                 lbl = (
                     page.locator("label")
                     .filter(has_text=re.compile(opt, re.IGNORECASE))
@@ -281,12 +318,42 @@ class NavigatorMixin:
                             chk = page.locator(f"#{id_v}")
                     if chk.is_visible() and not chk.is_checked():
                         chk.check()
+                        print(f"         ✅ Ticked: '{opt}'")
+                    elif chk.is_visible() and chk.is_checked():
+                        print(f"         ✅ Already ticked: '{opt}'")
+                    else:
+                        print(f"         ⚠️ Checkbox not visible for: '{opt}'")
+                else:
+                    # Strategy 2: Tìm text trực tiếp rồi click checkbox bên cạnh
+                    try:
+                        text_el = page.locator(f"text='{opt}'").first
+                        if text_el.is_visible():
+                            chk_nearby = text_el.locator(
+                                "xpath=preceding-sibling::input[@type='checkbox'] | following-sibling::input[@type='checkbox'] | ../input[@type='checkbox']"
+                            ).first
+                            if chk_nearby.is_visible() and not chk_nearby.is_checked():
+                                chk_nearby.check()
+                                print(f"         ✅ Ticked via nearby: '{opt}'")
+                            else:
+                                print(f"         ⚠️ Cannot tick: '{opt}'")
+                        else:
+                            print(f"         ⚠️ Label not found: '{opt}'")
+                    except Exception as e:
+                        print(f"         ⚠️ Strategy 2 failed for '{opt}': {e}")
 
+            # Click nút Process
+            print(f"      🖱 Clicking Process button...")
             btn = page.locator("button:has-text('Process')").first
             if btn.is_visible():
                 btn.click()
-        except:
-            pass
+                print(f"      ✅ Clicked Process button")
+                time.sleep(2)
+            else:
+                raise Exception("Process button not found or not visible")
+
+        except Exception as e:
+            print(f"   ❌ Process Deployment Error: {e}")
+            raise e
 
     # ==========================================================================
     # [MỚI] SMART CLICK: CHUYÊN TRỊ SIDEBAR / TABS
@@ -415,7 +482,7 @@ class NavigatorMixin:
             try:
                 # Chờ tối đa 6s để spinner biến mất
                 page.locator(active_spinner).first.wait_for(
-                    state="hidden", timeout=6000
+                    state="hidden", timeout=3000
                 )
                 print("         ✅ Spinner finished (Main content loaded).")
             except:
@@ -429,7 +496,7 @@ class NavigatorMixin:
 
         # GIAI ĐOẠN 3: NETWORK IDLE (Chốt chặn)
         try:
-            page.wait_for_load_state("networkidle", timeout=5000)
+            page.wait_for_load_state("networkidle", timeout=3000)
         except:
             pass
 

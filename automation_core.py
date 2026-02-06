@@ -68,8 +68,93 @@ class BrickAutomation(
         with sync_playwright() as p:
             try:
                 browser, page = self.get_existing_page(p)
+
+                # VALIDATION + AUTO-FIX: Fix invalid actions as safety net
+                VALID_ACTIONS = {
+                    "navigate",
+                    "checkbox",
+                    "download",
+                    "upload",
+                    "manipulate_csv",
+                    "smart_test_cycle",
+                    "clone_row",
+                    "edit_row",
+                    "update_form",
+                    "save_form",
+                    "scan_tabs",
+                    "click",
+                    "select",
+                    "wait",
+                    "wait_for_page_load",
+                    "process_deployment",
+                }
+
+                # Safety-net mapping (in case ai_brain.py fix_action_plan missed something)
+                SAFETY_MAP = {
+                    "select_random_ids": "checkbox",
+                    "select_ids": "checkbox",
+                    "check_checkbox": "checkbox",
+                    "select_checkbox": "checkbox",
+                    "export_csv": "download",
+                    "export": "download",
+                    "import_csv": "upload",
+                    "import": "upload",
+                    "click_logo": "process_deployment",
+                    "click_logo_the_brick": "process_deployment",
+                    "click_the_brick": "process_deployment",
+                    "click_button": "click",
+                    "press_button": "click",
+                    "process": "process_deployment",
+                    "deploy": "process_deployment",
+                    "smart_test": "smart_test_cycle",
+                    "test_cycle": "smart_test_cycle",
+                    "save": "save_form",
+                    "edit": "edit_row",
+                    "clone": "clone_row",
+                }
+
                 for step in action_plan:
                     act = step.get("action")
+
+                    # Auto-fix invalid action name via safety map
+                    if act not in VALID_ACTIONS and act in SAFETY_MAP:
+                        old_act = act
+                        act = SAFETY_MAP[act]
+                        step["action"] = act
+                        print(f"   🔧 CORE AUTO-FIX: '{old_act}' → '{act}'")
+                        # Also fix common field name issues
+                        if act == "checkbox" and "count" in step:
+                            step["value"] = f"random_{step.pop('count')}"
+                            step.setdefault("target", "ID")
+                        if act == "download" and "filename" in step:
+                            step["value"] = step.pop("filename")
+                            step.setdefault("target", "Export CSV")
+                        if act == "upload" and "filename" in step:
+                            step["value"] = step.pop("filename")
+                            step.setdefault("target", "Import CSV")
+                        if act == "click" and "label" in step and "target" not in step:
+                            step["target"] = step.pop("label")
+
+                    # Still invalid after mapping? Skip with warning
+                    if act not in VALID_ACTIONS:
+                        error_msg = (
+                            f"❌ INVALID ACTION: '{act}' is not in allowed list!"
+                        )
+                        print(f"\n{'='*60}")
+                        print(f"🚨 AI GENERATED INVALID ACTION (no mapping found)!")
+                        print(f"   Invalid: '{act}'")
+                        print(f"   Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
+                        print(f"   Full step: {step}")
+                        print(f"{'='*60}\n")
+                        report_logs.append(
+                            {
+                                "step": "Validation",
+                                "status": "FAIL",
+                                "details": error_msg,
+                            }
+                        )
+                        continue  # Skip this invalid action
+
                     tgt = (
                         str(step.get("target", ""))
                         if step.get("target", None) is not None
@@ -77,7 +162,8 @@ class BrickAutomation(
                     )
                     val = (
                         str(step.get("value", ""))
-                        if step.get("target", None) is not None
+                        if step.get("value", None)
+                        is not None  # FIX: Check value not target!
                         else ""
                     )
                     data = step.get("data", {})
@@ -93,6 +179,9 @@ class BrickAutomation(
 
                     if act == "navigate":
                         nav_data = step.get("path") if step.get("path") else tgt
+                        print(
+                            f"   🔍 Navigator: {type(nav_data).__name__}, value: {nav_data}"
+                        )
                         if isinstance(nav_data, str) and nav_data.strip().startswith(
                             "["
                         ):
@@ -271,6 +360,28 @@ class BrickAutomation(
                                 "details": "Checked all tabs",
                             }
                         )
+
+                    elif act == "process_deployment":
+                        options = step.get("options", [])
+                        print(f"   🚀 Process Deployment: {options}")
+                        try:
+                            self.process_deployment(page, options)
+                            report_logs.append(
+                                {
+                                    "step": "Process Deployment",
+                                    "status": "PASS",
+                                    "details": f"Processed: {', '.join(options) if options else 'Default'}",
+                                }
+                            )
+                        except Exception as e:
+                            print(f"   ❌ Process Deployment Error: {e}")
+                            report_logs.append(
+                                {
+                                    "step": "Process Deployment",
+                                    "status": "FAIL",
+                                    "details": str(e),
+                                }
+                            )
 
                     time.sleep(1)
                 # ====================================================

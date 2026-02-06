@@ -1,3 +1,0 @@
-﻿id,level,gate,name,icon,event_type,start_time,end_time,boost,Cost
-Feb2026_Perk_Stipulation_99MP_Wk3,1,feb2026_live,!!FEB2026_PERK_STIPULATION_99MP_NAME,UI/R24/Flag/SSR_Perk_PVE,STIPULATION,2/16/2026 20:00,2/23/2026 20:00,FightCard_Starting_ExtraMP_All_99,Perk_Feb2026_ML_stip_wk1:1
-Jan2026_Wknd3_LT_Perk_Speed_2x_FF,1,jan2026_wknd3,!!PERK_JAN2026_WKND3_SPEEDUP_NAME,UI/R24/Flag/SSR_Perk_FactionFeud,FACTION_FEUD,1/30/2026 20:00,2/2/2026 20:00,SpeedUp_Boost_2,Perk_Jan2026_Wknd3_Speedup:1

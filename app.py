@@ -223,6 +223,10 @@ if st.session_state.test_logs:
             v_lower = str(val).lower()
             if "pass" in v_lower:
                 color = "#28a745"
+            elif "warning" in v_lower:
+                color = (
+                    "#ff8c00"  # Orange cho WARNING (dữ liệu không hợp lệ bị chấp nhận)
+                )
             elif "fail" in v_lower or "crash" in v_lower:
                 color = "#dc3545"
             else:
@@ -238,7 +242,7 @@ if st.session_state.test_logs:
             )
 
             # === THỐNG KÊ ===
-            col_stat1, col_stat2, col_stat3 = st.columns(3)
+            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
 
             total = len(df_log)
             pass_count = (
@@ -250,6 +254,9 @@ if st.session_state.test_logs:
                 .str.lower()
                 .str.contains("fail|crash")
                 .sum()
+            )
+            warning_count = (
+                df_log[target_col].astype(str).str.lower().str.contains("warning").sum()
             )
 
             with col_stat1:
@@ -266,6 +273,20 @@ if st.session_state.test_logs:
                     fail_count,
                     delta=f"-{fail_count/total*100:.1f}%" if total > 0 else "0%",
                     delta_color="inverse",
+                )
+            with col_stat4:
+                st.metric(
+                    "⚠️ WARNING",
+                    warning_count,
+                    delta=f"{warning_count/total*100:.1f}%" if total > 0 else "0%",
+                    delta_color="inverse",
+                )
+
+            # Hiển thị cảnh báo nổi bật nếu có WARNING
+            if warning_count > 0:
+                st.error(
+                    f"🚨 CẢNH BÁO BẢO MẬT: {warning_count} test case với dữ liệu không hợp lệ đã bị hệ thống CHẤP NHẬN! "
+                    f"Vui lòng kiểm tra các dòng có status WARNING bên dưới."
                 )
         else:
             st.dataframe(df_log, use_container_width=True)

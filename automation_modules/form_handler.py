@@ -17,30 +17,44 @@ class FormHandlerMixin:
             time.sleep(0.2)
 
             if locator.is_checked():
+                print(f"         ✓ Already checked")
                 return True
 
             # 2. Click thông thường
             try:
                 locator.check(force=True, timeout=1000)
-            except:
-                pass
+                print(f"         ✓ Checked via .check()")
+            except Exception as e:
+                print(f"         ⚠️ .check() failed: {e}")
+
             if locator.is_checked():
                 return True
 
             # 3. Click vào ô cha (td) hoặc label nếu click input không ăn
             # (Đôi khi input bị ẩn, phải click vào cell)
+            print(f"         ⚠️ Trying JS click...")
             locator.evaluate(
                 "el => { el.click(); if(!el.checked) el.checked=true; el.dispatchEvent(new Event('change', {bubbles: true})); }"
             )
             time.sleep(0.1)
 
-            return locator.is_checked()
-        except:
+            is_checked = locator.is_checked()
+            print(
+                f"         {'✓' if is_checked else '✗'} JS click result: {is_checked}"
+            )
+            return is_checked
+        except Exception as e:
+            print(f"         ✗ _safe_check exception: {e}")
             return False
 
     def handle_checkbox(self, page, target_col, value):
         logs = []
         try:
+            # FIX: Nếu value rỗng → default random_1
+            if not value or str(value).strip() == "":
+                print("   🔧 Value rỗng! Auto fallback → random_1")
+                value = "random_1"
+
             # A. Tìm bảng dữ liệu chuẩn (tránh bảng header)
             target_table = self._find_data_table(page)
             if not target_table:
@@ -93,15 +107,48 @@ class FormHandlerMixin:
                     row = all_rows.nth(idx)
                     chk = row.locator("input[type='checkbox']").first
 
-                    if self._safe_check(chk):
+                    print(
+                        f"      🎯 Row {idx+1}: Checkbox visible={chk.is_visible() if chk.count() > 0 else 'N/A'}"
+                    )
+
+                    check_result = self._safe_check(chk)
+                    print(f"      🔍 _safe_check returned: {check_result}")
+
+                    if check_result:
                         try:
-                            # Lấy ID/Text để lưu vào Memory
-                            cell_text = row.locator("td").nth(1).inner_text().strip()
+                            print(f"      🔍 Attempting to get cell text...")
+                            # Lấy ID/Text để lưu vào Memory - Thử nhiều cột để tìm text không rỗng
+                            cell_text = ""
+                            all_cells = row.locator("td")
+                            cell_count = all_cells.count()
+                            print(f"      🔍 Row has {cell_count} cells")
+
+                            # Thử từ cột 1 đến hết (bỏ cột 0 vì đó là checkbox)
+                            for col_idx in range(
+                                1, min(cell_count, 5)
+                            ):  # Chỉ thử 4 cột đầu
+                                try:
+                                    text = (
+                                        all_cells.nth(col_idx)
+                                        .inner_text(timeout=500)
+                                        .strip()
+                                    )
+                                    print(f"      🔍 Cell {col_idx}: '{text}'")
+                                    if text and text not in ["", "-", "N/A"]:
+                                        cell_text = text
+                                        break
+                                except Exception as cell_err:
+                                    print(f"      ⚠️ Cell {col_idx} error: {cell_err}")
+                                    continue
+
                             if not cell_text:
-                                cell_text = (
-                                    row.locator("td").nth(2).inner_text().strip()
+                                # Fallback: Lấy toàn bộ text của row
+                                cell_text = f"Row_{idx+1}"
+                                print(
+                                    f"      ⚠️ No cell text found, using fallback: {cell_text}"
                                 )
 
+                            print(f"      🔍 Got cell_text: '{cell_text}'")
                             self.memory["LAST_SELECTED"] = cell_text
                             if "SELECTED_IDS" not in self.memory:
                                 self.memory["SELECTED_IDS"] = []
@@ -109,8 +156,17 @@ class FormHandlerMixin:
 
                             selected_ids.append(cell_text)
                             print(f"   ✅ Đã tick dòng {idx+1}: {cell_text}")
-                        except:
-                            pass
+                        except Exception as e:
+                            print(
+                                f"   ⚠️ Exception getting cell text for row {idx+1}: {type(e).__name__}: {e}"
+                            )
+                            import traceback
+
+                            traceback.print_exc()
+                            # CRITICAL FIX: Vẫn count là đã chọn thành công nếu checkbox đã được tick
+                            fallback_id = f"Row_{idx+1}_checked"
+                            selected_ids.append(fallback_id)
+                            print(f"   ⚠️ Using fallback ID: {fallback_id}")
                     else:
                         print(f"   ⚠️ Lỗi tick dòng {idx+1}. Thử dòng khác...")
                     time.sleep(0.2)
@@ -120,13 +176,27 @@ class FormHandlerMixin:
                         f"   ⚠️ Chỉ chọn được {len(selected_ids)}/{num_to_select} dòng."
                     )
 
-                logs.append(
-                    {
-                        "step": "Checkbox",
-                        "status": "PASS",
-                        "details": f"Random: {selected_ids}",
-                    }
-                )
+                # [FIX] Nếu không chọn được dòng nào, trả về FAIL
+                if len(selected_ids) == 0:
+                    logs.append(
+                        {
+                            "step": "Checkbox",
+                            "status": "FAIL",
+                            "details": f"Không thể chọn bất kỳ dòng nào. Target: random {num_to_select}",
+                        }
+                    )
+                else:
+                    logs.append(
+                        {
+                            "step": "Checkbox",
+                            "status": (
+                                "PASS"
+                                if len(selected_ids) == num_to_select
+                                else "PARTIAL"
+                            ),
+                            "details": f"Random: {selected_ids} ({len(selected_ids)}/{num_to_select})",
+                        }
+                    )
 
             # --- CASE 2: ALL ---
             elif "all" in val_lower:

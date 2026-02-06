@@ -281,101 +281,345 @@ class SmartTesterMixin:
 
         return False, "Max retries exceeded"
 
-    def _upload_single_attempt(self, page, target_text, file_name):
+    def _upload_fuzz_fast(self, page, target_text, file_name, cached_selector=None):
+        """Optimized upload for fuzzing: 15s timeout, cached selector. Returns (success, msg, selector)"""
         full_path = os.path.join(DOWNLOAD_DIR, file_name)
         try:
-            # 1. Tìm nút Upload
-            btn = page.locator(
-                f"button:has-text('{target_text}'), a.btn:has-text('{target_text}'), label:has-text('{target_text}'), input[type='file']"
-            ).first
-            if not btn.is_visible():
-                btn = page.locator(
-                    f"xpath=//*[contains(text(), '{target_text}')]/ancestor::button | //*[contains(text(), '{target_text}')]/ancestor::a"
-                ).first
-            if not btn.is_visible():
-                return False, "Import Button not found"
+            btn = None
 
-            # 2. Upload
-            if btn.get_attribute("type") == "file":
-                btn.set_input_files(full_path)
-            else:
-                with page.expect_file_chooser(timeout=3000) as fc_info:
-                    btn.click()
-                fc_info.value.set_files(full_path)
+            # Use cache if available
+            if cached_selector:
+                try:
+                    btn = page.locator(cached_selector).first
+                    if not btn.is_visible(timeout=500):
+                        btn = None
+                        cached_selector = None
+                except:
+                    btn = None
+                    cached_selector = None
 
-            # 3. Confirm Popup
+            # Find button with reduced strategies
+            if not btn:
+                # Strategy 1: Exact text (1s timeout)
+                try:
+                    btn = page.locator(
+                        f"button:has-text('{target_text}'), a.btn:has-text('{target_text}')"
+                    ).first
+                    btn.wait_for(state="visible", timeout=1000)
+                    if btn.is_visible():
+                        cached_selector = f"button:has-text('{target_text}')"
+                except:
+                    pass
+
+            # Strategy 2: Keywords (reduced from 5 to 2)
+            if not btn or not btn.is_visible():
+                for keyword in ["Import", "Upload"]:
+                    try:
+                        btn = page.locator(f"button:has-text('{keyword}')").first
+                        if btn.is_visible(timeout=500):
+                            cached_selector = f"button:has-text('{keyword}')"
+                            break
+                    except:
+                        continue
+
+            # Strategy 3: Input file (skip XPath - slow)
+            if not btn or not btn.is_visible():
+                try:
+                    btn = page.locator("input[type='file']").first
+                    if btn.count() > 0:
+                        cached_selector = "input[type='file']"
+                except:
+                    pass
+
+            if not btn or not btn.is_visible():
+                return False, "Button not found", cached_selector
+
+            # 2. Upload File (reduced timeout)
             try:
-                confirm = page.locator(
-                    ".swal2-confirm, button:has-text('Upload'), button:has-text('Confirm')"
-                ).first
-                if confirm.is_visible(timeout=2000):
-                    confirm.click()
+                if btn.get_attribute("type") == "file":
+                    btn.set_input_files(full_path)
+                else:
+                    with page.expect_file_chooser(timeout=3000) as fc_info:
+                        btn.click()
+                    fc_info.value.set_files(full_path)
+                time.sleep(0.5)  # Wait for file processing
+
+                # CRITICAL: Check for popup IMMEDIATELY after file upload (before confirm!)
+                print("   🔍 Checking popup after file upload...")
+                start_check = time.time()
+                for i in range(10):  # Check 10 times × 100ms = 1s
+                    popup_data = page.evaluate("window.__popupResult")
+                    if popup_data:
+                        # Reset for next case
+                        page.evaluate("window.__popupResult = null")
+                        print(
+                            f"   🎯 JS caught early popup at {int((time.time()-start_check)*1000)}ms: {popup_data['type']}"
+                        )
+                        return (
+                            (popup_data["type"] == "PASS"),
+                            str(popup_data["text"])[:100],
+                            cached_selector,
+                        )
+                    # Also check modal directly
+                    try:
+                        modal_body = page.locator(".modal .modal-body").first
+                        if modal_body.is_visible():
+                            text = modal_body.inner_text().strip()
+                            if text:
+                                is_error = any(
+                                    kw in text.lower()
+                                    for kw in ["error", "fail", "invalid", "lỗi"]
+                                )
+                                print(
+                                    f"   🎯 Found early modal: {'FAIL' if is_error else 'PASS'}"
+                                )
+                                return (not is_error, text[:100], cached_selector)
+                    except:
+                        pass
+                    time.sleep(0.1)
+
+            except Exception as upload_err:
+                return False, f"Upload failed: {upload_err}", cached_selector
+
+            # 3. Setup popup capture BEFORE clicking confirm
+            # Skip injection if already setup globally
+            if not page.evaluate("typeof window.__popupResult !== 'undefined'"):
+                try:
+                    page.evaluate(
+                        """
+                    window.__popupResult = null;
+                    
+                    // Function to check and capture modal content
+                    function captureModalContent() {
+                        if (window.__popupResult) return; // Already captured
+                        
+                        // Check ALL modals (don't wait for .show class - it gets removed too fast!)
+                        const modals = document.querySelectorAll('.modal');
+                        for (const modal of modals) {
+                            const body = modal.querySelector('.modal-body');
+                            // Read content if modal-body has text (regardless of modal visibility)
+                            if (body && body.innerText.trim() && body.offsetParent !== null) {
+                                const text = body.innerText.trim();
+                                const isError = text.toLowerCase().includes('error') || 
+                                               text.toLowerCase().includes('fail') || 
+                                               text.toLowerCase().includes('invalid') ||
+                                               text.toLowerCase().includes('không hợp lệ') ||
+                                               text.toLowerCase().includes('lỗi') ||
+                                               modal.classList.contains('error') ||
+                                               modal.classList.contains('danger');
+                                window.__popupResult = {
+                                    type: isError ? 'FAIL' : 'PASS',
+                                    text: text
+                                };
+                                console.log('✅ Modal captured:', window.__popupResult);
+                                return true;
+                            }
+                        }
+                        
+                        // Check for SweetAlert
+                        const swalContainers = document.querySelectorAll('.swal2-container');
+                        for (const container of swalContainers) {
+                            const content = container.querySelector('.swal2-html-container, .swal2-title');
+                            if (content && content.innerText.trim() && container.offsetParent !== null) {
+                                const text = content.innerText.trim();
+                                const isError = container.querySelector('.swal2-error, .swal2-icon-error');
+                                window.__popupResult = {
+                                    type: isError ? 'FAIL' : 'PASS',
+                                    text: text
+                                };
+                                console.log('✅ Swal captured:', window.__popupResult);
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    
+                    // Check immediately and repeatedly
+                    const checkInterval = setInterval(() => {
+                        if (captureModalContent()) {
+                            clearInterval(checkInterval);
+                        }
+                    }, 50); // Check every 50ms for 5 seconds
+                    
+                    // Also use MutationObserver as backup
+                    const observer = new MutationObserver(() => {
+                        if (captureModalContent()) {
+                            observer.disconnect();
+                            clearInterval(checkInterval);
+                        }
+                    });
+                    
+                    observer.observe(document.body, {
+                        childList: true,
+                        subtree: true,
+                        attributes: true,
+                        attributeFilter: ['class', 'style']
+                    });
+                    
+                    // Cleanup after 5 seconds
+                    setTimeout(() => {
+                        observer.disconnect();
+                        clearInterval(checkInterval);
+                    }, 5000);
+                """
+                    )
+                    time.sleep(0.1)
+                except:
+                    pass
+
+            # 3. Confirm button - popup will be captured by JS listener
+            confirm_clicked = False
+            try:
+                time.sleep(0.2)
+                for selector in [
+                    ".swal2-confirm:visible",
+                    "button:has-text('Import'):visible",
+                    "button:has-text('Confirm'):visible",
+                ]:
+                    try:
+                        confirm_btn = page.locator(selector).first
+                        if confirm_btn.is_visible(timeout=300):
+                            confirm_btn.click()
+                            confirm_clicked = True
+
+                            # CRITICAL: Check IMMEDIATELY after click - FASTER (20ms intervals)
+                            for i in range(100):  # Ch# Reset for next case
+                                page.evaluate("window.__popupResult = null")
+                                # Check for 2s total (100 × 0.02s = 2s)
+                                popup_data = page.evaluate("window.__popupResult")
+                                if popup_data:
+                                    print(
+                                        f"   🎯 JS captured popup at {i*20}ms: {popup_data['type']}"
+                                    )
+                                    return (
+                                        (popup_data["type"] == "PASS"),
+                                        str(popup_data["text"])[:100],
+                                        cached_selector,
+                                    )
+                                time.sleep(0.02)  # 20ms intervals = 50 checks/second!
+
+                            # If JS failed, try direct Python check as fallback
+                            print("   ⚠️ JS capture timeout, trying Python fallback...")
+                            try:
+                                modals = page.locator(".modal .modal-body").all()
+                                for modal in modals:
+                                    if modal.is_visible():
+                                        text = modal.inner_text().strip()
+                                        if text:
+                                            is_error = any(
+                                                kw in text.lower()
+                                                for kw in [
+                                                    "error",
+                                                    "fail",
+                                                    "invalid",
+                                                    "lỗi",
+                                                ]
+                                            )
+                                            print(
+                                                f"   🔍 Python found modal: {'FAIL' if is_error else 'PASS'}"
+                                            )
+                                            return (
+                                                not is_error,
+                                                text[:100],
+                                                cached_selector,
+                                            )
+                            except:
+                                pass
+                            break
+                    except:
+                        continue
             except:
                 pass
 
-            # 4. Polling Result (Toast/Popup)
+            # 4. Polling Result - 25s timeout for fuzzing (fallback if immediate check missed)
             start_time = time.time()
             seen_loading = False
 
-            while time.time() - start_time < 90:
+            while time.time() - start_time < 25:
                 res_found, res_type, res_text = self._scan_for_result_popup(page)
                 if res_found:
-                    self._ensure_popup_closed(page)
-                    return (res_type == "PASS"), str(res_text or "Success (No text)")
+                    # Popup tự tắt rồi, không cần đợi - return ngay lập tức
+                    return (
+                        (res_type == "PASS"),
+                        str(res_text or "")[:100],
+                        cached_selector,
+                    )
 
-                loading = page.locator(
-                    ".swal2-loading, .spinner, .loading, .fa-spin, div:has-text('Uploading')"
-                ).first
+                loading = page.locator(".swal2-loading, .spinner, .loading").first
                 if loading.is_visible():
                     seen_loading = True
-                    time.sleep(0.5)
+                    time.sleep(0.3)
                     continue
 
                 if seen_loading and not loading.is_visible():
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                     res_found, res_type, res_text = self._scan_for_result_popup(page)
                     if res_found:
-                        self._ensure_popup_closed(page)
-                        return (res_type == "PASS"), res_text
-                time.sleep(0.5)
+                        # Return ngay, không đợi popup đóng
+                        return (res_type == "PASS"), res_text[:100], cached_selector
+                time.sleep(0.3)
 
-            return False, "Timeout"
+            return False, "Timeout (25s)", cached_selector
 
         except Exception as e:
-            return False, str(e)
+            return False, str(e), cached_selector
+
+    def _upload_single_attempt(self, page, target_text, file_name):
+        """Original upload for non-fuzz operations (keeps longer timeouts)"""
+        success, msg, _ = self._upload_fuzz_fast(page, target_text, file_name, None)
+        return success, msg
 
     def _scan_for_result_popup(self, page):
         try:
-            # Selector Error
-            errs = [
-                ".swal2-error",
-                ".alert-danger",
-                ".toast-error",
-                ".notification-error",
-                "div:has-text('Failed'):visible",
-                "div:has-text('Error'):visible",
-            ]
-            for sel in errs:
-                el = page.locator(sel).first
-                if el.is_visible():
-                    return True, "FAIL", el.inner_text().strip()[:100]
+            # Check Error popup first (priority) - Wait actively for 2s
+            try:
+                err = page.wait_for_selector(
+                    ".swal2-error, .alert-danger, .toast-error, .notification-error, .swal2-icon-error, [class*='error'][class*='icon'], .error-message",
+                    state="visible",
+                    timeout=2000,
+                )
+                if err:
+                    text = err.inner_text().strip()[:200]
+                    print(f"   🔍 DEBUG: Found ERROR popup: {text[:50]}...")
+                    return True, "FAIL", text
+            except Exception as e:
+                print(f"   🔍 DEBUG: No error popup found ({type(e).__name__})")
 
-            # Selector Success
-            succs = [
-                ".swal2-success",
-                ".alert-success",
-                ".toast-success",
-                ".notification-success",
-                "div:has-text('Success'):visible",
-                "div:has-text('Completed'):visible",
-            ]
-            for sel in succs:
-                el = page.locator(sel).first
-                if el.is_visible():
-                    return True, "PASS", el.inner_text().strip()[:100]
+            # Check Success popup - Wait actively for 2s
+            try:
+                succ = page.wait_for_selector(
+                    ".swal2-success, .alert-success, .toast-success, .notification-success, .swal2-icon-success, [class*='success'][class*='icon']",
+                    state="visible",
+                    timeout=2000,
+                )
+                if succ:
+                    text = succ.inner_text().strip()[:200]
+                    print(f"   🔍 DEBUG: Found SUCCESS popup: {text[:50]}...")
+                    return True, "PASS", text
+            except Exception as e:
+                print(f"   🔍 DEBUG: No success popup found ({type(e).__name__})")
+
+            # DEBUG: Print all visible elements to help identify popup
+            try:
+                visible_els = page.locator(
+                    "[class*='swal'], [class*='alert'], [class*='toast'], [class*='modal']"
+                ).all()
+                if visible_els:
+                    print(
+                        f"   🔍 DEBUG: Found {len(visible_els)} potential popup elements"
+                    )
+                    for idx, el in enumerate(visible_els[:3]):
+                        try:
+                            classes = el.get_attribute("class")
+                            print(f"      Element {idx+1}: {classes}")
+                        except:
+                            pass
+            except:
+                pass
 
             return False, "UNKNOWN", "No popup text"
-        except:
+        except Exception as ex:
+            print(f"   ⚠️ DEBUG: Popup scan crashed: {type(ex).__name__}: {ex}")
             return False, "ERROR", "Popup scan crashed"
 
     # ============================
@@ -397,7 +641,7 @@ class SmartTesterMixin:
                 else if (modalBtn && modalBtn.offsetParent !== null) modalBtn.click();
             """
             )
-            time.sleep(0.5)
+            time.sleep(0.3)
         except:
             pass
 
@@ -443,14 +687,116 @@ class SmartTesterMixin:
             fuzzer = GenericCSVFuzzer(file_path)
             mutations = fuzzer.generate_generic_all_cases()
 
+            # CRITICAL: Setup popup capture ONCE before all uploads
+            try:
+                page.evaluate(
+                    """
+                    window.__popupResult = null;
+                    window.__lastCheckedText = '';
+                    
+                    // Function to check and capture modal content
+                    function captureModalContent() {
+                        if (window.__popupResult) return true; // Already captured
+                        
+                        // Check ALL modals - EVEN IF HIDDEN (class 'hide')
+                        const modals = document.querySelectorAll('.modal');
+                        for (const modal of modals) {
+                            // Read ALL text from modal (header + body combined)
+                            const fullText = modal.innerText.trim();
+                            if (!fullText) continue;
+                            
+                            // SKIP loading indicators (exact match OR short text with loading words)
+                            const lower = fullText.toLowerCase();
+                            const loadingWords = ['importing...', 'uploading...', 'loading...', 'processing...', 'please wait'];
+                            if (loadingWords.some(w => lower === w || (lower.includes(w) && fullText.length < 50))) continue;
+                            
+                            // Skip if we already checked this exact text
+                            if (fullText === window.__lastCheckedText) continue;
+                            window.__lastCheckedText = fullText;
+                            
+                            // Check for error keywords in FULL modal text
+                            const isError = lower.includes('error') || 
+                                           lower.includes('fail') || 
+                                           lower.includes('invalid') ||
+                                           lower.includes('already exist') ||
+                                           lower.includes('duplicate') ||
+                                           lower.includes('clone') ||
+                                           lower.includes('không hợp lệ') ||
+                                           lower.includes('lỗi');
+                            window.__popupResult = {
+                                type: isError ? 'FAIL' : 'PASS',
+                                text: fullText.substring(0, 200),
+                                timestamp: Date.now()
+                            };
+                            console.log('✅ Modal captured:', window.__popupResult);
+                            return true;
+                        }
+                        
+                        // Check for SweetAlert - EVEN IF HIDDEN
+                        const swalContainers = document.querySelectorAll('.swal2-container');
+                        for (const container of swalContainers) {
+                            const content = container.querySelector('.swal2-html-container, .swal2-title, .swal2-popup');
+                            if (content && content.innerText.trim()) {
+                                const text = content.innerText.trim();
+                                const lower = text.toLowerCase();
+                                if (lower === 'importing...' || lower === 'uploading...') continue;
+                                if (text === window.__lastCheckedText) continue;
+                                window.__lastCheckedText = text;
+                                
+                                const isError = container.querySelector('.swal2-error, .swal2-icon-error') ||
+                                               lower.includes('error') || lower.includes('fail') ||
+                                               lower.includes('already exist') || lower.includes('duplicate');
+                                window.__popupResult = {
+                                    type: isError ? 'FAIL' : 'PASS',
+                                    text: text.substring(0, 200),
+                                    timestamp: Date.now()
+                                };
+                                console.log('✅ Swal captured:', window.__popupResult);
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    
+                    // ULTRA-FAST polling - 10ms intervals
+                    const checkInterval = setInterval(() => {
+                        captureModalContent();
+                    }, 10);
+                    
+                    // MutationObserver as backup
+                    const observer = new MutationObserver(() => {
+                        captureModalContent();
+                    });
+                    
+                    observer.observe(document.body, {
+                        childList: true,
+                        subtree: true,
+                        attributes: true,
+                        attributeFilter: ['class', 'style']
+                    });
+                    
+                    // Keep running for entire fuzzing session
+                    console.log('🔍 Global popup monitor started');
+                """
+                )
+                print("   🔍 Global popup monitor initialized")
+            except Exception as e:
+                print(f"   ⚠️ Failed to init popup monitor: {e}")
+
             for i, case in enumerate(mutations):
                 case_name = case["name"]
                 print(f"      🔸 [Case {i+1}/{len(mutations)}] {case_name}...")
 
                 temp_file = fuzzer.save_mutation_to_generic_file(case)
 
+                # CRITICAL: Clear previous result before upload
+                try:
+                    page.evaluate("window.__popupResult = null")
+                except:
+                    pass
+
                 # Upload (Dùng hàm upload bắt được Toast/Popup)
-                self._ensure_popup_closed(page)
+                # DON'T close popup before upload - it might close the result popup!
                 success, msg = self._upload_single_attempt(
                     page, "Import CSV", temp_file
                 )
@@ -476,7 +822,31 @@ class SmartTesterMixin:
                         }
                     )
 
-                # Cleanup
+                # Cleanup AFTER reading result - MUST close modal for next case
+                try:
+                    page.evaluate(
+                        """
+                        // Click any dismiss/close/cancel buttons
+                        const btns = document.querySelectorAll(
+                            '.modal button[data-dismiss="modal"], .modal .close, .modal .btn-secondary, ' +
+                            'button.swal2-confirm, button.swal2-cancel, button.swal2-close'
+                        );
+                        btns.forEach(b => { try { b.click(); } catch(e) {} });
+                        
+                        // Force remove overlays
+                        document.querySelectorAll('.modal-backdrop, .swal2-container').forEach(el => el.remove());
+                        document.querySelectorAll('.modal.show, .modal.in').forEach(el => {
+                            el.classList.remove('show', 'in');
+                            el.classList.add('hide');
+                            el.style.display = 'none';
+                        });
+                        document.body.classList.remove('modal-open', 'swal2-shown');
+                        document.body.style.overflow = 'auto';
+                    """
+                    )
+                except:
+                    pass
+                time.sleep(0.3)  # Brief wait for cleanup
                 try:
                     os.remove(os.path.join(DOWNLOAD_DIR, temp_file))
                 except:
@@ -546,6 +916,8 @@ class SmartTesterMixin:
                         prefix = "Offer_"
                     elif "objectiveid" in col_lower:
                         prefix = "Objective_"
+                    elif "sectionid" in col_lower:
+                        prefix = "Section_"
                     else:
                         prefix = "Auto_"
 

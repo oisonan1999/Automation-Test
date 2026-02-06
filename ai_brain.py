@@ -206,7 +206,7 @@ def call_ollama(model_name, prompt, stream=False, optimized=False):
     # Config tối ưu tốc độ (Fast Mode)
     if optimized:
         options = {
-            "temperature": 0.1,
+            "temperature": 0.0,  # Set to 0 for strict adherence to rules
             "num_ctx": 8192,  # ⬆️ Tăng lên để đủ chứa prompt + output
             "num_predict": 4096,  # ⬆️ Tăng lên 4096 để tránh cắt output JSON
             "num_gpu": 99,
@@ -323,6 +323,285 @@ def detect_complexity(user_command):
 
 
 # ============================================================================
+# POST-PROCESSING: FIX INVALID ACTION NAMES (Deterministic - 100% reliable)
+# ============================================================================
+
+# Mapping: invalid action name → valid action name
+ACTION_NAME_MAP = {
+    # Checkbox / Select variations
+    "select_random_ids": "checkbox",
+    "select_ids": "checkbox",
+    "select_random": "checkbox",
+    "check_checkbox": "checkbox",
+    "select_checkbox": "checkbox",
+    "tick_checkbox": "checkbox",
+    "select_rows": "checkbox",
+    "choose_ids": "checkbox",
+    "pick_random": "checkbox",
+    # Download / Export variations
+    "export_csv": "download",
+    "export": "download",
+    "export_file": "download",
+    "download_csv": "download",
+    "download_file": "download",
+    # Upload / Import variations
+    "import_csv": "upload",
+    "import": "upload",
+    "import_file": "upload",
+    "upload_csv": "upload",
+    "upload_file": "upload",
+    # Process / Deploy variations
+    "click_logo": "process_deployment",
+    "click_logo_the_brick": "process_deployment",
+    "click_the_brick": "process_deployment",
+    "click_brick": "process_deployment",
+    "go_home": "process_deployment",
+    "process": "process_deployment",
+    "deploy": "process_deployment",
+    # Click button variations
+    "click_button": "click",
+    "press_button": "click",
+    "tap_button": "click",
+    # Navigate variations
+    "go_to": "navigate",
+    "open_page": "navigate",
+    "open_menu": "navigate",
+    # Edit variations
+    "edit": "edit_row",
+    "edit_item": "edit_row",
+    # Clone variations
+    "clone": "clone_row",
+    "clone_item": "clone_row",
+    "duplicate": "clone_row",
+    # Save variations
+    "save": "save_form",
+    # Smart test variations
+    "test_cycle": "smart_test_cycle",
+    "smart_test": "smart_test_cycle",
+    "fuzz_test": "smart_test_cycle",
+}
+
+VALID_ACTIONS = {
+    "navigate",
+    "checkbox",
+    "download",
+    "upload",
+    "manipulate_csv",
+    "smart_test_cycle",
+    "clone_row",
+    "edit_row",
+    "update_form",
+    "save_form",
+    "scan_tabs",
+    "click",
+    "select",
+    "wait",
+    "wait_for_page_load",
+    "process_deployment",
+}
+
+
+def fix_action_plan(plan):
+    """
+    Post-process AI output: Fix invalid action names and field names.
+    This is deterministic and 100% reliable regardless of what AI generates.
+    """
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    fixed_plan = []
+    last_filename = None  # Track filename for reuse
+
+    for step in plan:
+        if not isinstance(step, dict):
+            continue
+
+        action = step.get("action", "")
+
+        # ============================================================
+        # STEP 1: Fix action name
+        # ============================================================
+        if action in ACTION_NAME_MAP:
+            old_action = action
+            action = ACTION_NAME_MAP[action]
+            step["action"] = action
+            print(f"   🔧 AUTO-FIX: '{old_action}' → '{action}'")
+
+        # ============================================================
+        # STEP 2: Fix field names based on action type
+        # ============================================================
+
+        if action == "checkbox":
+            # Fix: {count: 2} or {number: 2} → {target: "ID", value: "random_2"}
+            if "count" in step:
+                step["value"] = f"random_{step.pop('count')}"
+            elif "number" in step:
+                step["value"] = f"random_{step.pop('number')}"
+            if "target" not in step:
+                step["target"] = "ID"
+            if "value" not in step and "label" in step:
+                step["value"] = step.pop("label")
+            # Fix: value rỗng → default random_1
+            if not step.get("value") or str(step.get("value")).strip() == "":
+                step["value"] = "random_1"
+                print("   🔧 AUTO-FIX: checkbox value rỗng → random_1")
+
+        elif action == "download":
+            # Fix: {filename: "x.csv"} → {target: "Export CSV", value: "x.csv"}
+            if "filename" in step:
+                step["value"] = step.pop("filename")
+            if "file" in step and "value" not in step:
+                step["value"] = step.pop("file")
+            if "target" not in step:
+                step["target"] = "Export CSV"
+            # Track filename for reuse
+            if step.get("value"):
+                last_filename = step["value"]
+
+        elif action == "upload":
+            # Fix: {filename: "x.csv"} → {target: "Import CSV", value: "x.csv"}
+            if "filename" in step:
+                step["value"] = step.pop("filename")
+            if "file" in step and "value" not in step:
+                step["value"] = step.pop("file")
+            if "target" not in step:
+                step["target"] = "Import CSV"
+            # Reuse filename if empty
+            if not step.get("value") and last_filename:
+                step["value"] = last_filename
+                print(f"   🔧 AUTO-FIX: Reused filename '{last_filename}' for upload")
+
+        elif action == "smart_test_cycle":
+            # Fix: {file: "x.csv"} → {value: "x.csv"}
+            if "file" in step and "value" not in step:
+                step["value"] = step.pop("file")
+            if "filename" in step and "value" not in step:
+                step["value"] = step.pop("filename")
+            # Reuse filename if empty
+            if not step.get("value") and last_filename:
+                step["value"] = last_filename
+                print(
+                    f"   🔧 AUTO-FIX: Reused filename '{last_filename}' for smart_test_cycle"
+                )
+            # Track for next step
+            if step.get("value"):
+                last_filename = step["value"]
+
+        elif action == "process_deployment":
+            # Fix: {target: "The Brick"} → just process_deployment
+            if "target" in step and step["target"] in (
+                "The Brick",
+                "logo The Brick",
+                "logo",
+            ):
+                step.pop("target")
+            if "options" not in step:
+                step["options"] = []
+            if "label" in step:
+                # click_button label="Process" → already handled by process_deployment
+                step.pop("label", None)
+
+        elif action == "click":
+            # Fix: {label: "X"} → {target: "X"}
+            if "label" in step and "target" not in step:
+                step["target"] = step.pop("label")
+
+        elif action == "navigate":
+            # Fix: {menu: [...]} → {path: [...]}
+            if "menu" in step and "path" not in step:
+                step["path"] = step.pop("menu")
+
+        # Track download filenames
+        if action == "download" and step.get("value"):
+            last_filename = step["value"]
+
+        # Skip unknown actions that can't be mapped
+        if step.get("action") not in VALID_ACTIONS:
+            print(
+                f"   ⚠️ SKIP unknown action: '{step.get('action')}' (no mapping found)"
+            )
+            continue
+
+        fixed_plan.append(step)
+
+    # ============================================================
+    # STEP 3: Merge consecutive process_deployment-related actions
+    # Pattern: click_logo → select_checkbox(Offers) → click_button(Process)
+    # Should become: process_deployment(options=["Offers"])
+    # ============================================================
+    merged_plan = _merge_process_deployment_steps(fixed_plan)
+
+    if len(merged_plan) != len(plan):
+        print(
+            f"   🔧 AUTO-FIX: Plan {len(plan)} steps → {len(merged_plan)} steps after fix"
+        )
+
+    return merged_plan
+
+
+def _merge_process_deployment_steps(plan):
+    """
+    Merge patterns like:
+      process_deployment → checkbox(Offers) → click(Process)
+    Into single:
+      process_deployment(options=["Offers"])
+    """
+    if not plan:
+        return plan
+
+    merged = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+
+        # Check if this starts a process_deployment sequence
+        if step.get("action") == "process_deployment":
+            options = list(step.get("options", []))
+
+            # Look ahead for checkbox/click that should be merged
+            j = i + 1
+            while j < len(plan):
+                next_step = plan[j]
+                next_action = next_step.get("action", "")
+
+                if next_action == "checkbox" and not str(
+                    next_step.get("value", "")
+                ).startswith("random_"):
+                    # Non-table checkbox after process_deployment → it's an option
+                    opt = next_step.get("value") or next_step.get("target", "")
+                    if opt and opt != "ID" and opt not in options:
+                        options.append(opt)
+                    print(
+                        f"   🔧 MERGE: checkbox('{opt}') → process_deployment options"
+                    )
+                    j += 1
+                elif next_action == "click" and next_step.get("target", "").lower() in (
+                    "process",
+                    "deploy",
+                    "bấm process",
+                    "nút process",
+                    "process button",
+                    "button process",
+                ):
+                    # click(Process) → absorbed by process_deployment
+                    print(
+                        f"   🔧 MERGE: click('Process') → absorbed by process_deployment"
+                    )
+                    j += 1
+                else:
+                    break
+
+            step["options"] = options
+            merged.append(step)
+            i = j
+        else:
+            merged.append(step)
+            i += 1
+
+    return merged
+
+
+# ============================================================================
 # SINGLE MODEL PIPELINE (Fast Mode)
 # ============================================================================
 
@@ -334,60 +613,49 @@ def single_model_pipeline(user_command):
     """
     print(f"   ⚡ FAST MODE: Single-model pipeline")
 
-    # Prompt tối ưu - Ngắn gọn, đi thẳng vào vấn đề
-    prompt = f"""You are a QA Automation AI. Convert this Vietnamese/English command to a JSON Action Plan.
+    # FEW-SHOT LEARNING: Show 5 examples để model học pattern
+    prompt = f"""You are a strict JSON converter. You MUST use action names from examples below.
 
-USER COMMAND: "{user_command}"
+CRITICAL: ONLY these action names are valid:
+navigate, checkbox, download, upload, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click
 
-AVAILABLE ACTIONS:
-1. navigate: {{"action": "navigate", "path": ["Menu1", "Menu2", "Menu3"]}}
-2. checkbox: {{"action": "checkbox", "target": "ColumnName", "value": "random_N" or "all" or "specific_id"}}
-3. download: {{"action": "download", "target": "Export CSV", "value": "filename.csv"}}
-4. upload: {{"action": "upload", "target": "Import CSV", "value": "filename.csv"}}
-5. manipulate_csv: {{"action": "manipulate_csv", "target": "file.csv", "operation": "add/edit/delete", "data": "ColName=Val1,Val2"}}
-6. smart_test_cycle: {{"action": "smart_test_cycle", "value": "file.csv"}}
-7. clone_row: {{"action": "clone_row", "target": "ID"}}
-8. edit_row: {{"action": "edit_row", "target": "ID"}}
-9. update_form: {{"action": "update_form", "data": {{"Field1": "Value1", "Field2": "Value2"}}}}
-   - For radio buttons, use EXACT label text as key with value "select"
-   - Example: {{"Use another currency": "select"}}
-10. save_form: {{"action": "save_form"}}
-11. scan_tabs: {{"action": "scan_tabs", "data": {{"Field": "Value"}}}}
-12. click: {{"action": "click", "target": "ButtonName"}}
-13. wait: {{"action": "wait"}}
+LEARN FROM THESE 5 EXAMPLES (COPY the action names EXACTLY):
 
-RULES:
-- Process LEFT to RIGHT
-- Output ONLY JSON array - MUST be valid, complete JSON
-- NO markdown tags (no ```json)
-- NO comments
-- CRITICAL: Always close all brackets properly {{}}, []
-- CRITICAL: Do NOT truncate the JSON output
+Example 1:
+Input: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID -> Export CSV test.csv"
+Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}}]
 
-EXAMPLES:
-Input: "Vào Data Configs -> Perk -> Perk -> Edit ABC"
-Output: [{{"action":"navigate","path":["Data Configs","Perk","Perk"]}},{{"action":"edit_row","target":"ABC"}}]
+Example 2:
+Input: "Export CSV data.csv -> Smart test cycle data.csv -> Import CSV data.csv"
+Output: [{{"action":"download","target":"Export CSV","value":"data.csv"}},{{"action":"smart_test_cycle","value":"data.csv"}},{{"action":"upload","target":"Import CSV","value":"data.csv"}}]
 
-Input: "Vào Live Events -> Offer -> Offer Section -> Clone quanvm_section_1 -> New SectionID: hieunm_section_1, gate: r80"
-Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"clone_row","target":"quanvm_section_1"}},{{"action":"update_form","data":{{"New SectionID":"hieunm_section_1","gate":"r80"}}}},{{"action":"save_form"}}]
+Example 3:
+Input: "Click logo The Brick -> Chọn checkbox Offers -> Bấm Process"
+Output: [{{"action":"process_deployment","options":["Offers"]}}]
 
-Input: "Clone EventGacha_ABC -> New ID: test_1, gate: feb2026_live, chọn Use another currency, currency: GachaShard_XYZ"
-Output: [{{"action":"clone_row","target":"EventGacha_ABC"}},{{"action":"update_form","data":{{"New Event ID":"test_1","Gate":"feb2026_live","Use another currency":"select","Currency":"GachaShard_XYZ"}}}},{{"action":"save_form"}}]
+Example 4:
+Input: "Vào Data Configs -> Perk -> Edit ABC123"
+Output: [{{"action":"navigate","path":["Data Configs","Perk"]}},{{"action":"edit_row","target":"ABC123"}}]
 
-Input: "Edit BossEvent_ABC -> Acquire lock -> sửa gate: LiveOpsTest -> Save -> Click menu Boss Details -> sửa Wrestler ID: SS_TheRock"
-Output: [{{"action":"edit_row","target":"BossEvent_ABC"}},{{"action":"click","target":"Acquire lock"}},{{"action":"update_form","data":{{"Gate":"LiveOpsTest"}}}},{{"action":"save_form"}},{{"action":"click","target":"Boss Details"}},{{"action":"update_form","data":{{"Wrestler ID":"SS_TheRock"}}}}]
+Example 5:
+Input: "Clone EventGacha_ABC -> New ID: test_1, Gate: feb2026"
+Output: [{{"action":"clone_row","target":"EventGacha_ABC"}},{{"action":"update_form","data":{{"New Event ID":"test_1","Gate":"feb2026"}}}},{{"action":"save_form"}}]
 
-Input: "Vào Scout Missions tab -> sửa Scout Phase Start Time: 2025-08-20 10:00, End Time: 2025-08-25 15:00"
-Output: [{{"action":"click","target":"Scout Missions"}},{{"action":"update_form","data":{{"Scout Phase Start Time":"2025-08-20 10:00","End Time":"2025-08-25 15:00"}}}}]
+NOW CONVERT THIS COMMAND (use same action names as examples above):
+"{user_command}"
 
-Now convert the USER COMMAND above. Output JSON only:"""
+Output ONLY JSON array:"""
 
-    # Gọi model với config tối ưu
+    # Gọi model với config tối ưu (temperature=0 để less creative)
     json_output = call_ollama(MODEL_FORMATTING, prompt, optimized=True)
     unload_model(MODEL_FORMATTING)
 
     if not json_output:
         return []
+
+    # [DEBUG] Print raw model output to see what AI generated
+    print(f"\n   🔍 DEBUG - RAW MODEL OUTPUT (first 800 chars):")
+    print(f"   {json_output[:800]}...")
 
     # [DEBUG] Check raw output length
     if len(json_output) > 3000:
@@ -492,6 +760,13 @@ def dual_model_pipeline(user_command):
     
     Task: Convert them into a detailed, sequential JSON Action Plan.
 
+    ⚠️ CRITICAL RULE #0 - ONLY USE THESE ACTIONS:
+    You MUST ONLY use action names from this exact list. NO OTHER action names allowed:
+    - navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle
+    - clone_row, edit_row, update_form, save_form, scan_tabs, click, wait, process_deployment
+    
+    INVALID action names (NEVER USE): select_random_ids, export_csv, import_csv, click_logo, select_checkbox, click_button ❌
+
     AVAILABLE ACTIONS:
     1. "navigate": {{{{ "action": "navigate", "path": ["Menu1", "Menu2", "Menu3] }}}}
     2. "checkbox": 
@@ -507,7 +782,10 @@ def dual_model_pipeline(user_command):
        - Format: {{{{ "action": "manipulate_csv", "target": "filename.csv", "operation": "add", "data": "ColName=Val1,Val2" }}}}
        - Example: "Thêm 2 dòng BagID là A, B vào file.csv" 
          -> {{{{ "action": "manipulate_csv", "target": "file.csv", "operation": "add", "data": "BagID=A,B" }}}}
-    6. "smart_test_cycle": {{{{ "action": "smart_test_cycle", "target": "Import CSV", "value": "file.csv" }}}}
+    6. "smart_test_cycle": {{{{ "action": "smart_test_cycle", "value": "file.csv" }}}}
+       - Use for: "smart test", "test cycle", "kiểm thử file".
+       - Auto runs fuzz tests, uploads valid data, then navigates to Home.
+       - After this, user may ask to select checkboxes and Process.
     7. "clone_row": {{{{ "action": "clone_row", "target": "ID" }}}}
     8. "edit_row": {{{{ "action": "edit_row", "target": "ID" }}}}
     9. "update_form": {{{{ "action": "update_form", "data": {{{{ "Label": "Value", ... }}}} }}}}
@@ -528,8 +806,22 @@ def dual_model_pipeline(user_command):
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
        - "Go to A -> B -> C -> Clone D" => 1. navigate [A,B,C], 2. clone D.
     2. **STRICT JSON ONLY**: Output ONLY the JSON array.
-    3. **NO COMMENTS**: Do NOT output // or . If you do, the system will crash.
+    3. **NO COMMENTS**: Do NOT output // or <!---->. If you do, the system will crash.
     4. **NO MARKDOWN**: No ```json tags.
+
+    5. **FILE NAME REUSE** (CRITICAL):
+       - "file csv đó", "file đó", "that file", "same file" -> Reuse filename from previous download/manipulate step
+       - "Smart test cycle" (no filename) -> Reuse from previous Export/Download
+       - "Import CSV" (no filename) -> Reuse from previous Export or smart_test_cycle
+       - Example: "Export test.csv -> smart test file đó" -> {{{{"action": "smart_test_cycle", "value": "test.csv"}}}}
+       - Example: "Export data.csv -> Smart test cycle -> Import CSV" -> All use "data.csv"
+       - NEVER leave value empty!
+
+    6. **CLICK THE BRICK / PROCESS MAPPING** (CRITICAL):
+       - "Click The Brick", "Bấm The Brick", "Click logo", "Về Home" -> {{{{ "action": "process_deployment", "options": [] }}}}
+       - "Process", "Deploy", "Triển khai" after test -> {{{{ "action": "process_deployment", "options": ["X"] }}}}
+       - NEVER generate: {{{{ "action": "click", "target": "The Brick" }}}}
+       - NEVER generate: {{{{ "action": "click", "target": "logo The Brick" }}}}
 
     2. **FORM DATA EXTRACTION (CRITICAL)**:
        - Command: "Set ID: A, Gate: B, Currency: C and Currency Value: D"
@@ -574,6 +866,16 @@ def dual_model_pipeline(user_command):
        - "Edit A -> Scan tabs -> Set B" 
          => 1. edit_row(A), 2. scan_tabs(B)
     CRITICAL EXAMPLES:
+    
+    Ex 0: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID bất kỳ -> Export CSV offer_section.csv -> Smart test cycle file offer_section.csv -> Import CSV -> Click logo The Brick -> Chọn checbox Offers -> Bấm nút Process"
+    JSON: [
+      {{{{ "action": "navigate", "path": ["Live Events", "Offer", "Offer Section"] }}}},
+      {{{{ "action": "checkbox", "target": "ID", "value": "random_2" }}}},
+      {{{{ "action": "download", "target": "Export CSV", "value": "offer_section.csv" }}}},
+      {{{{ "action": "smart_test_cycle", "value": "offer_section.csv" }}}},
+      {{{{ "action": "upload", "target": "Import CSV", "value": "offer_section.csv" }}}},
+      {{{{ "action": "process_deployment", "options": ["Offers"] }}}}
+    ]
     
     Ex 1: "Edit ID ABC -> Quét các tab -> Sửa Cost: 10, Sửa Stock: 5"
     WRONG: [{{{{ "action": "edit_row" }}}}, {{{{ "action": "scan_tabs", "data": {{{{}}}} }}}}, {{{{ "action": "update_form", "data": {{{{ "Cost": "10" }}}} }}}}]
@@ -629,6 +931,29 @@ def dual_model_pipeline(user_command):
           "End Time": "2025-08-25 15:00"
       }}}} }}}},
       {{{{ "action": "save_form" }}}}
+    ]
+    
+    Ex 8: "Export CSV file data.csv -> smart test file csv đó -> import file đó"
+    JSON: [
+      {{{{ "action": "download", "target": "Export CSV", "value": "data.csv" }}}},
+      {{{{ "action": "smart_test_cycle", "value": "data.csv" }}}},
+      {{{{ "action": "upload", "target": "Import CSV", "value": "data.csv" }}}}
+    ]
+    
+    Ex 9: "Export -> smart test -> Click The Brick"
+    JSON: [
+      {{{{ "action": "download", "target": "Export CSV", "value": "file.csv" }}}},
+      {{{{ "action": "smart_test_cycle", "value": "file.csv" }}}},
+      {{{{ "action": "process_deployment", "options": [] }}}}
+    ]
+    
+    Ex 10: "Chọn 2 ID -> Export CSV offer_section.csv -> Smart test cycle -> Import CSV -> Click logo The Brick -> Chọn checkbox Offers -> Bấm nút Process"
+    JSON: [
+      {{{{ "action": "checkbox", "target": "ID", "value": "random_2" }}}},
+      {{{{ "action": "download", "target": "Export CSV", "value": "offer_section.csv" }}}},
+      {{{{ "action": "smart_test_cycle", "value": "offer_section.csv" }}}},
+      {{{{ "action": "upload", "target": "Import CSV", "value": "offer_section.csv" }}}},
+      {{{{ "action": "process_deployment", "options": ["Offers"] }}}}
     ]
 
     INPUT CONTEXT:
@@ -725,5 +1050,15 @@ def parse_command_to_json(user_command, use_fast_mode=True, context_plan=None):
         print("   🔧 Auto-fix: Adding missing Upload step.")
         target_file = plan[-1].get("target")
         plan.append({"action": "upload", "target": "Import CSV", "value": target_file})
+
+    # BƯỚC 4: POST-PROCESSING - Fix invalid action names (CRITICAL)
+    print("\n   🔧 POST-PROCESSING: Fixing AI action names...")
+    plan = fix_action_plan(plan)
+
+    # DEBUG: Print FULL plan để kiểm tra
+    print("\n" + "=" * 60)
+    print("🔍 DEBUG - FINAL FIXED PLAN:")
+    print(json.dumps(plan, indent=2, ensure_ascii=False))
+    print("=" * 60 + "\n")
 
     return plan
