@@ -1,0 +1,15 @@
+# ===== Python =====
+env/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# ===== Chrome automation =====
+chrome_profile/
+chrome-user-data/
+chrome-data/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db

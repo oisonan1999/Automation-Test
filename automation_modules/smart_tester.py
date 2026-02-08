@@ -246,6 +246,7 @@ class SmartTesterMixin:
                         # Phân loại kết quả
                         if "success" in text or "hoàn thành" in text:
                             print("      ✅ Success Popup detected & closed.")
+                            self._ensure_popup_closed(page)  # Đảm bảo popup đã đóng hoàn toàn
                             return True, "Success"
 
                         error_keywords = [
@@ -264,6 +265,7 @@ class SmartTesterMixin:
                             and "sure" not in text
                         ):
                             # print(f"      ❌ Error Popup detected & closed: {clean_text[:50]}...")
+                            self._ensure_popup_closed(page)  # Đảm bảo popup đã đóng hoàn toàn
                             return False, f"Error: {clean_text}"
 
                         # Nếu là popup confirm (Are you sure?) -> Loop sẽ quay lại và chờ popup kết quả tiếp theo
@@ -279,6 +281,7 @@ class SmartTesterMixin:
                 print(f"      ⚠️ Upload Exception: {e}")
                 time.sleep(1)
 
+        self._ensure_popup_closed(page)  # Đảm bảo popup đã đóng sau tất cả retry
         return False, "Max retries exceeded"
 
     def _upload_fuzz_fast(self, page, target_text, file_name, cached_selector=None):
@@ -332,6 +335,7 @@ class SmartTesterMixin:
                     pass
 
             if not btn or not btn.is_visible():
+                self._ensure_popup_closed(page)
                 return False, "Button not found", cached_selector
 
             # 2. Upload File (reduced timeout)
@@ -355,6 +359,7 @@ class SmartTesterMixin:
                         print(
                             f"   🎯 JS caught early popup at {int((time.time()-start_check)*1000)}ms: {popup_data['type']}"
                         )
+                        self._ensure_popup_closed(page)
                         return (
                             (popup_data["type"] == "PASS"),
                             str(popup_data["text"])[:100],
@@ -373,12 +378,14 @@ class SmartTesterMixin:
                                 print(
                                     f"   🎯 Found early modal: {'FAIL' if is_error else 'PASS'}"
                                 )
+                                self._ensure_popup_closed(page)
                                 return (not is_error, text[:100], cached_selector)
                     except:
                         pass
                     time.sleep(0.1)
 
             except Exception as upload_err:
+                self._ensure_popup_closed(page)
                 return False, f"Upload failed: {upload_err}", cached_selector
 
             # 3. Setup popup capture BEFORE clicking confirm
@@ -491,6 +498,7 @@ class SmartTesterMixin:
                                     print(
                                         f"   🎯 JS captured popup at {i*20}ms: {popup_data['type']}"
                                     )
+                                    self._ensure_popup_closed(page)
                                     return (
                                         (popup_data["type"] == "PASS"),
                                         str(popup_data["text"])[:100],
@@ -518,6 +526,7 @@ class SmartTesterMixin:
                                             print(
                                                 f"   🔍 Python found modal: {'FAIL' if is_error else 'PASS'}"
                                             )
+                                            self._ensure_popup_closed(page)
                                             return (
                                                 not is_error,
                                                 text[:100],
@@ -538,7 +547,8 @@ class SmartTesterMixin:
             while time.time() - start_time < 25:
                 res_found, res_type, res_text = self._scan_for_result_popup(page)
                 if res_found:
-                    # Popup tự tắt rồi, không cần đợi - return ngay lập tức
+                    # Đảm bảo popup đã đóng trước khi return
+                    self._ensure_popup_closed(page)
                     return (
                         (res_type == "PASS"),
                         str(res_text or "")[:100],
@@ -555,13 +565,16 @@ class SmartTesterMixin:
                     time.sleep(0.5)
                     res_found, res_type, res_text = self._scan_for_result_popup(page)
                     if res_found:
-                        # Return ngay, không đợi popup đóng
+                        # Đóng popup trước khi return
+                        self._ensure_popup_closed(page)
                         return (res_type == "PASS"), res_text[:100], cached_selector
                 time.sleep(0.3)
 
+            self._ensure_popup_closed(page)
             return False, "Timeout (25s)", cached_selector
 
         except Exception as e:
+            self._ensure_popup_closed(page)
             return False, str(e), cached_selector
 
     def _upload_single_attempt(self, page, target_text, file_name):
@@ -628,20 +641,39 @@ class SmartTesterMixin:
     def _ensure_popup_closed(self, page):
         """Dọn dẹp popup bằng JS trực tiếp để tránh bị chặn bởi Overlay"""
         try:
-            # Dùng JS tìm và click nút OK (swal2-confirm)
+            # Dùng JS tìm và click nút OK/Close/Confirm
             # Cách này mạnh hơn .click() của Playwright vì nó bỏ qua check visibility/overlay
             page.evaluate(
                 """
+                // Try SweetAlert buttons
                 const confirmBtn = document.querySelector('button.swal2-confirm');
                 const closeBtn = document.querySelector('button.swal2-close');
-                const modalBtn = document.querySelector('.modal.show button[data-dismiss="modal"]');
                 
-                if (confirmBtn && confirmBtn.offsetParent !== null) confirmBtn.click();
-                else if (closeBtn && closeBtn.offsetParent !== null) closeBtn.click();
-                else if (modalBtn && modalBtn.offsetParent !== null) modalBtn.click();
+                // Try Bootstrap modal buttons
+                const modalBtn = document.querySelector('.modal.show button[data-dismiss="modal"]');
+                const modalClose = document.querySelector('.modal.show .close');
+                const modalConfirm = document.querySelector('.modal.show button.btn-primary');
+                
+                // Try generic close buttons
+                const genericClose = document.querySelector('.popup button[class*="close"], .dialog button[class*="close"]');
+                
+                // Click first available button (use .offsetParent to check if truly visible)
+                if (confirmBtn && confirmBtn.offsetParent !== null) {
+                    confirmBtn.click();
+                } else if (closeBtn && closeBtn.offsetParent !== null) {
+                    closeBtn.click();
+                } else if (modalBtn && modalBtn.offsetParent !== null) {
+                    modalBtn.click();
+                } else if (modalClose && modalClose.offsetParent !== null) {
+                    modalClose.click();
+                } else if (modalConfirm && modalConfirm.offsetParent !== null) {
+                    modalConfirm.click();
+                } else if (genericClose && genericClose.offsetParent !== null) {
+                    genericClose.click();
+                }
             """
             )
-            time.sleep(0.3)
+            time.sleep(0.4)  # Tăng thời gian chờ để đảm bảo animation hoàn tất
         except:
             pass
 
@@ -649,10 +681,16 @@ class SmartTesterMixin:
         try:
             page.evaluate(
                 """
-                const overlays = document.querySelectorAll('.swal2-container, .modal-backdrop');
+                // Remove all overlay containers
+                const overlays = document.querySelectorAll('.swal2-container, .modal-backdrop, .modal.show');
                 overlays.forEach(el => el.remove());
+                
+                // Clean body classes
                 document.body.classList.remove('swal2-shown', 'swal2-height-auto', 'modal-open');
+                
+                // Restore scroll
                 document.body.style.overflow = 'auto';
+                document.body.style.paddingRight = '';
             """
             )
         except:

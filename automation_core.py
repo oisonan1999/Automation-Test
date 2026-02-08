@@ -7,6 +7,9 @@ import csv
 import json
 import random
 import shutil
+import sys
+import asyncio
+import threading
 from playwright.sync_api import sync_playwright
 import pandas as pd
 import io
@@ -65,6 +68,23 @@ class BrickAutomation(
         if isinstance(action_plan, dict):
             action_plan = [action_plan]
 
+        # === Windows Fix: Playwright cần ProactorEventLoop để tạo subprocess ===
+        # Streamlit/Tornado dùng SelectorEventLoop (không hỗ trợ subprocess trên Windows)
+        # → Tạm chuyển sang ProactorEventLoopPolicy chỉ trong lúc chạy Playwright
+        _original_policy = None
+        if sys.platform == 'win32':
+            _original_policy = asyncio.get_event_loop_policy()
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+        try:
+            return self._execute_with_playwright(action_plan)
+        finally:
+            if _original_policy is not None:
+                asyncio.set_event_loop_policy(_original_policy)
+
+    def _execute_with_playwright(self, action_plan):
+        """Core logic chạy Playwright - được gọi sau khi event loop policy đã được set đúng."""
+        report_logs = []
         with sync_playwright() as p:
             try:
                 browser, page = self.get_existing_page(p)

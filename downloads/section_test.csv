@@ -1,0 +1,3 @@
+﻿SectionID,gate,title,subtitle,tooltip,weight,StartDate,EndDate,RepeatWeekly,header_color,background_color,texture,title_icon,is_prize_wall,tab_id
+Section_Dec2025_Wknd1_PW,dec2025_wknd1,!!SECTION_DEC2025_WKND1_PW_NAME,!!SECTION_DEC2025_WKND1_PW_DESC,!!SECTION_DEC2025_WKND1_PW_DESC,1003008645,"12/12/2025, 20:00","12/16/2025, 20:00",,Blue,DarkBlue,UI/StoreV2/OfferSections/Header_12DAys_Premium,,true,prize_wall
+Section_Nov2025_Midwk5,nov2025_midwk5,!!SECTION_NOV2025_MIDWK5_NAME,!!SECTION_NOV2025_MIDWK5_DESC,!!SECTION_NOV2025_MIDWK5_DESC,1003008643,,,,DarkBlue,DarkBlue,UI/StoreV2/OfferSections/Header_Orange_2025,,false,feature
