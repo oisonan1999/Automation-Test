@@ -549,14 +549,21 @@ def fix_action_plan(plan):
         fixed_plan.append(step)
 
     # ============================================================
-    # STEP 3: Merge consecutive process_deployment-related actions
+    # STEP 3: Merge consecutive NAVIGATE steps into path array
+    # Pattern: navigate(A) → navigate(B) → navigate(C)
+    # Should become: navigate(path=[A, B, C])
+    # ============================================================
+    fixed_plan = _merge_navigate_steps(fixed_plan)
+
+    # ============================================================
+    # STEP 4: Merge consecutive process_deployment-related actions
     # Pattern: click_logo → select_checkbox(Offers) → click_button(Process)
     # Should become: process_deployment(options=["Offers"])
     # ============================================================
     merged_plan = _merge_process_deployment_steps(fixed_plan)
 
     # ============================================================
-    # STEP 4: AUTO-INFER deployment options if empty
+    # STEP 5: AUTO-INFER deployment options if empty
     # If process_deployment has no options, infer from context
     # ============================================================
     merged_plan = _auto_infer_deployment_options(merged_plan)
@@ -567,6 +574,89 @@ def fix_action_plan(plan):
         )
 
     return merged_plan
+
+
+def _merge_navigate_steps(plan):
+    """
+    Merge consecutive navigate steps into a single navigate with path array.
+
+    Example:
+      Input:  [{"action": "navigate", "target": "A"},
+               {"action": "navigate", "target": "B"},
+               {"action": "navigate", "target": "C"}]
+      Output: [{"action": "navigate", "path": ["A", "B", "C"]}]
+
+    This optimizes navigation by using smart_navigate_path() instead of clicking each menu item separately.
+    """
+    if not plan:
+        return plan
+
+    print(f"\n   📋 DEBUG - Checking for consecutive navigate steps...")
+
+    merged = []
+    i = 0
+
+    while i < len(plan):
+        step = plan[i]
+        action = step.get("action", "")
+
+        if action == "navigate":
+            # Start collecting navigate path
+            path = []
+
+            # If this navigate already has a path array, use it
+            if step.get("path"):
+                existing_path = step.get("path")
+                if isinstance(existing_path, list):
+                    path = existing_path
+                else:
+                    path = [existing_path]
+            else:
+                # Single target navigate
+                target = step.get("target")
+                if target:
+                    path = [target]
+
+            # Look forward for more consecutive navigate steps
+            j = i + 1
+            while j < len(plan):
+                next_step = plan[j]
+                next_action = next_step.get("action", "")
+
+                if next_action == "navigate":
+                    # Merge this into path
+                    if next_step.get("path"):
+                        next_path = next_step.get("path")
+                        if isinstance(next_path, list):
+                            path.extend(next_path)
+                        else:
+                            path.append(next_path)
+                    else:
+                        next_target = next_step.get("target")
+                        if next_target:
+                            path.append(next_target)
+                    j += 1
+                else:
+                    # Stop merging if we hit a non-navigate action
+                    break
+
+            # Create merged navigate step
+            if len(path) > 1:
+                merged_step = {"action": "navigate", "path": path}
+                print(
+                    f"   🔧 MERGE: {len(path)} navigate steps → navigate(path={path})"
+                )
+                merged.append(merged_step)
+            elif len(path) == 1:
+                # Single navigate, keep as is
+                merged.append({"action": "navigate", "path": path})
+
+            i = j
+        else:
+            merged.append(step)
+            i += 1
+
+    return merged
 
 
 def _auto_infer_deployment_options(plan):
@@ -582,30 +672,93 @@ def _auto_infer_deployment_options(plan):
         return plan
 
     # Mapping từ keyword → deployment option name
+    # Based on actual Home screen checkboxes
     DEPLOYMENT_INFERENCE_MAP = {
-        # Navigation paths
-        "offer section": "Offers",
+        # === DEPLOYMENT CHECKBOXES (Exact names from Home screen) ===
+        # Left column
+        "localization": "Localization",
+        "excel": "Excel",
+        "currency": "Currency",
+        "consumables": "Consumables",
+        "consumable": "Consumables",
+        "faction feud": "Faction Feud",
+        "grab bag": "Grab Bag",
+        "grabbag": "Grab Bag",
+        "chat channels": "Chat Channels",
+        "chat channel": "Chat Channels",
+        "pve": "PVE",
+        "faction mission": "Faction Mission",
+        "merch store": "Merch Store",
+        "feature setting": "Feature Setting",
+        "invasion": "Invasion",
+        "mizz missions": "Mizz Missions",
+        "mizz mission": "Mizz Missions",
+        "subscription 1.5": "Subscription 1.5",
+        "feature gate setting": "Feature Gate Setting",
+        "versus shop": "Versus Shop",
+        "league config": "League Config",
+        "champion rewards": "Champion Rewards",
+        "battle shop": "Battle Shop",
+        "notification": "Notification",
+        "reactivation flow & contest": "Reactivation Flow & Contest",
+        "reactivation flow": "Reactivation Flow & Contest",
+        "auto play & speed up": "Auto Play & Speed Up",
+        "auto play": "Auto Play & Speed Up",
+        "news modal": "News Modal",
+        "stat change": "Stat Change",
+        # Right column
+        "gacha events": "Gacha Events",
+        "gacha event": "Gacha Events",
+        "gacha": "Gacha Events",
+        "offers": "Offers",
         "offer": "Offers",
+        "missions": "Missions",
+        "mission": "Missions",
+        "fight card": "Fight Card",
+        "cash contract": "Cash Contract",
+        "liveops message": "LiveOps Message",
+        "live ops message": "LiveOps Message",
+        "rbe": "RBE",
+        "faction lockbox": "Faction Lockbox",
+        "promo code": "Promo Code",
+        "subscription & vip": "Subscription & VIP",
+        "subscription vip": "Subscription & VIP",
+        "perks": "Perks",
+        "perk": "Perks",
+        "effect cap setting": "Effect Cap Setting",
+        "social box gacha": "Social Box Gacha",
+        "monthly bonus": "Monthly Bonus",
+        "versus tournament": "Versus Tournament",
+        "player league": "Player League",
+        "strap and medal": "Strap and Medal",
+        "superstars": "Superstars",
+        "superstar": "Superstars",
+        "boost": "Boost",
+        "faction boss": "Faction Boss",
+        "moment poster": "Moment Poster",
+        "time challenge": "Time Challenge",
+        "social friends": "Social Friends",
+        "social friend": "Social Friends",
+        "token": "Token",
+        # === NAVIGATION CONTEXT (for auto-inference) ===
+        "offer section": "Offers",
         "shop tier": "Offers",
         "shop": "Offers",
-        "gacha": "Gacha",
         "prize wall": "Prize Wall",
         "prizewall": "Prize Wall",
         "live event": "Live Events",
         "event": "Live Events",
-        "perk": "Data Configs",
-        "consumable": "Data Configs",
-        "currency": "Data Configs",
         "config": "Data Configs",
         "blueprint": "Hyper Blueprint",
-        # CSV filenames
-        "gacha_": "Gacha",
+        # === CSV FILENAMES ===
+        "gacha_": "Gacha Events",
         "offer_": "Offers",
         "section_": "Offers",
         "shop_": "Offers",
         "prize": "Prize Wall",
         "event_": "Live Events",
-        "perk_": "Data Configs",
+        "perk_": "Perks",
+        "mission_": "Missions",
         "config_": "Data Configs",
     }
 
@@ -722,16 +875,78 @@ def _merge_process_deployment_steps(plan):
             items_to_remove = []  # Track indices to remove
 
             # Common deployment options keywords
+            # Based on actual Home screen checkboxes
             deployment_keywords = [
+                # Left column
+                "localization",
+                "excel",
+                "currency",
+                "consumables",
+                "consumable",
+                "faction feud",
+                "grab bag",
+                "grabbag",
+                "chat channels",
+                "chat channel",
+                "pve",
+                "faction mission",
+                "merch store",
+                "feature setting",
+                "invasion",
+                "mizz missions",
+                "mizz mission",
+                "subscription 1.5",
+                "feature gate setting",
+                "versus shop",
+                "league config",
+                "champion rewards",
+                "battle shop",
+                "notification",
+                "reactivation flow",
+                "auto play",
+                "news modal",
+                "stat change",
+                # Right column
+                "gacha events",
+                "gacha event",
+                "gacha",
                 "offers",
                 "offer",
+                "missions",
+                "mission",
+                "fight card",
+                "cash contract",
+                "liveops message",
+                "live ops message",
+                "rbe",
+                "faction lockbox",
+                "promo code",
+                "subscription & vip",
+                "subscription vip",
+                "perks",
+                "perk",
+                "effect cap setting",
+                "social box gacha",
+                "monthly bonus",
+                "versus tournament",
+                "player league",
+                "strap and medal",
+                "superstars",
+                "superstar",
+                "boost",
+                "faction boss",
+                "moment poster",
+                "time challenge",
+                "social friends",
+                "social friend",
+                "token",
+                # Additional navigation contexts
                 "data configs",
                 "data config",
                 "live events",
                 "live event",
                 "hyper blueprint",
                 "prize wall",
-                "gacha",
                 "shop",
                 "store",
                 "event",
@@ -850,6 +1065,7 @@ def _merge_process_deployment_steps(plan):
                                 break
 
                     # If not random_ OR is deployment option name, merge it
+                    # CRITICAL: Even if value is random_X, if target/checkbox contains deployment keyword, still merge it
                     if not value.startswith("random_") or is_deployment_option:
                         # Prefer "checkbox" field (AI's new convention), then checkbox_label, then target, then value
                         opt = checkbox_field or checkbox_label or target or value
@@ -861,6 +1077,10 @@ def _merge_process_deployment_steps(plan):
                         j += 1
                     else:
                         # It's a table checkbox (random_X without deployment keyword)
+                        # Only break if we're sure it's NOT a deployment option
+                        print(
+                            f"   ⚠️  Skipping table checkbox (target='{target}', value='{value}')"
+                        )
                         break
                 elif next_action == "click" and next_step.get("target", "").lower() in (
                     "process",
@@ -897,15 +1117,76 @@ def _merge_process_deployment_steps(plan):
     # 🆕 STEP 4: Filter out invalid/duplicate actions
     # Common deployment options keywords (reuse from merge logic)
     deployment_keywords = [
+        # Left column
+        "localization",
+        "excel",
+        "currency",
+        "consumables",
+        "consumable",
+        "faction feud",
+        "grab bag",
+        "grabbag",
+        "chat channels",
+        "chat channel",
+        "pve",
+        "faction mission",
+        "merch store",
+        "feature setting",
+        "invasion",
+        "mizz missions",
+        "mizz mission",
+        "subscription 1.5",
+        "feature gate setting",
+        "versus shop",
+        "league config",
+        "champion rewards",
+        "battle shop",
+        "notification",
+        "reactivation flow",
+        "auto play",
+        "news modal",
+        "stat change",
+        # Right column
+        "gacha events",
+        "gacha event",
+        "gacha",
         "offers",
         "offer",
+        "missions",
+        "mission",
+        "fight card",
+        "cash contract",
+        "liveops message",
+        "live ops message",
+        "rbe",
+        "faction lockbox",
+        "promo code",
+        "subscription & vip",
+        "subscription vip",
+        "perks",
+        "perk",
+        "effect cap setting",
+        "social box gacha",
+        "monthly bonus",
+        "versus tournament",
+        "player league",
+        "strap and medal",
+        "superstars",
+        "superstar",
+        "boost",
+        "faction boss",
+        "moment poster",
+        "time challenge",
+        "social friends",
+        "social friend",
+        "token",
+        # Additional navigation contexts
         "data configs",
         "data config",
         "live events",
         "live event",
         "hyper blueprint",
         "prize wall",
-        "gacha",
         "shop",
         "store",
         "event",
@@ -1030,14 +1311,40 @@ Example 8:
 Input: "Click The Brick"
 Output: [{{"action":"process_deployment","options":[]}}]
 
+Example 9:
+Input: "Vào Data Configs -> Perk -> Perk"
+Output: [{{"action":"navigate","path":["Data Configs","Perk","Perk"]}}]
+
+Example 10:
+Input: "Export perk_test.csv -> Smart test -> Import -> Chọn checkbox Perks -> Bấm Process"
+Output: [{{"action":"download","target":"Export CSV","value":"perk_test.csv"}},{{"action":"smart_test_cycle","value":"perk_test.csv"}},{{"action":"upload","target":"Import CSV","value":"perk_test.csv"}},{{"action":"process_deployment","options":["Perks"]}}]
+
+Example 11:
+Input: "Click logo The Brick -> Chọn Gacha Events -> Process"
+Output: [{{"action":"process_deployment","options":["Gacha Events"]}}]
+
+Example 12:
+Input: "Bấm The Brick -> Chọn Currency và Consumables -> Bấm Process"
+Output: [{{"action":"process_deployment","options":["Currency","Consumables"]}}]
+
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
-- When user says "Process" after test/upload: Try to infer deployment option from navigation context
-- If navigated to "Offer" area → use options:["Offers"]
-- If navigated to "Gacha" area → use options:["Gacha"]  
-- If navigated to "Live Events" → use options:["Live Events"]
-- If unsure, leave options empty []
+- NAVIGATION: Always merge menu path into ONE navigate action with "path" array
+  - CORRECT: {{"action":"navigate","path":["A","B","C"]}}
+  - WRONG: {{"action":"navigate","target":"A"}},{{"action":"navigate","target":"B"}},{{"action":"navigate","target":"C"}}
+
+- DEPLOYMENT OPTIONS (when user says "Chọn checkbox X" or "Process với X"):
+  Common checkboxes: "Offers", "Gacha Events", "Missions", "Perks", "Live Events", "Currency", 
+  "Consumables", "PVE", "Faction Mission", "Fight Card", "Cash Contract", "RBE", "Boost", 
+  "Superstars", "Faction Boss", "Token", "Promo Code", "Notification", etc.
+  
+- Auto-infer from navigation context when possible:
+  * Navigated to "Offer" area → options:["Offers"]
+  * Navigated to "Gacha" area → options:["Gacha Events"]
+  * Navigated to "Perk" area → options:["Perks"]
+  * Navigated to "Mission" area → options:["Missions"]
+  * If unsure, leave options empty []
 
 NOW CONVERT THIS COMMAND (use same action names as examples above):
 "{user_command}"
@@ -1166,7 +1473,11 @@ def dual_model_pipeline(user_command):
     INVALID action names (NEVER USE): select_random_ids, export_csv, import_csv, click_logo, select_checkbox, click_button ❌
 
     AVAILABLE ACTIONS:
-    1. "navigate": {{{{ "action": "navigate", "path": ["Menu1", "Menu2", "Menu3] }}}}
+    1. "navigate": 
+       - RULE: Always merge menu path into ONE action with "path" array
+       - Format: {{{{ "action": "navigate", "path": ["Menu1", "Menu2", "Menu3"] }}}}
+       - Example: "Vào Data Configs -> Perk -> Perk" -> {{{{ "action": "navigate", "path": ["Data Configs", "Perk", "Perk"] }}}}
+       - NEVER generate multiple separate navigate actions
     2. "checkbox": 
        - Rule: Use for "Chọn", "Tick", "Select".
        - Format: {{{{ "action": "checkbox", "target": "ColumnName", "value": "random_N" or "all" }}}}
@@ -1203,11 +1514,18 @@ def dual_model_pipeline(user_command):
     CRITICAL RULES:
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
        - "Go to A -> B -> C -> Clone D" => 1. navigate [A,B,C], 2. clone D.
-    2. **STRICT JSON ONLY**: Output ONLY the JSON array.
-    3. **NO COMMENTS**: Do NOT output // or <!---->. If you do, the system will crash.
-    4. **NO MARKDOWN**: No ```json tags.
+    
+    2. **NAVIGATION PATH** (CRITICAL):
+       - ALWAYS merge menu path into ONE navigate action with "path" array
+       - CORRECT: {{{{"action": "navigate", "path": ["A", "B", "C"]}}}}
+       - WRONG: {{{{"action": "navigate", "target": "A"}}}}, {{{{"action": "navigate", "target": "B"}}}}, {{{{"action": "navigate", "target": "C"}}}}
+       - Example: "Vào Data Configs -> Perk -> Perk" → {{{{"action": "navigate", "path": ["Data Configs", "Perk", "Perk"]}}}}
+    
+    3. **STRICT JSON ONLY**: Output ONLY the JSON array.
+    4. **NO COMMENTS**: Do NOT output // or <!---->. If you do, the system will crash.
+    5. **NO MARKDOWN**: No ```json tags.
 
-    5. **FILE NAME REUSE** (CRITICAL):
+    6. **FILE NAME REUSE** (CRITICAL):
        - "file csv đó", "file đó", "that file", "same file" -> Reuse filename from previous download/manipulate step
        - "Smart test cycle" (no filename) -> Reuse from previous Export/Download
        - "Import CSV" (no filename) -> Reuse from previous Export or smart_test_cycle
@@ -1215,21 +1533,33 @@ def dual_model_pipeline(user_command):
        - Example: "Export data.csv -> Smart test cycle -> Import CSV" -> All use "data.csv"
        - NEVER leave value empty!
 
-    6. **CLICK THE BRICK / PROCESS MAPPING** (CRITICAL):
+    7. **CLICK THE BRICK / PROCESS MAPPING** (CRITICAL):
        - "Click The Brick", "Bấm The Brick", "Click logo", "Về Home" → {{{{ "action": "process_deployment", "options": [] }}}}
        - "Process", "Deploy", "Triển khai" after test → {{{{ "action": "process_deployment", "options": ["X"] }}}}
        - IMPORTANT: If user specifies checkbox (e.g., "Chọn Offers rồi Process"), include in options
+       
+       - DEPLOYMENT CHECKBOXES (exact names from Home screen):
+         Left: Localization, Excel, Currency, Consumables, Faction Feud, Grab Bag, Chat Channels, PVE,
+               Faction Mission, Merch Store, Feature Setting, Invasion, Mizz Missions, Subscription 1.5,
+               Feature Gate Setting, Versus Shop, League Config, Champion Rewards, Battle Shop, Notification,
+               Reactivation Flow & Contest, Auto Play & Speed Up, News Modal, Stat Change
+         Right: Gacha Events, Offers, Missions, Fight Card, Cash Contract, LiveOps Message, RBE,
+                Faction Lockbox, Promo Code, Subscription & VIP, Perks, Effect Cap Setting, Social Box Gacha,
+                Monthly Bonus, Versus Tournament, Player League, Strap and Medal, Superstars, Boost,
+                Faction Boss, Moment Poster, Time Challenge, Social Friends, Token
+       
        - If no checkbox mentioned but context is clear from navigation, TRY TO INFER:
          * Navigated to "Offer"/"Shop" → options: ["Offers"]
-         * Navigated to "Gacha" → options: ["Gacha"]  
+         * Navigated to "Gacha" → options: ["Gacha Events"]
          * Navigated to "Prize Wall" → options: ["Prize Wall"]
          * Navigated to "Live Events" → options: ["Live Events"]
-         * Navigated to "Data Configs" → options: ["Data Configs"]
+         * Navigated to "Perk" path → options: ["Perks"]
+         * Navigated to "Mission" path → options: ["Missions"]
        - When unsure, leave options empty [] (auto-infer will handle it)
        - NEVER generate: {{{{ "action": "click", "target": "The Brick" }}}}
        - NEVER generate: {{{{ "action": "click", "target": "logo The Brick" }}}}
 
-    2. **FORM DATA EXTRACTION (CRITICAL)**:
+    8. **FORM DATA EXTRACTION (CRITICAL)**:
        - Command: "Set ID: A, Gate: B, Currency: C and Currency Value: D"
        - You MUST extract ALL 4 fields into one "update_form" action.
        - Ignore connectors like "and", "và", "then", "with".
@@ -1244,7 +1574,7 @@ def dual_model_pipeline(user_command):
            }}}}
          }}}}
 
-    3. **CLONE FLOW (CRITICAL)**:
+    9. **CLONE FLOW (CRITICAL)**:
        - Command: "Clone 'A' -> New ID: B, gate: C, chọn radio Use another currency, currency: D"
        - THE FORM DATA MUST INCLUDE:
          * Input fields: "New Event ID" or just the suffix part
@@ -1264,13 +1594,15 @@ def dual_model_pipeline(user_command):
        - IMPORTANT: Radio button label MUST be the EXACT text shown on screen.
        - For radio: value can be "select", "true", "on", or "1".
        
-    4. **TABLE vs FORM DISTINCTION**:
+    10. **TABLE vs FORM DISTINCTION**:
        - Command: "Bấm nút Edit của BagID: ABC" 
          -> CORRECT: {{{{ "action": "edit_row", "target": "ABC" }}}}
          -> WRONG:   {{{{ "action": "update_form", "data": {{{{ "BagID": "ABC" }}}} }}}} (Do NOT do this)
-    5. **SEQUENCE**:
+    
+    11. **SEQUENCE**:
        - "Edit A -> Scan tabs -> Set B" 
          => 1. edit_row(A), 2. scan_tabs(B)
+    
     CRITICAL EXAMPLES:
     
     Ex 0: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID bất kỳ -> Export CSV offer_section.csv -> Smart test cycle file offer_section.csv -> Import CSV -> Click logo The Brick -> Chọn checbox Offers -> Bấm nút Process"
