@@ -72,7 +72,7 @@ class BrickAutomation(
         # Streamlit/Tornado dùng SelectorEventLoop (không hỗ trợ subprocess trên Windows)
         # → Tạm chuyển sang ProactorEventLoopPolicy chỉ trong lúc chạy Playwright
         _original_policy = None
-        if sys.platform == 'win32':
+        if sys.platform == "win32":
             _original_policy = asyncio.get_event_loop_policy()
             asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
@@ -406,18 +406,28 @@ class BrickAutomation(
                     time.sleep(1)
                 # ====================================================
                 # [MỚI] TỰ ĐỘNG REFRESH TRANG SAU KHI HOÀN THÀNH
+                # Skip refresh if process_deployment was executed (user is already on Home page)
                 # ====================================================
-                print("   🔄 Job Finished. Refreshing page to clean state...")
-                try:
-                    # Reload trang
-                    page.reload()
-                    # Chờ nhẹ 1 chút để đảm bảo trang load xong cơ bản
+                has_process_deployment = any(
+                    step.get("action") == "process_deployment" for step in action_plan
+                )
+
+                if has_process_deployment:
+                    print(
+                        "   ℹ️  Skipping page refresh (process_deployment already navigated to Home)"
+                    )
+                else:
+                    print("   🔄 Job Finished. Refreshing page to clean state...")
                     try:
-                        page.wait_for_load_state("domcontentloaded", timeout=5000)
-                    except:
-                        pass
-                except Exception as e:
-                    print(f"   ⚠️ Refresh warning: {e}")
+                        # Reload trang
+                        page.reload()
+                        # Chờ nhẹ 1 chút để đảm bảo trang load xong cơ bản
+                        try:
+                            page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        except:
+                            pass
+                    except Exception as e:
+                        print(f"   ⚠️ Refresh warning: {e}")
                 return report_logs
             except Exception as e:
                 print(f"CRASH: {e}")

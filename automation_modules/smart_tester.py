@@ -167,6 +167,145 @@ class SmartTesterMixin:
         return pd.DataFrame(fuzzed_rows)
 
     # ============================
+    # HELPER: AUTO-FIX DUPLICATE CSV
+    # ============================
+    def _fix_duplicate_csv(self, csv_path, error_msg):
+        """
+        Tự động fix duplicate entry trong CSV bằng cách thêm timestamp/random suffix.
+
+        Args:
+            csv_path: Đường dẫn file CSV cần fix
+            error_msg: Message lỗi từ popup (chứa thông tin về duplicate key)
+
+        Returns:
+            bool: True nếu fix thành công
+        """
+        try:
+            import re
+            import time
+
+            print(f"   🔧 AUTO-FIX: Analyzing duplicate error...")
+            print(f"      Error: {error_msg[:150]}...")
+
+            # Parse error để tìm duplicate value và row numbers
+            # Example: "row 2: (1062, "duplicate entry 'section_1770608609-dec2025_12days_claims' for key..."
+
+            # Extract affected row numbers
+            row_matches = re.findall(r"row (\d+):", error_msg.lower())
+            affected_rows = [int(r) for r in row_matches] if row_matches else []
+
+            if affected_rows:
+                print(f"      🎯 Affected rows: {affected_rows}")
+
+            # Extract duplicate value
+            duplicate_value_match = re.search(
+                r"duplicate entry '([^']+)'", error_msg.lower()
+            )
+
+            if not duplicate_value_match:
+                print("      ⚠️ Cannot parse duplicate value from error")
+                # Fallback: Still try to fix by adding timestamp to all ID columns
+                duplicate_value = "unknown"
+            else:
+                duplicate_value = duplicate_value_match.group(1)
+                print(f"      📌 Duplicate value: '{duplicate_value}'")
+
+            # Đọc CSV
+            df = pd.read_csv(csv_path)
+            if df.empty:
+                print("      ⚠️ CSV is empty")
+                return False
+
+            print(f"      📊 CSV has {len(df)} rows, {len(df.columns)} columns")
+
+            # Strategy: Thêm timestamp suffix vào các field có khả năng gây duplicate
+            # Common unique fields: ID, SectionID, OfferID, name, title, etc.
+
+            timestamp_suffix = f"_{int(time.time())}"
+            fixed_count = 0
+
+            # Identify which columns might be causing duplicate
+            # Based on error "section_1770608609-dec2025_12days_claims", likely format is: ID-gate
+            # Constraint "offers_section_name_gate" suggests (name, gate) or (SectionID, gate) combination
+
+            # CRITICAL: Exclude columns that should NOT be modified
+            EXCLUDE_COLUMNS = [
+                "tab_id",
+                "tabid",  # Only allows: feature, prize_wall, basic_loot
+                "gate",  # Gate names should not be modified
+                "type",
+                "category",  # Enum values
+                "showinstore",
+                "is_prize_wall",  # Boolean fields
+            ]
+
+            id_columns = [
+                col
+                for col in df.columns
+                if any(
+                    keyword in col.lower()
+                    for keyword in ["id", "sectionid", "offerid", "name", "eventid"]
+                )
+                and not any(
+                    excl in col.lower() for excl in EXCLUDE_COLUMNS
+                )  # 🆕 Filter out excluded
+            ]
+
+            print(f"      🔍 Found potential ID columns: {id_columns}")
+
+            # Fix strategy: Add UNIQUE suffix to ALL rows' ID columns
+            # Use timestamp + index to ensure global uniqueness (not just within CSV)
+            # This prevents conflicts with existing database records
+            base_timestamp = int(time.time())
+
+            for idx in range(len(df)):
+                # Generate unique suffix: _test_timestamp+idx
+                # This ensures uniqueness both within CSV AND against existing DB records
+                row_suffix = f"_test_{base_timestamp + idx}"
+
+                for col in id_columns:
+                    if col in df.columns:
+                        original_value = str(df.at[idx, col])
+
+                        # Skip if empty or already has timestamp pattern
+                        if not original_value or original_value == "nan":
+                            continue
+
+                        # Check if already modified (has test_timestamp pattern)
+                        if re.search(r"_test_\d+$", original_value):
+                            continue
+
+                        # Add unique suffix
+                        new_value = f"{original_value}{row_suffix}"
+                        df.at[idx, col] = new_value
+                        fixed_count += 1
+                        print(
+                            f"      ✏️  Row {idx+1}, '{col}': {original_value[:50]} → {new_value[:50]}"
+                        )
+
+            # Don't fix 'gate' column as it's a foreign key reference
+            # Gate values must match existing gates in the system
+
+            if fixed_count == 0:
+                print(
+                    "      ⚠️ No ID columns were modified (couldn't identify unique constraint)"
+                )
+                print("      💡 Tip: Duplicate error may require manual intervention")
+                return False
+                return False
+
+            # Save fixed CSV
+            df.to_csv(csv_path, index=False)
+            print(
+                f"      ✅ Fixed {fixed_count} column(s) and saved to {os.path.basename(csv_path)}"
+            )
+            return True
+
+        except Exception as e:
+            print(f"      ❌ Auto-fix failed: {e}")
+            return False
+
+    # ============================
     # FIX 2: UPLOAD VÀ XỬ LÝ POPUP
     # ============================
     def _perform_upload_action(self, page, file_path):
@@ -246,7 +385,9 @@ class SmartTesterMixin:
                         # Phân loại kết quả
                         if "success" in text or "hoàn thành" in text:
                             print("      ✅ Success Popup detected & closed.")
-                            self._ensure_popup_closed(page)  # Đảm bảo popup đã đóng hoàn toàn
+                            self._ensure_popup_closed(
+                                page
+                            )  # Đảm bảo popup đã đóng hoàn toàn
                             return True, "Success"
 
                         error_keywords = [
@@ -265,7 +406,9 @@ class SmartTesterMixin:
                             and "sure" not in text
                         ):
                             # print(f"      ❌ Error Popup detected & closed: {clean_text[:50]}...")
-                            self._ensure_popup_closed(page)  # Đảm bảo popup đã đóng hoàn toàn
+                            self._ensure_popup_closed(
+                                page
+                            )  # Đảm bảo popup đã đóng hoàn toàn
                             return False, f"Error: {clean_text}"
 
                         # Nếu là popup confirm (Are you sure?) -> Loop sẽ quay lại và chờ popup kết quả tiếp theo
@@ -338,6 +481,101 @@ class SmartTesterMixin:
                 self._ensure_popup_closed(page)
                 return False, "Button not found", cached_selector
 
+            # 1.5. Setup popup capture BEFORE uploading file (CRITICAL for fast popups)
+            print("   🎬 Injecting JS popup capture script...")
+            try:
+                page.evaluate(
+                    """
+                window.__popupResult = null;
+                window.__popupHistory = [];  // Keep history of all popups seen
+                
+                // Function to check and capture modal content (reads even hidden modals)
+                function captureModalContent() {
+                    // Check ALL modals (including hidden ones)
+                    const modals = document.querySelectorAll('.modal');
+                    for (const modal of modals) {
+                        const body = modal.querySelector('.modal-body');
+                        // NEW: Read text even if modal is hidden (don't check offsetParent)
+                        if (body && body.innerText && body.innerText.trim()) {
+                            const text = body.innerText.trim();
+                            const isError = text.toLowerCase().includes('error') || 
+                                           text.toLowerCase().includes('fail') || 
+                                           text.toLowerCase().includes('invalid') ||
+                                           text.toLowerCase().includes('không hợp lệ') ||
+                                           text.toLowerCase().includes('lỗi') ||
+                                           modal.classList.contains('error') ||
+                                           modal.classList.contains('danger');
+                            const result = {
+                                type: isError ? 'FAIL' : 'PASS',
+                                text: text,
+                                timestamp: Date.now()
+                            };
+                            
+                            // Store if not already captured
+                            if (!window.__popupResult) {
+                                window.__popupResult = result;
+                                console.log('✅ Modal captured:', result);
+                            }
+                            // Always add to history
+                            window.__popupHistory.push(result);
+                            return true;
+                        }
+                    }
+                    
+                    // Check for SweetAlert
+                    const swalContainers = document.querySelectorAll('.swal2-container');
+                    for (const container of swalContainers) {
+                        const content = container.querySelector('.swal2-html-container, .swal2-title');
+                        if (content && content.innerText && content.innerText.trim()) {
+                            const text = content.innerText.trim();
+                            const isError = container.querySelector('.swal2-error, .swal2-icon-error');
+                            const result = {
+                                type: isError ? 'FAIL' : 'PASS',
+                                text: text,
+                                timestamp: Date.now()
+                            };
+                            if (!window.__popupResult) {
+                                window.__popupResult = result;
+                                console.log('✅ Swal captured:', result);
+                            }
+                            window.__popupHistory.push(result);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                
+                // IMMEDIATE check (run once before interval starts)
+                captureModalContent();
+                
+                // Check every 20ms for super fast capture
+                const checkInterval = setInterval(() => {
+                    captureModalContent();
+                }, 20);
+                
+                // MutationObserver for instant capture when DOM changes
+                const observer = new MutationObserver(() => {
+                    captureModalContent();
+                });
+                
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class', 'style']
+                });
+                
+                // Cleanup after 10 seconds
+                setTimeout(() => {
+                    observer.disconnect();
+                    clearInterval(checkInterval);
+                }, 10000);
+            """
+                )
+                time.sleep(0.1)  # Let script initialize
+            except Exception as e:
+                print(f"   ⚠️ JS injection failed: {e}")
+
             # 2. Upload File (reduced timeout)
             try:
                 if btn.get_attribute("type") == "file":
@@ -346,135 +584,72 @@ class SmartTesterMixin:
                     with page.expect_file_chooser(timeout=3000) as fc_info:
                         btn.click()
                     fc_info.value.set_files(full_path)
-                time.sleep(0.5)  # Wait for file processing
+                time.sleep(0.3)  # Reduced from 0.5s
 
-                # CRITICAL: Check for popup IMMEDIATELY after file upload (before confirm!)
+                # CRITICAL: Check for popup IMMEDIATELY after file upload
                 print("   🔍 Checking popup after file upload...")
                 start_check = time.time()
-                for i in range(10):  # Check 10 times × 100ms = 1s
+
+                # IMMEDIATE SYNCHRONOUS CHECK - Read DOM directly (catches already-hidden modals)
+                try:
+                    immediate_result = page.evaluate(
+                        """
+                        () => {
+                            // Force capture again (in case modal appeared and closed during upload)
+                            const modals = document.querySelectorAll('.modal');
+                            for (const modal of modals) {
+                                const body = modal.querySelector('.modal-body');
+                                // Read innerText even if modal is display:none
+                                if (body && body.innerText && body.innerText.trim()) {
+                                    const text = body.innerText.trim();
+                                    const isError = text.toLowerCase().includes('error') || 
+                                                   text.toLowerCase().includes('fail') || 
+                                                   text.toLowerCase().includes('invalid') ||
+                                                   text.toLowerCase().includes('lỗi');
+                                    return { type: isError ? 'FAIL' : 'PASS', text: text };
+                                }
+                            }
+                            // Check if already captured by observer
+                            return window.__popupResult;
+                        }
+                    """
+                    )
+
+                    if immediate_result:
+                        print(
+                            f"   🎯 IMMEDIATE capture at {int((time.time()-start_check)*1000)}ms: {immediate_result['type']}"
+                        )
+                        page.evaluate("window.__popupResult = null")
+                        self._ensure_popup_closed(page)
+                        return (
+                            (immediate_result["type"] == "PASS"),
+                            str(immediate_result["text"])[:100],
+                            cached_selector,
+                        )
+                except Exception as e:
+                    print(f"   🔍 Immediate check failed: {e}")
+
+                # Polling check (in case popup appears later)
+                for i in range(15):  # Check 15 times × 50ms = 750ms
                     popup_data = page.evaluate("window.__popupResult")
                     if popup_data:
-                        # Reset for next case
-                        page.evaluate("window.__popupResult = null")
                         print(
-                            f"   🎯 JS caught early popup at {int((time.time()-start_check)*1000)}ms: {popup_data['type']}"
+                            f"   🎯 JS caught popup at {int((time.time()-start_check)*1000)}ms: {popup_data['type']}"
                         )
+                        page.evaluate("window.__popupResult = null")
                         self._ensure_popup_closed(page)
                         return (
                             (popup_data["type"] == "PASS"),
                             str(popup_data["text"])[:100],
                             cached_selector,
                         )
-                    # Also check modal directly
-                    try:
-                        modal_body = page.locator(".modal .modal-body").first
-                        if modal_body.is_visible():
-                            text = modal_body.inner_text().strip()
-                            if text:
-                                is_error = any(
-                                    kw in text.lower()
-                                    for kw in ["error", "fail", "invalid", "lỗi"]
-                                )
-                                print(
-                                    f"   🎯 Found early modal: {'FAIL' if is_error else 'PASS'}"
-                                )
-                                self._ensure_popup_closed(page)
-                                return (not is_error, text[:100], cached_selector)
-                    except:
-                        pass
-                    time.sleep(0.1)
+                    time.sleep(0.05)  # 50ms intervals for faster detection
 
             except Exception as upload_err:
                 self._ensure_popup_closed(page)
                 return False, f"Upload failed: {upload_err}", cached_selector
 
-            # 3. Setup popup capture BEFORE clicking confirm
-            # Skip injection if already setup globally
-            if not page.evaluate("typeof window.__popupResult !== 'undefined'"):
-                try:
-                    page.evaluate(
-                        """
-                    window.__popupResult = null;
-                    
-                    // Function to check and capture modal content
-                    function captureModalContent() {
-                        if (window.__popupResult) return; // Already captured
-                        
-                        // Check ALL modals (don't wait for .show class - it gets removed too fast!)
-                        const modals = document.querySelectorAll('.modal');
-                        for (const modal of modals) {
-                            const body = modal.querySelector('.modal-body');
-                            // Read content if modal-body has text (regardless of modal visibility)
-                            if (body && body.innerText.trim() && body.offsetParent !== null) {
-                                const text = body.innerText.trim();
-                                const isError = text.toLowerCase().includes('error') || 
-                                               text.toLowerCase().includes('fail') || 
-                                               text.toLowerCase().includes('invalid') ||
-                                               text.toLowerCase().includes('không hợp lệ') ||
-                                               text.toLowerCase().includes('lỗi') ||
-                                               modal.classList.contains('error') ||
-                                               modal.classList.contains('danger');
-                                window.__popupResult = {
-                                    type: isError ? 'FAIL' : 'PASS',
-                                    text: text
-                                };
-                                console.log('✅ Modal captured:', window.__popupResult);
-                                return true;
-                            }
-                        }
-                        
-                        // Check for SweetAlert
-                        const swalContainers = document.querySelectorAll('.swal2-container');
-                        for (const container of swalContainers) {
-                            const content = container.querySelector('.swal2-html-container, .swal2-title');
-                            if (content && content.innerText.trim() && container.offsetParent !== null) {
-                                const text = content.innerText.trim();
-                                const isError = container.querySelector('.swal2-error, .swal2-icon-error');
-                                window.__popupResult = {
-                                    type: isError ? 'FAIL' : 'PASS',
-                                    text: text
-                                };
-                                console.log('✅ Swal captured:', window.__popupResult);
-                                return true;
-                            }
-                        }
-                        return false;
-                    }
-                    
-                    // Check immediately and repeatedly
-                    const checkInterval = setInterval(() => {
-                        if (captureModalContent()) {
-                            clearInterval(checkInterval);
-                        }
-                    }, 50); // Check every 50ms for 5 seconds
-                    
-                    // Also use MutationObserver as backup
-                    const observer = new MutationObserver(() => {
-                        if (captureModalContent()) {
-                            observer.disconnect();
-                            clearInterval(checkInterval);
-                        }
-                    });
-                    
-                    observer.observe(document.body, {
-                        childList: true,
-                        subtree: true,
-                        attributes: true,
-                        attributeFilter: ['class', 'style']
-                    });
-                    
-                    // Cleanup after 5 seconds
-                    setTimeout(() => {
-                        observer.disconnect();
-                        clearInterval(checkInterval);
-                    }, 5000);
-                """
-                    )
-                    time.sleep(0.1)
-                except:
-                    pass
-
-            # 3. Confirm button - popup will be captured by JS listener
+            # 3. Confirm button - popup will be captured by JS listener (already injected)
             confirm_clicked = False
             try:
                 time.sleep(0.2)
@@ -508,23 +683,99 @@ class SmartTesterMixin:
 
                             # If JS failed, try direct Python check as fallback
                             print("   ⚠️ JS capture timeout, trying Python fallback...")
+
+                            # NEW: Use evaluate to read DOM directly (can read hidden elements)
+                            try:
+                                fallback_result = page.evaluate(
+                                    """
+                                    () => {
+                                        const modals = document.querySelectorAll('.modal');
+                                        const results = [];
+                                        
+                                        for (const modal of modals) {
+                                            const body = modal.querySelector('.modal-body');
+                                            // Read innerText even if display:none
+                                            if (body && body.innerText && body.innerText.trim()) {
+                                                const text = body.innerText.trim();
+                                                const isVisible = body.offsetParent !== null;
+                                                results.push({
+                                                    text: text,
+                                                    isVisible: isVisible
+                                                });
+                                            }
+                                        }
+                                        
+                                        // Also check history
+                                        if (window.__popupHistory && window.__popupHistory.length > 0) {
+                                            const lastPopup = window.__popupHistory[window.__popupHistory.length - 1];
+                                            return lastPopup;
+                                        }
+                                        
+                                        return results.length > 0 ? results[0] : null;
+                                    }
+                                """
+                                )
+
+                                if fallback_result:
+                                    text = fallback_result.get("text", "")
+                                    if text:
+                                        error_keywords = [
+                                            "error",
+                                            "fail",
+                                            "invalid",
+                                            "lỗi",
+                                            "không hợp lệ",
+                                            "không thành công",
+                                        ]
+                                        is_error = any(
+                                            kw in text.lower() for kw in error_keywords
+                                        )
+
+                                        print(
+                                            f"   🔍 Python fallback (DOM read): {text[:80]}..."
+                                        )
+                                        print(
+                                            f"   🎯 Classified: {'FAIL' if is_error else 'PASS'}"
+                                        )
+                                        self._ensure_popup_closed(page)
+                                        return (
+                                            not is_error,
+                                            text[:100],
+                                            cached_selector,
+                                        )
+                            except Exception as e:
+                                print(f"   🔍 DEBUG: Direct DOM read failed: {e}")
+
+                            # Last resort: Try Playwright locator API
                             try:
                                 modals = page.locator(".modal .modal-body").all()
-                                for modal in modals:
-                                    if modal.is_visible():
-                                        text = modal.inner_text().strip()
+                                print(
+                                    f"   🔍 DEBUG: Found {len(modals)} modal-body elements (Playwright)"
+                                )
+                                for idx, modal in enumerate(modals):
+                                    try:
+                                        # Try to read text even if not visible
+                                        text = modal.inner_text(timeout=500).strip()
                                         if text:
+                                            # Classify based on keywords
+                                            error_keywords = [
+                                                "error",
+                                                "fail",
+                                                "invalid",
+                                                "lỗi",
+                                                "không hợp lệ",
+                                                "không thành công",
+                                            ]
                                             is_error = any(
                                                 kw in text.lower()
-                                                for kw in [
-                                                    "error",
-                                                    "fail",
-                                                    "invalid",
-                                                    "lỗi",
-                                                ]
+                                                for kw in error_keywords
+                                            )
+
+                                            print(
+                                                f"   🔍 DEBUG: Modal {idx+1} text: {text[:80]}..."
                                             )
                                             print(
-                                                f"   🔍 Python found modal: {'FAIL' if is_error else 'PASS'}"
+                                                f"   🎯 Playwright classified: {'FAIL' if is_error else 'PASS'}"
                                             )
                                             self._ensure_popup_closed(page)
                                             return (
@@ -532,8 +783,13 @@ class SmartTesterMixin:
                                                 text[:100],
                                                 cached_selector,
                                             )
-                            except:
-                                pass
+                                    except Exception as e:
+                                        print(
+                                            f"   🔍 DEBUG: Modal {idx+1} read error: {e}"
+                                        )
+                                        continue
+                            except Exception as e:
+                                print(f"   🔍 DEBUG: Python fallback failed: {e}")
                             break
                     except:
                         continue
@@ -611,6 +867,105 @@ class SmartTesterMixin:
                     return True, "PASS", text
             except Exception as e:
                 print(f"   🔍 DEBUG: No success popup found ({type(e).__name__})")
+
+            # NEW: Check generic modal body content and classify by keywords
+            # First try: Use evaluate() to read DOM directly (can read hidden modals)
+            try:
+                dom_result = page.evaluate(
+                    """
+                    () => {
+                        const modals = document.querySelectorAll('.modal .modal-body');
+                        const results = [];
+                        
+                        for (const modal of modals) {
+                            // Read innerText even if modal is hidden
+                            if (modal && modal.innerText && modal.innerText.trim()) {
+                                const text = modal.innerText.trim();
+                                const isVisible = modal.offsetParent !== null;
+                                results.push({ text: text, isVisible: isVisible });
+                            }
+                        }
+                        
+                        // Also check popup history if available
+                        if (window.__popupHistory && window.__popupHistory.length > 0) {
+                            const lastPopup = window.__popupHistory[window.__popupHistory.length - 1];
+                            return { text: lastPopup.text, type: lastPopup.type, fromHistory: true };
+                        }
+                        
+                        return results.length > 0 ? results[0] : null;
+                    }
+                """
+                )
+
+                if dom_result:
+                    text = dom_result.get("text", "")
+                    if text:
+                        # Check if type already determined from history
+                        if dom_result.get("type"):
+                            result_type = dom_result["type"]
+                            print(f"   🔍 DEBUG: Retrieved from history: {result_type}")
+                            return True, result_type, text[:200]
+
+                        # Otherwise classify based on keywords
+                        error_keywords = [
+                            "error",
+                            "fail",
+                            "invalid",
+                            "lỗi",
+                            "không hợp lệ",
+                            "không thành công",
+                        ]
+                        is_error = any(kw in text.lower() for kw in error_keywords)
+
+                        is_visible = dom_result.get("isVisible", False)
+                        print(
+                            f"   🔍 DEBUG: Modal found (visible={is_visible}): {text[:80]}..."
+                        )
+                        print(
+                            f"   🔍 DEBUG: Classified as: {'FAIL' if is_error else 'PASS'}"
+                        )
+
+                        return True, ("FAIL" if is_error else "PASS"), text[:200]
+            except Exception as e:
+                print(f"   🔍 DEBUG: DOM modal check failed ({type(e).__name__})")
+
+            # Fallback: Try Playwright locator (in case evaluate fails)
+            try:
+                modals = page.locator(".modal .modal-body").all()
+                if len(modals) > 0:
+                    print(
+                        f"   🔍 DEBUG: Checking {len(modals)} modal-body elements (Playwright)"
+                    )
+                for idx, modal in enumerate(modals):
+                    try:
+                        # Read text without checking visibility first
+                        text = modal.inner_text(timeout=500).strip()
+                        if text:
+                            # Classify based on keywords
+                            error_keywords = [
+                                "error",
+                                "fail",
+                                "invalid",
+                                "lỗi",
+                                "không hợp lệ",
+                                "không thành công",
+                            ]
+                            is_error = any(kw in text.lower() for kw in error_keywords)
+
+                            print(f"   🔍 DEBUG: Modal {idx+1} content: {text[:80]}...")
+                            print(
+                                f"   🔍 DEBUG: Classified as: {'FAIL' if is_error else 'PASS'}"
+                            )
+
+                            return (
+                                True,
+                                ("FAIL" if is_error else "PASS"),
+                                text[:200],
+                            )
+                    except:
+                        continue
+            except Exception as e:
+                print(f"   🔍 DEBUG: Modal body check failed ({type(e).__name__})")
 
             # DEBUG: Print all visible elements to help identify popup
             try:
@@ -851,7 +1206,7 @@ class SmartTesterMixin:
                         }
                     )
                 else:
-                    print(f"         🚨 Accepted: {safe_msg}")
+                    print(f"🚨 Accepted: {safe_msg}")
                     logs.append(
                         {
                             "step": f"Fuzz: {case_name}",
@@ -916,7 +1271,11 @@ class SmartTesterMixin:
 
             current_timestamp = int(time.time())
 
-            # --- TẠO ID MỚI TRÁNH TRÙNG LẶP ---
+            # --- TẠO ID MỚI CHỈ CHO PRIMARY KEY (Cột ID đầu tiên) ---
+            # CRITICAL: Chỉ generate ID cho PRIMARY KEY duy nhất, giữ nguyên tất cả các cột khác
+            primary_key_col = None
+
+            # Tìm PRIMARY KEY column (cột ID đầu tiên trong file)
             for col in valid_df.columns:
                 col_lower = col.lower()
 
@@ -924,23 +1283,31 @@ class SmartTesterMixin:
                 exclude_list = [
                     "tab_id",
                     "tabid",
+                    "gate",  # FK
                     "group_id",
                     "parent_id",
                     "milestone_id",
-                    "type_id",
+                    "type_id",  # FKs
+                    "display_id",
+                    "displayid",  # Display IDs
                 ]
                 if any(ex in col_lower for ex in exclude_list):
                     continue
 
-                # Chỉ xử lý Primary Key (ID chính)
+                # Tìm cột ID (thường là PK)
                 if "id" in col_lower or "key" in col_lower:
-                    original_val = valid_df.iloc[0][col]
+                    primary_key_col = col
+                    print(f"      🔑 Identified Primary Key: '{col}'")
+                    break  # Chỉ lấy cột ID ĐẦU TIÊN
 
-                    # Nếu cột gốc rỗng -> Bỏ qua
-                    if pd.isna(original_val) or str(original_val).strip() == "":
-                        continue
+            # Generate ID mới CHỈ cho Primary Key
+            if primary_key_col:
+                col_lower = primary_key_col.lower()
+                original_val = valid_df.iloc[0][primary_key_col]
 
-                    # Prefix thông minh
+                # Nếu cột gốc không rỗng, generate ID mới
+                if not pd.isna(original_val) and str(original_val).strip() != "":
+                    # Prefix thông minh dựa trên tên cột
                     prefix = ""
                     if "bagid" in col_lower:
                         prefix = "Grabbag_"
@@ -956,14 +1323,22 @@ class SmartTesterMixin:
                         prefix = "Objective_"
                     elif "sectionid" in col_lower:
                         prefix = "Section_"
+                    elif "eventid" in col_lower or "event" in col_lower:
+                        prefix = "Event_"
                     else:
-                        prefix = "Auto_"
+                        prefix = "AutoGen_"
 
-                    # Tạo ID mới: Prefix + Auto + timestamp
-                    # VD: Grabbag_Auto_170000123
-                    new_id = f"{prefix}{current_timestamp}"
-                    valid_df.at[valid_df.index[0], col] = new_id
-                    print(f"      ℹ️ Generated new ID for '{col}': {new_id}")
+                    # Generate ID cho TOÀN BỘ rows (không chỉ row đầu)
+                    for idx in range(len(valid_df)):
+                        new_id = f"{prefix}{current_timestamp + idx}"
+                        valid_df.at[valid_df.index[idx], primary_key_col] = new_id
+                        print(f"      ✏️  Row {idx+1}, '{primary_key_col}': {new_id}")
+                else:
+                    print(
+                        f"      ⚠️ Primary Key '{primary_key_col}' is empty, skipped generation"
+                    )
+            else:
+                print("      ⚠️ No Primary Key column found, using original data as-is")
 
             # FIX #2: Xử lý cột phụ thuộc (ShowInStore)
             show_col = next(
@@ -987,17 +1362,114 @@ class SmartTesterMixin:
                             valid_df[target_col] = valid_df[target_col].astype(object)
                             valid_df.at[valid_df.index[0], target_col] = ""
 
+            # FIX #3: Validate tab_id column (only 3 valid values)
+            tab_id_col = next(
+                (
+                    c
+                    for c in valid_df.columns
+                    if c.lower() == "tab_id" or c.lower() == "tabid"
+                ),
+                None,
+            )
+            if tab_id_col:
+                VALID_TAB_IDS = ["feature", "prize_wall", "basic_loot"]
+                fixed_count = 0
+
+                for idx in range(len(valid_df)):
+                    current_value = str(valid_df.at[idx, tab_id_col]).strip().lower()
+
+                    if current_value not in VALID_TAB_IDS:
+                        # Fix: Choose based on context or default to 'feature'
+                        fixed_value = "feature"  # Default
+
+                        # Smart selection based on other column values in this row
+                        row_data = " ".join(
+                            str(v).lower() for v in valid_df.iloc[idx].values
+                        )
+
+                        if "prize" in row_data or "wall" in row_data:
+                            fixed_value = "prize_wall"
+                        elif "loot" in row_data or "basic" in row_data:
+                            fixed_value = "basic_loot"
+
+                        if idx == 0:  # Convert column type only once
+                            valid_df[tab_id_col] = valid_df[tab_id_col].astype(object)
+
+                        valid_df.at[idx, tab_id_col] = fixed_value
+                        fixed_count += 1
+                        print(
+                            f"      🔧 Row {idx+1}: Fixed invalid tab_id '{current_value}' → '{fixed_value}'"
+                        )
+
+                if fixed_count > 0:
+                    print(f"      ✅ Fixed {fixed_count} invalid tab_id value(s)")
+
             # Save Valid File
             valid_path = os.path.join(DOWNLOAD_DIR, f"valid_{target_csv}")
             valid_df.to_csv(valid_path, index=False)
 
             self._ensure_popup_closed(page)
-            # Upload Valid File (Expect Success)
-            is_success, msg = self._perform_upload_action(page, valid_path)
 
+            # Upload Valid File (Expect Success)
+            print("   📤 Uploading valid file for Final Sanity Check...")
+            is_success, msg = self._perform_upload_action(page, valid_path)
             final_msg = str(msg) if msg is not None else "Unknown result"
 
-            # Quan trọng: Nếu thành công, lưu lại tên file này vào memory để các bước sau (Edit Row) dùng ID mới này
+            # 🆕 AUTO-FIX: If duplicate error detected, fix and retry
+            retry_count = 0
+            max_retries = 2
+
+            while not is_success and retry_count < max_retries:
+                # Check if error is duplicate-related
+                error_lower = final_msg.lower()
+
+                if "duplicate" in error_lower or "1062" in error_lower:
+                    print(
+                        f"   🔍 Duplicate error detected (attempt {retry_count + 1}/{max_retries})"
+                    )
+
+                    # Try to auto-fix the CSV
+                    fix_success = self._fix_duplicate_csv(valid_path, final_msg)
+
+                    if fix_success:
+                        print("   🔄 Retrying upload with fixed CSV...")
+                        self._ensure_popup_closed(page)
+                        time.sleep(1)  # Give page time to settle
+
+                        # Retry upload
+                        is_success, msg = self._perform_upload_action(page, valid_path)
+                        final_msg = str(msg) if msg is not None else "Unknown result"
+
+                        if is_success:
+                            final_msg = (
+                                f"✅ Success after auto-fix (attempt {retry_count + 1})"
+                            )
+                            print(
+                                f"   ✨ Auto-fix successful! Valid file imported on attempt {retry_count + 1}."
+                            )
+                            break
+                        else:
+                            print(
+                                f"   ⚠️ Upload still failed after fix: {final_msg[:100]}"
+                            )
+                    else:
+                        print("   ⚠️ Auto-fix failed, cannot retry")
+                        final_msg = f"❌ {final_msg} (auto-fix failed)"
+                        break
+                else:
+                    # Not a duplicate error, no point retrying
+                    print(
+                        f"   ℹ️ Non-duplicate error, skipping auto-fix: {final_msg[:100]}"
+                    )
+                    break
+
+                retry_count += 1
+
+            # Final status message
+            if not is_success and "duplicate" in final_msg.lower():
+                final_msg = f"❌ Still duplicate after {retry_count + 1} retry attempt(s): {final_msg[:150]}"
+
+            # Quan trọng: Nếu thành công, lưu lại tên file này vào memory
             if is_success:
                 # Lấy ID mới vừa tạo để báo cho AI biết
                 # (Logic nâng cao: Lưu vào self.memory nếu cần)
@@ -1007,8 +1479,6 @@ class SmartTesterMixin:
             logs.append(
                 {
                     "step": "Final Sanity Check",
-                    # "test_case": REMOVED
-                    # "result": REMOVED (Merged into status)
                     "status": "PASS" if is_success else "FAIL",
                     "details": final_msg,
                 }

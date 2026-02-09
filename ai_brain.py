@@ -9,7 +9,7 @@ load_dotenv()
 
 # === CONFIGURATION ===
 MODEL_REASONING = "deepseek-r1:14b"
-MODEL_FORMATTING = "qwen2.5-coder:14b"
+MODEL_FORMATTING = "qwen2.5-coder:14b-instruct-q4_K_M"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = "scenarios.json"
 
@@ -506,6 +506,30 @@ def fix_action_plan(plan):
             if "label" in step and "target" not in step:
                 step["target"] = step.pop("label")
 
+            # 🆕 Validate: Skip click actions with no target
+            if not step.get("target") or not str(step.get("target")).strip():
+                print(f"   🔧 FILTER: Skipping click action with empty target")
+                continue
+
+            # 🆕 DETECT: click("The Brick"/"logo") → process_deployment
+            target_lower = str(step.get("target", "")).lower()
+            brick_keywords = [
+                "brick",
+                "logo",
+                "the brick",
+                "brick logo",
+                "logo the brick",
+            ]
+
+            if any(keyword in target_lower for keyword in brick_keywords):
+                # Convert to process_deployment
+                old_target = step.get("target")
+                step["action"] = "process_deployment"
+                step.pop("target", None)  # Remove target field
+                step["options"] = step.get("options", [])  # Ensure options field exists
+                print(f"   🔧 AUTO-FIX: click('{old_target}') → process_deployment")
+                action = "process_deployment"  # Update action variable for subsequent processing
+
         elif action == "navigate":
             # Fix: {menu: [...]} → {path: [...]}
             if "menu" in step and "path" not in step:
@@ -531,6 +555,12 @@ def fix_action_plan(plan):
     # ============================================================
     merged_plan = _merge_process_deployment_steps(fixed_plan)
 
+    # ============================================================
+    # STEP 4: AUTO-INFER deployment options if empty
+    # If process_deployment has no options, infer from context
+    # ============================================================
+    merged_plan = _auto_infer_deployment_options(merged_plan)
+
     if len(merged_plan) != len(plan):
         print(
             f"   🔧 AUTO-FIX: Plan {len(plan)} steps → {len(merged_plan)} steps after fix"
@@ -539,15 +569,142 @@ def fix_action_plan(plan):
     return merged_plan
 
 
+def _auto_infer_deployment_options(plan):
+    """
+    Auto-infer deployment options from context if process_deployment has empty options.
+
+    Context sources:
+    1. Navigation path (e.g., "Offer" → infer "Offers")
+    2. Uploaded filename (e.g., "gacha_*.csv" → infer "Gacha")
+    3. Previous actions (e.g., after smart_test_cycle on table)
+    """
+    if not plan:
+        return plan
+
+    # Mapping từ keyword → deployment option name
+    DEPLOYMENT_INFERENCE_MAP = {
+        # Navigation paths
+        "offer section": "Offers",
+        "offer": "Offers",
+        "shop tier": "Offers",
+        "shop": "Offers",
+        "gacha": "Gacha",
+        "prize wall": "Prize Wall",
+        "prizewall": "Prize Wall",
+        "live event": "Live Events",
+        "event": "Live Events",
+        "perk": "Data Configs",
+        "consumable": "Data Configs",
+        "currency": "Data Configs",
+        "config": "Data Configs",
+        "blueprint": "Hyper Blueprint",
+        # CSV filenames
+        "gacha_": "Gacha",
+        "offer_": "Offers",
+        "section_": "Offers",
+        "shop_": "Offers",
+        "prize": "Prize Wall",
+        "event_": "Live Events",
+        "perk_": "Data Configs",
+        "config_": "Data Configs",
+    }
+
+    result = []
+
+    for i, step in enumerate(plan):
+        action = step.get("action", "")
+
+        # Check if this is a process_deployment with empty options
+        if action == "process_deployment":
+            options = step.get("options", [])
+
+            if not options or len(options) == 0:
+                print(
+                    f"   🔍 AUTO-INFER: process_deployment has no options, analyzing context..."
+                )
+
+                inferred_option = None
+
+                # Strategy 1: Look backward for navigation path
+                for j in range(i - 1, max(-1, i - 10), -1):  # Check up to 10 steps back
+                    prev_step = plan[j]
+                    prev_action = prev_step.get("action", "")
+
+                    if prev_action == "navigate":
+                        path = prev_step.get("path", [])
+                        path_str = " ".join(path).lower()
+
+                        # Check each keyword
+                        for keyword, option in DEPLOYMENT_INFERENCE_MAP.items():
+                            if keyword in path_str:
+                                inferred_option = option
+                                print(
+                                    f"      ✅ Inferred from navigation '{path}' → '{option}'"
+                                )
+                                break
+
+                        if inferred_option:
+                            break
+
+                    # Strategy 2: Look for upload/smart_test_cycle filename
+                    elif prev_action in ["upload", "smart_test_cycle", "download"]:
+                        filename = prev_step.get("value", "")
+                        if filename:
+                            filename_lower = filename.lower()
+
+                            for keyword, option in DEPLOYMENT_INFERENCE_MAP.items():
+                                if keyword in filename_lower:
+                                    inferred_option = option
+                                    print(
+                                        f"      ✅ Inferred from filename '{filename}' → '{option}'"
+                                    )
+                                    break
+
+                            if inferred_option:
+                                break
+
+                # Apply inferred option
+                if inferred_option:
+                    step["options"] = [inferred_option]
+                    print(
+                        f"      🎯 AUTO-INFER: Added option '{inferred_option}' to process_deployment"
+                    )
+                else:
+                    print(f"      ⚠️  Could not infer deployment option from context")
+                    print(
+                        f"      💡 Tip: Specify explicitly like 'Process với Offers' or 'Chọn Offers rồi Process'"
+                    )
+
+        result.append(step)
+
+    return result
+
+
 def _merge_process_deployment_steps(plan):
     """
     Merge patterns like:
-      process_deployment → checkbox(Offers) → click(Process)
+      1. checkbox(Offers) → process_deployment → click(Process)
+
+      2. process_deployment → checkbox(Offers) → click(Process)
     Into single:
       process_deployment(options=["Offers"])
     """
     if not plan:
         return plan
+
+    # 🆕 DEBUG: Print plan before merge
+    print(f"\n   📋 DEBUG - Plan BEFORE merge ({len(plan)} steps):")
+    for idx, step in enumerate(plan):
+        action = step.get("action", "?")
+        target = step.get("target", "")
+        value = step.get("value", "")
+        options = step.get("options", [])
+        if action == "process_deployment":
+            print(f"      {idx}: {action} (options={options})")
+        elif action == "checkbox":
+            print(f"      {idx}: {action} (target={target}, value={value})")
+        else:
+            print(f"      {idx}: {action} (target={target})")
 
     merged = []
     i = 0
@@ -558,23 +715,153 @@ def _merge_process_deployment_steps(plan):
         if step.get("action") == "process_deployment":
             options = list(step.get("options", []))
 
-            # Look ahead for checkbox/click that should be merged
+            # 🆕 Look BACKWARD for checkbox that should be merged
+            # Pattern: checkbox(Offers) → process_deployment
+            k = len(merged) - 1  # Start from last item in merged
+            backward_count = 0
+            items_to_remove = []  # Track indices to remove
+
+            # Common deployment options keywords
+            deployment_keywords = [
+                "offers",
+                "offer",
+                "data configs",
+                "data config",
+                "live events",
+                "live event",
+                "hyper blueprint",
+                "prize wall",
+                "gacha",
+                "shop",
+                "store",
+                "event",
+                "config",
+                "blueprint",
+            ]
+
+            while k >= 0 and backward_count < 3:  # Check up to 3 steps back
+                prev_step = merged[k]
+                prev_action = prev_step.get("action", "")
+
+                # Check if it's a non-table checkbox (deployment option)
+                if prev_action == "checkbox":
+                    value = str(prev_step.get("value", ""))
+                    target = prev_step.get("target", "")
+                    checkbox_label = prev_step.get(
+                        "checkbox_label", ""
+                    )  # 🆕 AI sometimes uses this field
+                    checkbox_field = prev_step.get(
+                        "checkbox", ""
+                    )  # 🆕 AI also uses "checkbox" field
+
+                    # 🆕 SMART DETECTION: Check if this is a deployment option
+                    is_deployment_option = False
+
+                    # Check all possible fields that might contain deployment option name
+                    fields_to_check = [
+                        checkbox_field,  # Check "checkbox" field first!
+                        checkbox_label,
+                        target,
+                        value,
+                    ]
+
+                    for field in fields_to_check:
+                        if field:
+                            field_lower = str(field).lower()
+                            for keyword in deployment_keywords:
+                                if keyword in field_lower:
+                                    is_deployment_option = True
+                                    break
+                            if is_deployment_option:
+                                break
+
+                    # If not random_ OR is deployment option name, merge it
+                    if (
+                        not value.startswith("random_") and target != "ID"
+                    ) or is_deployment_option:
+                        # Prefer "checkbox" field (AI's new convention), then checkbox_label, then target, then value
+                        opt = checkbox_field or checkbox_label or target or value
+                        if opt and opt not in options:
+                            options.insert(
+                                0, opt
+                            )  # Insert at beginning to preserve order
+                            print(
+                                f"   🔧 MERGE (backward): checkbox('{opt}') → process_deployment options"
+                            )
+                            items_to_remove.append(k)
+                        k -= 1
+                        backward_count += 1
+                        continue
+
+                # Stop if we hit a navigation or other major action
+                if prev_action in [
+                    "navigate",
+                    "smart_test_cycle",
+                    "upload",
+                    "download",
+                    "edit_row",
+                    "clone_row",
+                ]:
+                    break
+
+                k -= 1
+                backward_count += 1
+
+            # Remove absorbed checkboxes (in reverse order to maintain indices)
+            for idx in sorted(items_to_remove, reverse=True):
+                merged.pop(idx)
+
+            # Look FORWARD for checkbox/click that should be merged
             j = i + 1
             while j < len(plan):
                 next_step = plan[j]
                 next_action = next_step.get("action", "")
 
-                if next_action == "checkbox" and not str(
-                    next_step.get("value", "")
-                ).startswith("random_"):
-                    # Non-table checkbox after process_deployment → it's an option
-                    opt = next_step.get("value") or next_step.get("target", "")
-                    if opt and opt != "ID" and opt not in options:
-                        options.append(opt)
-                    print(
-                        f"   🔧 MERGE: checkbox('{opt}') → process_deployment options"
-                    )
-                    j += 1
+                if next_action == "checkbox":
+                    value = str(next_step.get("value", ""))
+                    target = next_step.get("target", "")
+                    checkbox_label = next_step.get(
+                        "checkbox_label", ""
+                    )  # 🆕 AI sometimes uses this field
+                    checkbox_field = next_step.get(
+                        "checkbox", ""
+                    )  # 🆕 AI also uses "checkbox" field
+
+                    # 🆕 SMART DETECTION: Check if this is a deployment option
+                    # Use same keywords as backward merge
+                    is_deployment_option = False
+
+                    # Check all possible fields that might contain deployment option name
+                    fields_to_check = [
+                        checkbox_field,  # Check "checkbox" field first!
+                        checkbox_label,
+                        target,
+                        value,
+                    ]
+
+                    for field in fields_to_check:
+                        if field:
+                            field_lower = str(field).lower()
+                            for keyword in deployment_keywords:
+                                if keyword in field_lower:
+                                    is_deployment_option = True
+                                    break
+                            if is_deployment_option:
+                                break
+
+                    # If not random_ OR is deployment option name, merge it
+                    if not value.startswith("random_") or is_deployment_option:
+                        # Prefer "checkbox" field (AI's new convention), then checkbox_label, then target, then value
+                        opt = checkbox_field or checkbox_label or target or value
+                        if opt and opt != "ID" and opt not in options:
+                            options.append(opt)
+                        print(
+                            f"   🔧 MERGE (forward): checkbox('{opt}') → process_deployment options"
+                        )
+                        j += 1
+                    else:
+                        # It's a table checkbox (random_X without deployment keyword)
+                        break
                 elif next_action == "click" and next_step.get("target", "").lower() in (
                     "process",
                     "deploy",
@@ -592,13 +879,103 @@ def _merge_process_deployment_steps(plan):
                     break
 
             step["options"] = options
+
+            # 🆕 Debug: Print final options
+            if not options:
+                print(
+                    f"   ⚠️ WARNING: process_deployment has no options (will just click Process button)"
+                )
+            else:
+                print(f"   ✅ process_deployment final options: {options}")
+
             merged.append(step)
             i = j
         else:
             merged.append(step)
             i += 1
 
-    return merged
+    # 🆕 STEP 4: Filter out invalid/duplicate actions
+    # Common deployment options keywords (reuse from merge logic)
+    deployment_keywords = [
+        "offers",
+        "offer",
+        "data configs",
+        "data config",
+        "live events",
+        "live event",
+        "hyper blueprint",
+        "prize wall",
+        "gacha",
+        "shop",
+        "store",
+        "event",
+        "config",
+        "blueprint",
+    ]
+
+    filtered = []
+    for idx, step in enumerate(merged):
+        action = step.get("action", "")
+        target = step.get("target", "")
+
+        # Filter out click actions with empty/whitespace-only target
+        if action == "click":
+            if not target or not target.strip():
+                print(f"   🔧 FILTER: Removing invalid click action (empty target)")
+                continue
+
+        # 🆕 Filter out orphaned deployment checkbox (checkbox that should have been merged)
+        # If checkbox contains deployment keyword and value is NOT random_X, it's likely a duplicate
+        if action == "checkbox":
+            value = str(step.get("value", ""))
+            checkbox_field = step.get("checkbox", "")
+            checkbox_label = step.get("checkbox_label", "")
+
+            # Check if this is a deployment option checkbox
+            is_deployment_checkbox = False
+            for field in [checkbox_field, checkbox_label, target, value]:
+                if field:
+                    field_lower = str(field).lower()
+                    for keyword in deployment_keywords:
+                        if keyword in field_lower and not value.startswith("random_"):
+                            is_deployment_checkbox = True
+                            break
+                    if is_deployment_checkbox:
+                        break
+
+            # If it's a deployment checkbox, check if there's a process_deployment nearby
+            if is_deployment_checkbox:
+                # Look backward/forward for process_deployment within 2 steps
+                has_nearby_process_deployment = False
+                for j in range(max(0, idx - 2), min(len(merged), idx + 3)):
+                    if j != idx and merged[j].get("action") == "process_deployment":
+                        has_nearby_process_deployment = True
+                        break
+
+                if has_nearby_process_deployment:
+                    deployment_opt = checkbox_field or checkbox_label or target or value
+                    print(
+                        f"   🔧 FILTER: Removing orphaned deployment checkbox('{deployment_opt}') - already merged"
+                    )
+                    continue
+
+        filtered.append(step)
+
+    # 🆕 DEBUG: Print plan after merge
+    print(f"\n   📋 DEBUG - Plan AFTER merge ({len(filtered)} steps):")
+    for idx, step in enumerate(filtered):
+        action = step.get("action", "?")
+        target = step.get("target", "")
+        value = step.get("value", "")
+        options = step.get("options", [])
+        if action == "process_deployment":
+            print(f"      {idx}: {action} (options={options})")
+        elif action == "checkbox":
+            print(f"      {idx}: {action} (target={target}, value={value})")
+        else:
+            print(f"      {idx}: {action}")
+
+    return filtered
 
 
 # ============================================================================
@@ -640,6 +1017,27 @@ Output: [{{"action":"navigate","path":["Data Configs","Perk"]}},{{"action":"edit
 Example 5:
 Input: "Clone EventGacha_ABC -> New ID: test_1, Gate: feb2026"
 Output: [{{"action":"clone_row","target":"EventGacha_ABC"}},{{"action":"update_form","data":{{"New Event ID":"test_1","Gate":"feb2026"}}}},{{"action":"save_form"}}]
+
+Example 6:
+Input: "Vào Offer Section -> Chọn 2 ID -> Export test.csv -> Smart test -> Import -> Process"
+Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}},{{"action":"smart_test_cycle","value":"test.csv"}},{{"action":"upload","target":"Import CSV","value":"test.csv"}},{{"action":"process_deployment","options":["Offers"]}}]
+
+Example 7:
+Input: "Bấm logo The Brick"
+Output: [{{"action":"process_deployment","options":[]}}]
+
+Example 8:
+Input: "Click The Brick"
+Output: [{{"action":"process_deployment","options":[]}}]
+
+CRITICAL RULES:
+- NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
+- "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
+- When user says "Process" after test/upload: Try to infer deployment option from navigation context
+- If navigated to "Offer" area → use options:["Offers"]
+- If navigated to "Gacha" area → use options:["Gacha"]  
+- If navigated to "Live Events" → use options:["Live Events"]
+- If unsure, leave options empty []
 
 NOW CONVERT THIS COMMAND (use same action names as examples above):
 "{user_command}"
@@ -818,8 +1216,16 @@ def dual_model_pipeline(user_command):
        - NEVER leave value empty!
 
     6. **CLICK THE BRICK / PROCESS MAPPING** (CRITICAL):
-       - "Click The Brick", "Bấm The Brick", "Click logo", "Về Home" -> {{{{ "action": "process_deployment", "options": [] }}}}
-       - "Process", "Deploy", "Triển khai" after test -> {{{{ "action": "process_deployment", "options": ["X"] }}}}
+       - "Click The Brick", "Bấm The Brick", "Click logo", "Về Home" → {{{{ "action": "process_deployment", "options": [] }}}}
+       - "Process", "Deploy", "Triển khai" after test → {{{{ "action": "process_deployment", "options": ["X"] }}}}
+       - IMPORTANT: If user specifies checkbox (e.g., "Chọn Offers rồi Process"), include in options
+       - If no checkbox mentioned but context is clear from navigation, TRY TO INFER:
+         * Navigated to "Offer"/"Shop" → options: ["Offers"]
+         * Navigated to "Gacha" → options: ["Gacha"]  
+         * Navigated to "Prize Wall" → options: ["Prize Wall"]
+         * Navigated to "Live Events" → options: ["Live Events"]
+         * Navigated to "Data Configs" → options: ["Data Configs"]
+       - When unsure, leave options empty [] (auto-infer will handle it)
        - NEVER generate: {{{{ "action": "click", "target": "The Brick" }}}}
        - NEVER generate: {{{{ "action": "click", "target": "logo The Brick" }}}}
 

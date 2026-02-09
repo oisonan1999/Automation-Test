@@ -1,10 +1,11 @@
 # ===== Python =====
-env/
+AutoGameOps/
 venv/
 .venv/
 __pycache__/
 *.pyc
-
+# ===== NodeJS =====
+node_modules/
 # ===== Chrome automation =====
 chrome_profile/
 chrome-user-data/
