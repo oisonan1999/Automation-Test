@@ -1,4 +1,4 @@
-# automation_modules/constants.py
+# automation/constants.py
 import os
 
 # Định nghĩa đường dẫn Download

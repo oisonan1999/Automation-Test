@@ -1,5 +1,5 @@
-# automation_modules/smart_tester.py
-from copy import copy as cp, deepcopy
+# automation/smart_tester.py
+from copy import deepcopy
 from glob import glob
 import io
 import os
@@ -7,11 +7,9 @@ import random as rd
 import time
 import pandas as pd
 import re
-import shutil
 import csv
 from playwright.sync_api import Page
-from streamlit import columns
-from .constants import DOWNLOAD_DIR
+from automation.constants import DOWNLOAD_DIR
 
 
 class SmartTesterMixin:
@@ -1060,7 +1058,7 @@ class SmartTesterMixin:
             if not os.path.exists(file_path):
                 # Tìm file mới nhất nếu không thấy tên chính xác
                 files = sorted(
-                    glob.glob(os.path.join(DOWNLOAD_DIR, "*.csv")), key=os.path.getmtime
+                    glob(os.path.join(DOWNLOAD_DIR, "*.csv")), key=os.path.getmtime
                 )
                 if files:
                     file_path = files[-1]

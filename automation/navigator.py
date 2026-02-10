@@ -1,4 +1,4 @@
-# automation_modules/navigator.py
+# automation/navigator.py
 import time
 import re
 from playwright.sync_api import Page
@@ -220,11 +220,12 @@ class NavigatorMixin:
         """
         Xử lý popup Locked Item.
         Target chính xác vào class .btn-acquire-lock dựa trên HTML.
+        Returns True if popup was handled, False otherwise.
         """
         try:
             # --- ƯU TIÊN 1: SELECTOR CHÍNH XÁC (Dựa trên ảnh HTML) ---
             # Tìm nút có class .btn-acquire-lock (thường là thẻ <a>)
-            lock_btn = page.locator(".btn-acquire-lock").first
+            lock_btn = page.locator(".btn-acquire-lock, a.btn-acquire-lock").first
 
             # Check visible với timeout ngắn
             if lock_btn.is_visible(timeout=2000):
@@ -237,9 +238,11 @@ class NavigatorMixin:
                 # Chờ loading sau khi acquire (thường trang sẽ reload)
                 try:
                     page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    time.sleep(1.0)  # Additional buffer
+                    print("      ✅ Lock acquired successfully!")
                 except:
                     time.sleep(2.0)
-                return
+                return True
 
             # --- ƯU TIÊN 2: QUÉT TEXT (Fallback cho các modal kiểu khác) ---
             popup = (
@@ -259,11 +262,20 @@ class NavigatorMixin:
 
                 if btn.is_visible():
                     btn.click(force=True)
-                    time.sleep(2.0)
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        time.sleep(1.0)
+                        print("      ✅ Lock acquired successfully!")
+                    except:
+                        time.sleep(2.0)
+                    return True
+
+            return False  # No popup detected
 
         except Exception as e:
+            # Suppress error để không crash automation
             # print(f"      ⚠️ Lỗi check lock: {e}")
-            pass
+            return False
 
     def process_deployment(self, page, options=[]):
         print(f"   🚀 Deploy: {options}")

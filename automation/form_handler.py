@@ -1,4 +1,5 @@
-# automation_modules/form_handler.py
+# automation/form_handler.py - Form logic: smart filling, dropdown, radio, datetime, save
+# Table/checkbox operations tách ra table_handler.py
 import time
 import re
 import random
@@ -6,329 +7,10 @@ from playwright.sync_api import Page
 
 
 class FormHandlerMixin:
-    """Chứa logic tương tác với Form, Checkbox, Row"""
-
-    def _safe_check(self, locator):
-        try:
-            # 1. Scroll dòng ra GIỮA MÀN HÌNH (Tránh bị Sticky Header che)
-            locator.evaluate(
-                "el => el.scrollIntoView({block: 'center', inline: 'nearest'})"
-            )
-            time.sleep(0.2)
-
-            if locator.is_checked():
-                print(f"         ✓ Already checked")
-                return True
-
-            # 2. Click thông thường
-            try:
-                locator.check(force=True, timeout=1000)
-                print(f"         ✓ Checked via .check()")
-            except Exception as e:
-                print(f"         ⚠️ .check() failed: {e}")
-
-            if locator.is_checked():
-                return True
-
-            # 3. Click vào ô cha (td) hoặc label nếu click input không ăn
-            # (Đôi khi input bị ẩn, phải click vào cell)
-            print(f"         ⚠️ Trying JS click...")
-            locator.evaluate(
-                "el => { el.click(); if(!el.checked) el.checked=true; el.dispatchEvent(new Event('change', {bubbles: true})); }"
-            )
-            time.sleep(0.1)
-
-            is_checked = locator.is_checked()
-            print(
-                f"         {'✓' if is_checked else '✗'} JS click result: {is_checked}"
-            )
-            return is_checked
-        except Exception as e:
-            print(f"         ✗ _safe_check exception: {e}")
-            return False
-
-    def handle_checkbox(self, page, target_col, value):
-        logs = []
-        try:
-            # FIX: Nếu value rỗng → default random_1
-            if not value or str(value).strip() == "":
-                print("   🔧 Value rỗng! Auto fallback → random_1")
-                value = "random_1"
-
-            # A. Tìm bảng dữ liệu chuẩn (tránh bảng header)
-            target_table = self._find_data_table(page)
-            if not target_table:
-                return [
-                    {
-                        "step": "Checkbox",
-                        "status": "FAIL",
-                        "details": "No data table found",
-                    }
-                ]
-
-            if not self.wait_for_table_data(page):
-                return [
-                    {
-                        "step": "Checkbox",
-                        "status": "FAIL",
-                        "details": "Table Empty / Loading Timeout",
-                    }
-                ]
-
-            # Lấy tất cả dòng dữ liệu
-            # Lưu ý: Dùng target_table thay vì page để scope chính xác
-            all_rows = target_table.locator("tbody tr").filter(has=page.locator("td"))
-            total_rows = all_rows.count()
-
-            print(f"   📊 Tìm thấy {total_rows} dòng dữ liệu khả dụng.")
-            val_lower = str(value).lower()
-
-            # --- CASE 1: RANDOM ---
-            if "random" in val_lower:
-                num_to_select = 1
-                match = re.search(r"random.*?(\d+)", val_lower)
-                if match:
-                    num_to_select = int(match.group(1))
-
-                num_to_select = min(num_to_select, total_rows)
-                selected_ids = []
-                used_indices = set()
-
-                attempts = 0
-                max_attempts = num_to_select * 3
-
-                while len(selected_ids) < num_to_select and attempts < max_attempts:
-                    attempts += 1
-                    idx = random.randint(0, total_rows - 1)
-                    if idx in used_indices:
-                        continue
-                    used_indices.add(idx)
-
-                    row = all_rows.nth(idx)
-                    chk = row.locator("input[type='checkbox']").first
-
-                    print(
-                        f"      🎯 Row {idx+1}: Checkbox visible={chk.is_visible() if chk.count() > 0 else 'N/A'}"
-                    )
-
-                    check_result = self._safe_check(chk)
-                    print(f"      🔍 _safe_check returned: {check_result}")
-
-                    if check_result:
-                        try:
-                            print(f"      🔍 Attempting to get cell text...")
-                            # Lấy ID/Text để lưu vào Memory - Thử nhiều cột để tìm text không rỗng
-                            cell_text = ""
-                            all_cells = row.locator("td")
-                            cell_count = all_cells.count()
-                            print(f"      🔍 Row has {cell_count} cells")
-
-                            # Thử từ cột 1 đến hết (bỏ cột 0 vì đó là checkbox)
-                            for col_idx in range(
-                                1, min(cell_count, 5)
-                            ):  # Chỉ thử 4 cột đầu
-                                try:
-                                    text = (
-                                        all_cells.nth(col_idx)
-                                        .inner_text(timeout=500)
-                                        .strip()
-                                    )
-                                    print(f"      🔍 Cell {col_idx}: '{text}'")
-                                    if text and text not in ["", "-", "N/A"]:
-                                        cell_text = text
-                                        break
-                                except Exception as cell_err:
-                                    print(f"      ⚠️ Cell {col_idx} error: {cell_err}")
-                                    continue
-
-                            if not cell_text:
-                                # Fallback: Lấy toàn bộ text của row
-                                cell_text = f"Row_{idx+1}"
-                                print(
-                                    f"      ⚠️ No cell text found, using fallback: {cell_text}"
-                                )
-
-                            print(f"      🔍 Got cell_text: '{cell_text}'")
-                            self.memory["LAST_SELECTED"] = cell_text
-                            if "SELECTED_IDS" not in self.memory:
-                                self.memory["SELECTED_IDS"] = []
-                            self.memory["SELECTED_IDS"].append(cell_text)
-
-                            selected_ids.append(cell_text)
-                            print(f"   ✅ Đã tick dòng {idx+1}: {cell_text}")
-                        except Exception as e:
-                            print(
-                                f"   ⚠️ Exception getting cell text for row {idx+1}: {type(e).__name__}: {e}"
-                            )
-                            import traceback
-
-                            traceback.print_exc()
-                            # CRITICAL FIX: Vẫn count là đã chọn thành công nếu checkbox đã được tick
-                            fallback_id = f"Row_{idx+1}_checked"
-                            selected_ids.append(fallback_id)
-                            print(f"   ⚠️ Using fallback ID: {fallback_id}")
-                    else:
-                        print(f"   ⚠️ Lỗi tick dòng {idx+1}. Thử dòng khác...")
-                    time.sleep(0.2)
-
-                if len(selected_ids) < num_to_select:
-                    print(
-                        f"   ⚠️ Chỉ chọn được {len(selected_ids)}/{num_to_select} dòng."
-                    )
-
-                # [FIX] Nếu không chọn được dòng nào, trả về FAIL
-                if len(selected_ids) == 0:
-                    logs.append(
-                        {
-                            "step": "Checkbox",
-                            "status": "FAIL",
-                            "details": f"Không thể chọn bất kỳ dòng nào. Target: random {num_to_select}",
-                        }
-                    )
-                else:
-                    logs.append(
-                        {
-                            "step": "Checkbox",
-                            "status": (
-                                "PASS"
-                                if len(selected_ids) == num_to_select
-                                else "PARTIAL"
-                            ),
-                            "details": f"Random: {selected_ids} ({len(selected_ids)}/{num_to_select})",
-                        }
-                    )
-
-            # --- CASE 2: ALL ---
-            elif "all" in val_lower:
-                h = target_table.locator("thead input[type='checkbox']").first
-                if h.is_visible():
-                    self._safe_check(h)
-                    time.sleep(1)
-                else:
-                    # Fallback: Tick từng cái (tối đa 20 cái đầu)
-                    limit = min(total_rows, 20)
-                    for i in range(limit):
-                        self._safe_check(
-                            all_rows.nth(i).locator("input[type='checkbox']").first
-                        )
-                        time.sleep(0.1)
-                logs.append(
-                    {"step": "Checkbox", "status": "PASS", "details": "Select All"}
-                )
-
-            # --- CASE 3: SPECIFIC TARGET (CÓ AUTO-FILTER) ---
-            else:
-                # 3a. Tìm dòng khớp regex (Logic của bạn)
-                target_regex = self._safe_compile(
-                    target_col
-                )  # target_col lúc này đóng vai trò là text cần tìm (vì value='on') hoặc value thực tế
-
-                # Nếu User gọi lệnh: "checkbox -> ID ABC" thì target_col='ID', value='ABC' -> Cần tìm 'ABC'
-                # Nếu User gọi lệnh: "checkbox -> ABC on" thì target_col='ABC', value='on' -> Cần tìm 'ABC'
-                # Logic: Nếu value là on/off/true/false -> Tìm target_col. Ngược lại tìm value.
-                search_term = (
-                    str(value)
-                    if str(value).lower() not in ["on", "off", "true", "false"]
-                    else str(target_col)
-                )
-
-                # BƯỚC 1: Tìm trực tiếp
-                found = self._find_and_tick(all_rows, search_term)
-
-                # BƯỚC 2: Nếu không thấy -> FILTER -> Tìm lại
-                if not found:
-                    print(
-                        f"   ⚠️ Không thấy '{search_term}' trên trang hiện tại. Đang thử Filter..."
-                    )
-                    if self._perform_table_filter(page, target_col, search_term):
-                        # Cập nhật lại rows sau khi filter
-                        target_table = self._find_data_table(page)
-                        all_rows = target_table.locator("tbody tr").filter(
-                            has=page.locator("td")
-                        )
-
-                        if self._find_and_tick(all_rows, search_term):
-                            found = True
-
-                if found:
-                    logs.append(
-                        {"step": "Checkbox", "status": "PASS", "details": search_term}
-                    )
-                else:
-                    logs.append(
-                        {
-                            "step": "Checkbox",
-                            "status": "FAIL",
-                            "details": f"Not found: {search_term}",
-                        }
-                    )
-
-        except Exception as e:
-            logs.append({"step": "Checkbox", "status": "FAIL", "details": str(e)})
-        return logs
-
-    def _click_icon_in_row(self, page, target_text, action_type):
-        if target_text == "LAST_SELECTED":
-            target_text = self.memory.get("LAST_SELECTED", "")
-            if not target_text:
-                print("   ⚠️ Memory rỗng! Dùng fallback lấy dòng đầu tiên...")
-                target_text = (
-                    page.locator("tbody tr")
-                    .first.locator("td")
-                    .nth(1)
-                    .inner_text()
-                    .strip()
-                )
-            else:
-                print(f"   🧠 Recall Memory: '{target_text}'")
-
-        print(f"   🔎 Tìm dòng '{target_text}' để {action_type}...")
-
-        js_script = """
-            (args) => {
-                const targetText = args.text.toLowerCase().trim();
-                const action = args.action; 
-                const rows = Array.from(document.querySelectorAll('tbody tr'));
-                
-                for (const row of rows) {
-                    if (row.innerText.toLowerCase().includes(targetText)) {
-                        let btn = null;
-                        if (action === 'edit') {
-                            btn = row.querySelector("i[class*='edit'], i[class*='pencil'], .btn-edit");
-                        } else {
-                            btn = row.querySelector("i[class*='clone'], i[class*='copy'], i[class*='share'], .btn-clone");
-                        }
-                        if (btn) {
-                            (btn.closest('button') || btn.closest('a') || btn).click();
-                            return "Clicked via Icon";
-                        }
-                        const buttons = row.querySelectorAll("button, a.btn, a[class*='btn']");
-                        if (buttons.length > 0) {
-                            if (buttons.length >= 2) { (action === 'edit' ? buttons[0] : buttons[1]).click(); } 
-                            else { buttons[0].click(); }
-                            return "Clicked via Position";
-                        }
-                    }
-                }
-                return "Row Not Found";
-            }
-        """
-        result = page.evaluate(
-            js_script, {"text": str(target_text), "action": action_type}
-        )
-
-        if "Clicked" in result:
-            print(f"   ✅ JS Click Success: {result}")
-        elif "Row Not Found" in result:
-            if self._auto_filter_data(page, target_text):
-                page.evaluate(
-                    js_script, {"text": str(target_text), "action": action_type}
-                )
-            else:
-                raise Exception(f"Không tìm thấy dòng '{target_text}'")
+    """Chứa logic tương tác với Form: điền form, dropdown, radio, datetime, save"""
 
     # ============================
-    # 4. SMART FORM FILLER (FULL FEATURES)
+    # SMART FORM FILLER (FULL FEATURES)
     # ============================
     def _smart_update_form(self, page, data):
         """
@@ -368,6 +50,31 @@ class FormHandlerMixin:
                         time.sleep(3)  # Chờ UI update (VD: hiện Currency dropdown)
                         continue
 
+                # ========================================
+                # SPECIAL CASE 2: MULTIPLE DATETIME VALUES (e.g., "02/10/2026 07:15 AM, 02/10/2026 11:00 AM")
+                # Dùng cho fields như "Schedules In UTC" có nhiều datetime inputs (Start, End)
+                # ========================================
+                value_str = str(value)
+                if "," in value_str and any(
+                    keyword in label.lower() for keyword in ["schedule", "date", "time"]
+                ):
+                    # Tách các giá trị datetime
+                    datetime_values = [
+                        v.strip() for v in value_str.split(",") if v.strip()
+                    ]
+                    if len(datetime_values) > 1:
+                        print(
+                            f"         🗓️ Detected multiple datetime values: {datetime_values}"
+                        )
+                        if self._fill_multiple_datetime_fields(
+                            page, label, datetime_values
+                        ):
+                            print(
+                                f"         ✅ Filled {len(datetime_values)} datetime fields for '{label}'"
+                            )
+                            time.sleep(3)
+                            continue
+
                 # Bước 1: Tìm Element
                 target_element = self._find_input_element(page, label)
 
@@ -377,24 +84,331 @@ class FormHandlerMixin:
                     if not success:
                         print(f"         ❌ Action Failed for '{label}'")
                     else:
-                        # Chờ 3s sau mỗi field để dropdown/data load xong
+                        # CRITICAL: Trigger change event để reveal conditional fields
+                        # VD: Đổi "Leaderboard Type" -> hiện "Bracket Preset"
+                        try:
+                            target_element.evaluate(
+                                "el => { el.dispatchEvent(new Event('change', {bubbles: true})); el.dispatchEvent(new Event('input', {bubbles: true})); }"
+                            )
+                            print(f"         🔔 Triggered change event for '{label}'")
+                        except:
+                            pass
+                        # Chờ 3s sau mỗi field để dropdown/data load xong và conditional fields appear
                         time.sleep(3)
                 else:
-                    print(
-                        f"         ❌ Cannot find field '{label}'. Trying alternative search..."
-                    )
-                    # Debug: In ra các label/legend hiển thị để debug
-                    try:
-                        all_labels = page.locator("label, legend").all()
-                        visible_labels = [l for l in all_labels if l.is_visible()]
-                        label_texts = [
-                            l.inner_text().strip()[:50] for l in visible_labels[:10]
-                        ]
-                        print(f"            Available labels: {label_texts}")
-                    except:
-                        pass
+                    # RETRY LOGIC: Field có thể chưa xuất hiện (conditional field)
+                    # Thử lại sau 2s (có thể đang chờ previous field trigger)
+                    print(f"         ⏳ Field '{label}' not found. Retrying in 2s...")
+                    time.sleep(2)
+                    target_element = self._find_input_element(page, label)
+
+                    if target_element:
+                        print(f"         ✅ Found '{label}' on retry!")
+                        success = self._fill_element_smartly(
+                            page, target_element, value
+                        )
+                        if success:
+                            try:
+                                target_element.evaluate(
+                                    "el => { el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                                )
+                            except:
+                                pass
+                            time.sleep(3)
+                        else:
+                            print(f"         ❌ Retry fill failed for '{label}'")
+                    else:
+                        print(
+                            f"         ❌ Cannot find field '{label}' even after retry. Trying alternative search..."
+                        )
+                        # Debug: In ra các label/legend hiển thị để debug
+                        try:
+                            all_labels = page.locator("label, legend").all()
+                            visible_labels = [l for l in all_labels if l.is_visible()]
+                            label_texts = [
+                                l.inner_text().strip()[:50] for l in visible_labels[:10]
+                            ]
+                            print(f"            Available labels: {label_texts}")
+                        except:
+                            pass
             except Exception as e:
                 print(f"         ❌ Error filling '{label}': {e}")
+
+    def _fill_multiple_datetime_fields(self, page, label_text, values):
+        """
+        Điền nhiều giá trị datetime vào nhiều inputs có cùng label.
+        VD: "Schedules In UTC" có 2 datetime pickers (Start, End).
+        """
+        try:
+            print(
+                f"         🔍 Searching for multiple datetime fields for '{label_text}'..."
+            )
+
+            # ========================================
+            # STRATEGY 1: Tìm flatpickr/datepicker inputs trong fieldset/form-group chứa label
+            # ========================================
+            # Tìm label element chứa text chính xác nhất (ưu tiên label, legend)
+            label_candidates = (
+                page.locator("label, legend")
+                .filter(has_text=re.compile(re.escape(label_text), re.IGNORECASE))
+                .all()
+            )
+
+            # Sort: ưu tiên label/legend ngắn nhất (exact match)
+            label_candidates = [c for c in label_candidates if c.is_visible()]
+            label_candidates.sort(key=lambda el: len(el.inner_text().strip()))
+
+            for label_el in label_candidates:
+                try:
+                    label_actual_text = label_el.inner_text().strip()
+                    print(f"         🏷️ Trying label: '{label_actual_text}'")
+
+                    # Tìm parent container gần nhất (fieldset > form-group > row)
+                    container = None
+                    for xpath in [
+                        "xpath=ancestor::fieldset",
+                        "xpath=ancestor::div[contains(@class,'form-group')]",
+                        "xpath=ancestor::div[contains(@class,'control-group')]",
+                        "xpath=ancestor::div[contains(@class,'schedule')]",
+                        "xpath=ancestor::div[contains(@class,'datetime')]",
+                    ]:
+                        try:
+                            c = label_el.locator(xpath).first
+                            if c.count() > 0:
+                                container = c
+                                break
+                        except:
+                            pass
+
+                    if not container:
+                        # Fallback: parent 3 levels up
+                        container = label_el.locator("xpath=../../..").first
+
+                    if not container or container.count() == 0:
+                        continue
+
+                    # [FIX CRITICAL] Tìm datetime inputs: flatpickr, datepicker, datetimepicker
+                    # VÀ filter bỏ readonly inputs
+                    datetime_inputs = []
+
+                    # Priority 1: flatpickr inputs (class chứa flatpickr hoặc có data-flatpickr)
+                    flatpickr_inputs = container.locator(
+                        "input.flatpickr-input, input[data-toggle='flatpickr'], input[data-toggle='datetimepicker'], "
+                        "input.datetimepicker, input.datepicker, input.timepicker"
+                    ).all()
+                    for inp in flatpickr_inputs:
+                        if inp.is_visible():
+                            # Flatpickr thường set readonly → vẫn thêm nhưng dùng JS
+                            datetime_inputs.append(inp)
+
+                    # Priority 2: Nếu không tìm thấy flatpickr, tìm tất cả visible text/date inputs
+                    # NHƯNG filter bỏ readonly (trừ flatpickr) và filter bỏ input có ID không liên quan
+                    if not datetime_inputs:
+                        all_inputs = container.locator(
+                            "input[type='text'], input[type='date'], input[type='datetime-local']"
+                        ).all()
+
+                        for inp in all_inputs:
+                            if not inp.is_visible():
+                                continue
+                            # [FIX] Bỏ qua readonly inputs (trừ khi có class flatpickr)
+                            is_readonly = inp.get_attribute("readonly")
+                            inp_class = inp.get_attribute("class") or ""
+                            inp_id = inp.get_attribute("id") or ""
+                            inp_name = inp.get_attribute("name") or ""
+
+                            # Skip nếu là readonly VÀ không phải datepicker
+                            if is_readonly and not any(
+                                kw in inp_class.lower()
+                                for kw in [
+                                    "flatpickr",
+                                    "datepicker",
+                                    "datetime",
+                                    "timepicker",
+                                ]
+                            ):
+                                print(
+                                    f"            ⏭️ Skip readonly input: id='{inp_id}', name='{inp_name}'"
+                                )
+                                continue
+
+                            # Skip nếu ID/name rõ ràng không phải datetime
+                            skip_ids = [
+                                "factionwarid",
+                                "eventid",
+                                "name",
+                                "title",
+                                "description",
+                            ]
+                            if any(skip in inp_id.lower() for skip in skip_ids):
+                                print(
+                                    f"            ⏭️ Skip non-datetime input: id='{inp_id}'"
+                                )
+                                continue
+                            if any(skip in inp_name.lower() for skip in skip_ids):
+                                print(
+                                    f"            ⏭️ Skip non-datetime input: name='{inp_name}'"
+                                )
+                                continue
+
+                            # [FIX] Chỉ chọn input có placeholder/class liên quan datetime
+                            inp_placeholder = (
+                                inp.get_attribute("placeholder") or ""
+                            ).lower()
+                            is_likely_datetime = any(
+                                kw
+                                in inp_class.lower()
+                                + inp_placeholder
+                                + inp_id.lower()
+                                + inp_name.lower()
+                                for kw in [
+                                    "date",
+                                    "time",
+                                    "schedule",
+                                    "flatpickr",
+                                    "picker",
+                                    "utc",
+                                    "calendar",
+                                ]
+                            )
+
+                            if is_likely_datetime or inp.is_editable():
+                                datetime_inputs.append(inp)
+
+                    # [FIX] Cuối cùng: chỉ giữ editable inputs (hoặc flatpickr readonly)
+                    final_inputs = []
+                    for inp in datetime_inputs:
+                        inp_class = inp.get_attribute("class") or ""
+                        is_flatpickr = any(
+                            kw in inp_class.lower()
+                            for kw in ["flatpickr", "datepicker", "datetimepicker"]
+                        )
+                        if inp.is_editable() or is_flatpickr:
+                            final_inputs.append(inp)
+                    datetime_inputs = final_inputs
+
+                    print(
+                        f"         📍 Found {len(datetime_inputs)} datetime inputs in container"
+                    )
+
+                    if len(datetime_inputs) >= len(values):
+                        for idx, (inp, val) in enumerate(zip(datetime_inputs, values)):
+                            print(f"         📅 Filling input {idx+1}: '{val}'")
+                            inp.scroll_into_view_if_needed()
+                            time.sleep(0.3)
+
+                            inp_class = inp.get_attribute("class") or ""
+                            is_flatpickr = "flatpickr" in inp_class.lower()
+                            is_readonly = inp.get_attribute("readonly") is not None
+
+                            if is_flatpickr or is_readonly:
+                                # Flatpickr readonly → Dùng JS để set value
+                                print(
+                                    f"            🔧 Using JS for flatpickr/readonly input"
+                                )
+                                inp.evaluate(
+                                    "(el, v) => {"
+                                    "  el.removeAttribute('readonly');"
+                                    "  el.value = v;"
+                                    "  el.setAttribute('value', v);"
+                                    "  el.dispatchEvent(new Event('input', {bubbles: true}));"
+                                    "  el.dispatchEvent(new Event('change', {bubbles: true}));"
+                                    "  // Nếu có flatpickr instance, update nó"
+                                    "  if(el._flatpickr) { el._flatpickr.setDate(v, true); }"
+                                    "}",
+                                    str(val),
+                                )
+                            else:
+                                # Input bình thường → fill trực tiếp
+                                try:
+                                    inp.fill("")
+                                    time.sleep(0.1)
+                                    inp.fill(str(val))
+                                except:
+                                    # Fallback JS
+                                    inp.evaluate(
+                                        "(el, v) => { el.value = v; el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); }",
+                                        str(val),
+                                    )
+
+                            time.sleep(0.3)
+
+                            # Trigger events & close any open picker
+                            try:
+                                inp.evaluate(
+                                    "el => { el.dispatchEvent(new Event('change', {bubbles: true})); el.dispatchEvent(new Event('blur', {bubbles: true})); }"
+                                )
+                            except:
+                                pass
+                            # Click elsewhere to close picker
+                            try:
+                                page.keyboard.press("Escape")
+                            except:
+                                pass
+                            time.sleep(0.2)
+
+                        return True
+                    else:
+                        print(
+                            f"         ⚠️ Not enough inputs ({len(datetime_inputs)}) for {len(values)} values"
+                        )
+
+                except Exception as e:
+                    print(f"         ⚠️ Container search error: {e}")
+                    continue
+
+            # ========================================
+            # STRATEGY 2: Tìm TẤT CẢ flatpickr inputs trên trang (global search)
+            # Khi container search thất bại
+            # ========================================
+            print("         🔍 Strategy 2: Global flatpickr search...")
+            all_flatpickr = page.locator(
+                "input.flatpickr-input:visible, input.datetimepicker:visible, input.datepicker:visible"
+            ).all()
+
+            # Filter bỏ những input đã có giá trị hợp lệ (có thể là field khác)
+            # Giữ lại input trống hoặc có giá trị cũ
+            editable_flatpickr = []
+            for inp in all_flatpickr:
+                inp_id = inp.get_attribute("id") or ""
+                # Bỏ qua input ID không liên quan
+                skip_ids = ["factionwarid", "eventid"]
+                if any(skip in inp_id.lower() for skip in skip_ids):
+                    continue
+                editable_flatpickr.append(inp)
+
+            print(f"         📍 Found {len(editable_flatpickr)} global datetime inputs")
+
+            if len(editable_flatpickr) >= len(values):
+                # Heuristic: Lấy N inputs cuối (thường là schedule inputs)
+                target_inputs = editable_flatpickr[-len(values) :]
+                for idx, (inp, val) in enumerate(zip(target_inputs, values)):
+                    print(f"         📅 [Global] Filling input {idx+1}: '{val}'")
+                    inp.scroll_into_view_if_needed()
+                    time.sleep(0.3)
+                    inp.evaluate(
+                        "(el, v) => {"
+                        "  el.removeAttribute('readonly');"
+                        "  el.value = v;"
+                        "  el.dispatchEvent(new Event('input', {bubbles: true}));"
+                        "  el.dispatchEvent(new Event('change', {bubbles: true}));"
+                        "  if(el._flatpickr) { el._flatpickr.setDate(v, true); }"
+                        "}",
+                        str(val),
+                    )
+                    time.sleep(0.2)
+                    try:
+                        page.keyboard.press("Escape")
+                    except:
+                        pass
+
+                return True
+
+            return False
+
+        except Exception as e:
+            print(f"         ❌ Error filling multiple datetime fields: {e}")
+            return False
 
     def _try_click_radio_by_label(self, page, label_text, value):
         """
@@ -515,13 +529,17 @@ class FormHandlerMixin:
 
             # =========================================================
             # CHIẾN THUẬT 1: TÌM NÚT THEO THỨ TỰ ƯU TIÊN CAO
-            # Clone > Create > Save > Update > Submit
+            # [FIX] Save & Continue > Save > Update > Create
+            # Ưu tiên workflow continuation buttons trước action buttons
             # =========================================================
             priority_buttons = [
-                "Clone",  # Clone form
-                "Create",
+                "Save & Continue",  # Highest priority - workflow continuation
+                "Save and Continue",
+                "Continue",
                 "Save",
                 "Update",
+                "Clone",  # Clone form
+                "Create",
                 "Submit",
                 "Confirm",
                 "OK",
@@ -612,64 +630,6 @@ class FormHandlerMixin:
             page.locator(".modal-backdrop").wait_for(state="hidden", timeout=2000)
         except:
             pass
-
-    def _handle_locked_item_popup(self, page):
-        try:
-            # Tìm popup có chứa text "locked this item"
-            popup = (
-                page.locator(".modal-content, .swal2-popup")
-                .filter(has_text="locked this item")
-                .last
-            )
-
-            if popup.is_visible(timeout=2000):  # Check nhanh 2s
-                print("      🔒 Detected Locked Item Popup.")
-                # Tìm nút Acquire Lock
-                acquire_btn = (
-                    popup.locator("button, a")
-                    .filter(has_text=re.compile("Acquire Lock|Unlock", re.IGNORECASE))
-                    .first
-                )
-
-                if acquire_btn.is_visible():
-                    print("      🔓 Clicking 'Acquire Lock'...")
-                    acquire_btn.click()
-                    time.sleep(1.5)  # Chờ reload
-                else:
-                    print("      ⚠️ Locked but no Acquire button found!")
-        except:
-            pass
-
-    def _auto_filter_data(self, page, keyword):
-        try:
-            search_input = None
-            placeholders = ["ID", "Search", "Name", "Filter", "Title"]
-            for p in placeholders:
-                inp = page.get_by_placeholder(re.compile(p, re.IGNORECASE)).first
-                if inp.is_visible():
-                    search_input = inp
-                    break
-
-            if not search_input:
-                search_input = page.locator("input[type='text']:visible").first
-
-            if search_input and search_input.is_visible():
-                print(f"      👉 Auto Filter: '{keyword}'")
-                search_input.fill(keyword)
-                search_input.press("Enter")
-                time.sleep(2)
-                return True
-        except:
-            pass
-        return False
-
-    def wait_for_table_data(self, page, timeout=10):
-        s = time.time()
-        while time.time() - s < timeout:
-            if page.locator("tbody tr").count() > 0:
-                return True
-            time.sleep(0.5)
-        return False
 
     def close_popup(self, page):
         try:
@@ -1216,10 +1176,95 @@ class FormHandlerMixin:
                     return self._handle_js_dropdown(page, element, value, "chosen")
                 elif is_select2_span:
                     return self._handle_js_dropdown(page, element, value, "select2")
-                    #     lib_type = "chosen"
-                    # else:
-                    #     lib_type = "select2"
-                    # return self._handle_js_dropdown(page, wrapper, value, lib_type)
+
+                # [FIX] Hidden SELECT hoặc SELECT có class lib → Tìm wrapper trước khi fallback JS Force
+                if is_hidden_select or is_lib:
+                    print("         🔍 SELECT ẩn/lib → Tìm wrapper...")
+                    wrapper = self._find_custom_dropdown_wrapper(element)
+                    if wrapper and wrapper.is_visible():
+                        wrapper_class = wrapper.get_attribute("class") or ""
+                        if "chosen" in wrapper_class:
+                            print("         ✅ Found Chosen wrapper for hidden SELECT")
+                            return self._handle_js_dropdown(
+                                page, wrapper, value, "chosen"
+                            )
+                        elif "select2" in wrapper_class:
+                            print("         ✅ Found Select2 wrapper for hidden SELECT")
+                            return self._handle_js_dropdown(
+                                page, wrapper, value, "select2"
+                            )
+                        elif "multiselect" in wrapper_class:
+                            print(
+                                "         ✅ Found Multiselect wrapper for hidden SELECT"
+                            )
+                            return self._handle_js_dropdown(
+                                page, wrapper, value, "multiselect"
+                            )
+                        else:
+                            print(
+                                f"         ✅ Found wrapper (class={wrapper_class[:50]}) → default chosen"
+                            )
+                            return self._handle_js_dropdown(
+                                page, wrapper, value, "chosen"
+                            )
+                    else:
+                        # [FIX] Tìm wrapper rộng hơn: parent > sibling
+                        print(
+                            "         🔍 Wrapper not found by ID/sibling. Trying broader search..."
+                        )
+                        try:
+                            parent = element.locator("xpath=..")
+                            broader_wrapper = parent.locator(
+                                "div.chosen-container, span.select2-container, div.multiselect"
+                            ).first
+                            if (
+                                broader_wrapper.count() > 0
+                                and broader_wrapper.is_visible()
+                            ):
+                                bw_class = broader_wrapper.get_attribute("class") or ""
+                                lib = (
+                                    "chosen"
+                                    if "chosen" in bw_class
+                                    else (
+                                        "select2"
+                                        if "select2" in bw_class
+                                        else "multiselect"
+                                    )
+                                )
+                                print(
+                                    f"         ✅ Found wrapper via broader search ({lib})"
+                                )
+                                return self._handle_js_dropdown(
+                                    page, broader_wrapper, value, lib
+                                )
+                        except:
+                            pass
+
+                    # [FIX] Thử select_option trước khi JS Force
+                    print(
+                        "         ⚠️ Không tìm thấy wrapper. Thử select_option trực tiếp..."
+                    )
+                    try:
+                        element.select_option(value=str(value), timeout=2000)
+                        print(f"         ✅ Selected by value: '{value}'")
+                        # Trigger UI update
+                        element.evaluate(
+                            "el => { el.dispatchEvent(new Event('change', {bubbles: true})); "
+                            "if(typeof jQuery !== 'undefined') { jQuery(el).trigger('chosen:updated').trigger('change'); } }"
+                        )
+                        return True
+                    except:
+                        pass
+                    try:
+                        element.select_option(label=str(value), timeout=2000)
+                        print(f"         ✅ Selected by label: '{value}'")
+                        element.evaluate(
+                            "el => { el.dispatchEvent(new Event('change', {bubbles: true})); "
+                            "if(typeof jQuery !== 'undefined') { jQuery(el).trigger('chosen:updated').trigger('change'); } }"
+                        )
+                        return True
+                    except:
+                        pass
 
                 # Fallback JS Force (Chỉ dùng khi cùng đường)
                 print("         ⚠️ Không thấy Wrapper. Dùng JS Force...")
@@ -1267,6 +1312,7 @@ class FormHandlerMixin:
 
     def _handle_js_dropdown(self, page, container, value, lib_type="chosen"):
         try:
+            value_str = str(value).strip()
             # 1. Click mở dropdown
             container.scroll_into_view_if_needed()
 
@@ -1277,7 +1323,6 @@ class FormHandlerMixin:
                 else:
                     container.click()
             elif lib_type == "multiselect":
-                # Vue Multiselect: Click vào input hoặc container
                 trigger = container.locator(
                     ".multiselect__input, .multiselect__tags"
                 ).first
@@ -1290,27 +1335,23 @@ class FormHandlerMixin:
 
             # ========================================
             # 2. CHỜ DROPDOWN OPTIONS LOAD XONG
-            # Polling cho đến khi có ít nhất 1 option hiển thị
             # ========================================
             print(f"         ⏳ Waiting for dropdown options to load...")
             wait_start = time.time()
-            max_wait = 2  # Chờ tối đa 2 giây
+            max_wait = 3  # Chờ tối đa 3 giây
             options_loaded = False
 
             while time.time() - wait_start < max_wait:
                 try:
                     if lib_type == "chosen":
-                        # Chosen: Tìm .chosen-drop có chứa options
                         options = container.locator(
                             ".chosen-drop .active-result, .chosen-drop li"
                         ).all()
                     elif lib_type == "multiselect":
-                        # Vue Multiselect: Tìm .multiselect__element
                         options = page.locator(
                             ".multiselect__element, .multiselect__option"
                         ).all()
                     else:
-                        # Select2: Tìm options trong dropdown đang mở
                         options = page.locator(".select2-results__option").all()
 
                     visible_options = [opt for opt in options if opt.is_visible()]
@@ -1329,7 +1370,71 @@ class FormHandlerMixin:
                     f"         ⚠️ Dropdown options may not be fully loaded, continuing anyway..."
                 )
 
-            # 3. Tìm ô search
+            # ========================================
+            # 3. STRATEGY A: Tìm và click TRỰC TIẾP option khớp text (không cần search)
+            #    Ưu tiên exact match trước, partial match sau
+            # ========================================
+            clicked_exact = False
+            try:
+                all_visible_opts = []
+                if lib_type == "chosen":
+                    all_visible_opts = [
+                        o
+                        for o in container.locator(".chosen-drop .active-result").all()
+                        if o.is_visible()
+                    ]
+                elif lib_type == "multiselect":
+                    all_visible_opts = [
+                        o
+                        for o in page.locator(
+                            ".multiselect__element span, .multiselect__option"
+                        ).all()
+                        if o.is_visible()
+                    ]
+                else:
+                    all_visible_opts = [
+                        o
+                        for o in page.locator(".select2-results__option").all()
+                        if o.is_visible()
+                    ]
+
+                value_lower = value_str.lower().replace("_", " ").replace("-", " ")
+
+                # Exact match (bao gồm cả underscore/space variants)
+                for opt in all_visible_opts:
+                    opt_text = opt.inner_text().strip()
+                    opt_lower = opt_text.lower().replace("_", " ").replace("-", " ")
+                    if opt_lower == value_lower or opt_text == value_str:
+                        opt.click()
+                        print(
+                            f"         ✅ [Dropdown] Exact match clicked: '{opt_text}'"
+                        )
+                        clicked_exact = True
+                        break
+
+                # Partial match (contains)
+                if not clicked_exact:
+                    for opt in all_visible_opts:
+                        opt_text = opt.inner_text().strip()
+                        opt_lower = opt_text.lower().replace("_", " ").replace("-", " ")
+                        if value_lower in opt_lower or opt_lower in value_lower:
+                            opt.click()
+                            print(
+                                f"         ✅ [Dropdown] Partial match clicked: '{opt_text}'"
+                            )
+                            clicked_exact = True
+                            break
+            except Exception as e:
+                print(f"         ⚠️ Direct match error: {e}")
+
+            if clicked_exact:
+                time.sleep(0.5)
+                page.keyboard.press("Tab")
+                return True
+
+            # ========================================
+            # 4. STRATEGY B: Dùng Search box
+            # ========================================
             search_box = None
             if lib_type == "chosen":
                 search_box = container.locator(".chosen-drop input").first
@@ -1340,24 +1445,28 @@ class FormHandlerMixin:
                     ".select2-container--open input.select2-search__field"
                 ).first
 
-            # Đợi search box visible
             try:
                 search_box.wait_for(state="visible", timeout=2000)
             except:
                 pass
 
-            # 4. Điền giá trị và chờ filter
             if search_box and search_box.is_visible():
-                search_box.fill(str(value))
+                # [FIX] Dùng search term ngắn hơn nếu value dài (tăng tỷ lệ match)
+                search_term = value_str
+                # Nếu value có underscore → thử tìm bằng phần đầu hoặc thay _ bằng space
+                if "_" in search_term and len(search_term) > 20:
+                    # Lấy phần chính (bỏ prefix/suffix)
+                    parts = search_term.split("_")
+                    search_term = " ".join(parts[:3])  # vd: "Bracket Standard 24HR"
 
-                # ========================================
-                # CHỜ KẾT QUẢ FILTER HIỂN THỊ
-                # ========================================
-                print(f"         ⏳ Waiting for search results...")
-                time.sleep(1.0)  # Chờ 1s cho filter chạy
+                search_box.fill(search_term)
+                print(f"         🔍 Searching: '{search_term}'")
 
-                # Chờ thêm cho đến khi có kết quả match
+                # CHỜ KẾT QUẢ FILTER
+                time.sleep(1.0)
+
                 wait_start = time.time()
+                visible_results = []
                 while time.time() - wait_start < 3:
                     try:
                         if lib_type == "chosen":
@@ -1373,43 +1482,100 @@ class FormHandlerMixin:
 
                         visible_results = [r for r in results if r.is_visible()]
                         if len(visible_results) > 0:
+                            print(
+                                f"         📋 Found {len(visible_results)} search results"
+                            )
                             break
                     except:
                         pass
                     time.sleep(0.3)
 
-                # 5. Click vào kết quả đầu tiên
-                try:
-                    if lib_type == "chosen":
-                        first_result = container.locator(".active-result").first
-                        if first_result.is_visible():
-                            first_result.click()
-                        else:
-                            page.keyboard.press("Enter")
-                    elif lib_type == "multiselect":
-                        first_result = page.locator(
-                            ".multiselect__element span, .multiselect__option"
-                        ).first
-                        if first_result.is_visible():
-                            first_result.click()
-                        else:
-                            page.keyboard.press("Enter")
-                    else:
-                        first_result = page.locator(
-                            ".select2-results__option--highlighted, .select2-results__option"
-                        ).first
-                        if first_result.is_visible():
-                            first_result.click()
-                        else:
-                            page.keyboard.press("Enter")
-                except:
-                    page.keyboard.press("Enter")
+                # [FIX] Nếu search không ra kết quả → clear search và thử lại với term ngắn hơn
+                if not visible_results and "_" in value_str:
+                    shorter_term = value_str.split("_")[0]  # Chỉ lấy từ đầu tiên
+                    print(f"         🔄 No results, retrying with: '{shorter_term}'")
+                    search_box.fill(shorter_term)
+                    time.sleep(1.0)
+                    wait_start = time.time()
+                    while time.time() - wait_start < 2:
+                        try:
+                            if lib_type == "chosen":
+                                results = container.locator(".active-result").all()
+                            elif lib_type == "multiselect":
+                                results = page.locator(
+                                    ".multiselect__element, .multiselect__option"
+                                ).all()
+                            else:
+                                results = page.locator(
+                                    ".select2-results__option:not(.select2-results__option--load-more)"
+                                ).all()
+                            visible_results = [r for r in results if r.is_visible()]
+                            if len(visible_results) > 0:
+                                print(
+                                    f"         📋 Found {len(visible_results)} results with shorter term"
+                                )
+                                break
+                        except:
+                            pass
+                        time.sleep(0.3)
 
-                print(f"         ✅ [Dropdown] Đã chọn: '{value}'")
+                # [FIX] Click option CHÍNH XÁC nhất (không phải first blind)
+                clicked = False
+                if visible_results:
+                    value_lower = value_str.lower().replace("_", " ").replace("-", " ")
+                    # Exact match first
+                    for r in visible_results:
+                        try:
+                            r_text = r.inner_text().strip()
+                            r_lower = r_text.lower().replace("_", " ").replace("-", " ")
+                            if r_lower == value_lower or r_text == value_str:
+                                r.click()
+                                print(f"         ✅ [Dropdown] Exact match: '{r_text}'")
+                                clicked = True
+                                break
+                        except:
+                            pass
+                    # Partial match
+                    if not clicked:
+                        for r in visible_results:
+                            try:
+                                r_text = r.inner_text().strip()
+                                r_lower = (
+                                    r_text.lower().replace("_", " ").replace("-", " ")
+                                )
+                                if value_lower in r_lower or r_lower in value_lower:
+                                    r.click()
+                                    print(
+                                        f"         ✅ [Dropdown] Partial match: '{r_text}'"
+                                    )
+                                    clicked = True
+                                    break
+                            except:
+                                pass
+                    # Fallback: Click first result
+                    if not clicked and visible_results:
+                        try:
+                            visible_results[0].click()
+                            r_text = visible_results[0].inner_text().strip()
+                            print(
+                                f"         ⚠️ [Dropdown] Clicked first result: '{r_text}'"
+                            )
+                            clicked = True
+                        except:
+                            page.keyboard.press("Enter")
+                            clicked = True
+                elif not clicked:
+                    # Không có kết quả nào → thử Enter
+                    print(f"         ⚠️ No search results found, pressing Enter")
+                    page.keyboard.press("Enter")
+                    clicked = True
+
+                if clicked:
+                    print(f"         ✅ [Dropdown] Đã chọn: '{value_str}'")
             else:
                 # Fallback gõ mù
-                print(f"         ⌨️ Gõ phím trực tiếp: '{value}'")
-                page.keyboard.type(str(value))
+                print(f"         ⌨️ Gõ phím trực tiếp: '{value_str}'")
+                page.keyboard.type(value_str)
                 time.sleep(1.0)
                 page.keyboard.press("Enter")
 
@@ -1453,85 +1619,3 @@ class FormHandlerMixin:
         for word in trash_words:
             clean_key = clean_key.replace(word, "")
         return clean_key.strip()
-
-    def _safe_compile(self, text):
-        """Tạo Regex an toàn từ text"""
-        try:
-            return re.compile(re.escape(str(text)), re.IGNORECASE)
-        except:
-            return re.compile(str(text), re.IGNORECASE)
-
-    def wait_for_table_data(self, page, timeout=10):
-        """Chờ bảng có dữ liệu"""
-        s = time.time()
-        while time.time() - s < timeout:
-            if page.locator("tbody tr").count() > 0:
-                return True
-            time.sleep(0.5)
-        return False
-
-    def _find_data_table(self, page):
-        """Tìm bảng chứa checkbox (loại bỏ bảng layout/header)"""
-        tables = page.locator("table").all()
-        for tbl in tables:
-            if not tbl.is_visible():
-                continue
-            if tbl.locator("tbody tr input[type='checkbox']").count() > 0:
-                return tbl
-        return page.locator("table").last
-
-    def _find_and_tick(self, rows_locator, text):
-        """Tìm dòng chứa text và tick checkbox"""
-        reg = self._safe_compile(text)
-        target_row = rows_locator.filter(has_text=reg).first
-
-        if target_row.is_visible():
-            chk = target_row.locator("input[type='checkbox']").first
-            if self._safe_check(chk):
-                print(f"   ✅ Đã tick dòng chứa '{text}'")
-                return True
-        return False
-
-    def _perform_table_filter(self, page, col_name, value):
-        """Tự động điền Filter và bấm nút"""
-        # 1. Tìm Input
-        search_input = None
-        placeholders = [f"{col_name} Contains", f"{col_name}", "Search", "Filter", "ID"]
-
-        for p in placeholders:
-            inp = page.get_by_placeholder(re.compile(p, re.IGNORECASE)).first
-            if inp.is_visible():
-                search_input = inp
-                print(f"      👉 Found Filter Input: '{p}'")
-                break
-
-        if not search_input:
-            search_input = page.locator(
-                ".filter-box input, .card-header input, input.form-control"
-            ).first
-
-        if search_input and search_input.is_visible():
-            search_input.fill(str(value))
-
-            # 2. Bấm nút Filter
-            btn = (
-                page.locator("button, a.btn")
-                .filter(has_text=re.compile("Filter|Search|Go", re.IGNORECASE))
-                .first
-            )
-            if not btn.is_visible():
-                btn = page.locator(
-                    "button:has(i.fa-search), button:has(i.fa-filter)"
-                ).first
-
-            if btn.is_visible():
-                btn.click()
-            else:
-                search_input.press("Enter")
-
-            # Chờ reload
-            time.sleep(2.0)
-            page.wait_for_load_state("networkidle")
-            return True
-
-        return False

@@ -1,29 +1,28 @@
-# automation_core.py
+# automation/core.py
 import ast
 import time
 import re
 import os
-import csv
 import json
-import random
-import shutil
 import sys
 import asyncio
-import threading
 from playwright.sync_api import sync_playwright
-import pandas as pd
-import io
 
 # --- IMPORT CÁC MODULE CON ---
-from automation_modules.constants import DOWNLOAD_DIR
-from automation_modules.navigator import NavigatorMixin
-from automation_modules.form_handler import FormHandlerMixin
-from automation_modules.data_handler import DataHandlerMixin
-from automation_modules.smart_tester import SmartTesterMixin
+from automation.constants import DOWNLOAD_DIR
+from automation.navigator import NavigatorMixin
+from automation.form_handler import FormHandlerMixin
+from automation.table_handler import TableHandlerMixin
+from automation.data_handler import DataHandlerMixin
+from automation.smart_tester import SmartTesterMixin
 
 
 class BrickAutomation(
-    NavigatorMixin, FormHandlerMixin, DataHandlerMixin, SmartTesterMixin
+    NavigatorMixin,
+    TableHandlerMixin,
+    FormHandlerMixin,
+    DataHandlerMixin,
+    SmartTesterMixin,
 ):
     def __init__(self):
         if not os.path.exists(DOWNLOAD_DIR):

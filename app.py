@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import json
 import os
-from ai_brain import parse_command_to_json, save_scenario, load_scenarios
-from automation_core import BrickAutomation
+from ai.brain import parse_command_to_json, save_scenario, load_scenarios
+from automation.core import BrickAutomation
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Brick AI Automation By HieuNM", layout="wide")
