@@ -70,6 +70,10 @@ Example 14:
 Input: "Sửa FF ID: FF_Feb2026_Test -> sửa Gate: r80, Leaderboard Type: Bracketed, Bracket Preset: Bracket_Standard_24HR, Schedules In UTC: 02/10/2026 07:15 AM, 02/10/2026 11:00 AM"
 Output: [{{"action":"edit_row","target":"FF_Feb2026_Test"}},{{"action":"update_form","data":{{"Gate":"r80","Leaderboard Type":"Bracketed","Bracket Preset":"Bracket_Standard_24HR","Schedules In UTC":"02/10/2026 07:15 AM, 02/10/2026 11:00 AM"}}}},{{"action":"save_form"}}]
 
+Example 15:
+Input: "Vào Live Events -> Versus -> Tournament -> Sửa ID: VS_Tournament_Feb2026_Wk1 -> Đợi trang load -> Sửa Gate: r80, Leaderboard Type: Bracketed, Bracket Preset: Bracket_Standard_24HR, PreEvent Phase Start Date Time(UTC): 02/11/2026 07:15 AM, PreEvent Phase End Date Time(UTC): 02/11/2026 11:00 AM, Lock Time Offset: 5 bấm nút save -> Active Phase Start Date Time (UTC): 02/11/2026 11:00 AM, Active Phase End Date Time (UTC): 02/14/2026 11:00 AM -> Bấm save & continue -> Bấm vào Menu Milestone Rewards -> Export CSV tournament_milestone.csv -> Import CSV -> Bấm save & continue -> Bấm The Brick -> Chọn Versus Tournament -> Process"
+Output: [{{"action":"navigate","path":["Live Events","Versus","Tournament"]}},{{"action":"edit_row","target":"VS_Tournament_Feb2026_Wk1"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Gate":"r80","Leaderboard Type":"Bracketed","Bracket Preset":"Bracket_Standard_24HR","PreEvent Phase Start Date Time(UTC)":"02/11/2026 07:15 AM","PreEvent Phase End Date Time(UTC)":"02/11/2026 11:00 AM","Lock Time Offset":"5"}}}},{{"action":"save_form","mode":"save"}},{{"action":"update_form","data":{{"Active Phase Start Date Time (UTC)":"02/11/2026 11:00 AM","Active Phase End Date Time (UTC)":"02/14/2026 11:00 AM"}}}},{{"action":"save_form","mode":"continue"}},{{"action":"click","target":"Milestone Rewards"}},{{"action":"download","target":"Export CSV","value":"tournament_milestone.csv"}},{{"action":"upload","target":"Import CSV","value":"tournament_milestone.csv"}},{{"action":"save_form","mode":"continue"}},{{"action":"process_deployment","options":["Versus Tournament"]}}]
+
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
@@ -106,6 +110,30 @@ CRITICAL RULES:
   * Keep comma-separated values in ONE string: "02/10/2026 07:15 AM, 02/10/2026 11:00 AM"
   * System will auto-split and fill each datetime input
   * DO NOT create separate fields for Start/End
+
+- SECTION-QUALIFIED DATETIME FIELDS (IMPORTANT):
+  * When user specifies fields like "PreEvent Phase Start Date Time(UTC)", "Active Phase End Date Time (UTC)"
+  * Use the FULL label including section prefix: "PreEvent Phase Start Date Time(UTC)"
+  * This helps system find the correct field in sections with duplicate labels
+  * DO NOT strip the section prefix!
+  * Examples:
+    - "PreEvent Phase Start Date Time(UTC): 02/11/2026 07:15 AM" → key="PreEvent Phase Start Date Time(UTC)"
+    - "Active Phase End Date Time (UTC): 02/14/2026 11:00 AM" → key="Active Phase End Date Time (UTC)"
+
+- SAVE MODE (IMPORTANT):
+  * "bấm save", "bấm nút save", "click Save", "nhấn Save" → {{"action":"save_form","mode":"save"}} (just Save, NOT Save & Continue)
+  * "bấm save & continue", "Save & Continue", "save and continue" → {{"action":"save_form","mode":"continue"}}
+  * If no specific save instruction but need to save after update_form → {{"action":"save_form"}} (default)
+
+- SIDEBAR MENU CLICK:
+  * "Bấm vào Menu X ở bên trái", "Click sidebar X" → {{"action":"click","target":"X"}}
+
+- SPLITTING FORM UPDATES ACROSS SAVE ACTIONS:
+  * When user says "fill A -> save -> fill B -> save & continue"
+  * Create SEPARATE update_form actions for each group
+  * DO NOT merge all fields into one update_form
+  * Example: "sửa Gate: r80, Lock Time Offset: 5 bấm save -> sửa Start Time: X bấm save & continue"
+    → update_form(Gate, Lock Time Offset) + save_form(mode=save) + update_form(Start Time) + save_form(mode=continue)
 
 NOW CONVERT THIS COMMAND (use same action names as examples above):
 "{user_command}"
@@ -156,6 +184,19 @@ def get_reasoning_prompt(user_command):
     10. Identify actions: navigate, click, wait, download, upload, edit_row, update_form.
     11. "Chọn League 5" -> Click on Sidebar "League 5".
     12. "Export CSV" -> Download action.
+    13. **SECTION-QUALIFIED FIELDS**: 
+       - "PreEvent Phase Start Date Time(UTC)" = field in the "PreEvent Phase" section
+       - "Active Phase End Date Time (UTC)" = field in the "Active Phase" section
+       - Keep the full section prefix in the field name!
+    14. **SAVE vs SAVE & CONTINUE**:
+       - "bấm save", "bấm nút save", "click Save" = JUST Save (mode="save")
+       - "bấm save & continue" = Save and navigate to next section (mode="continue")
+       - When user splits actions with "bấm save" in between, create separate update_form groups
+    15. **SIDEBAR MENU**: "Bấm vào Menu X ở bên trái" = Click sidebar item X
+    16. **INLINE EDIT FIELDS**: Fields like "Lock Time Offset", "Buffer Time" may have Edit buttons
+       - These fields are read-only by default with "Edit" button next to them
+       - System handles clicking Edit, filling value, saving inline automatically
+       - Just include them in update_form data normally
 
     Output ONLY the logical analysis/plan in plain text. Do NOT generate JSON yet.
     """
@@ -308,6 +349,30 @@ def get_formatting_prompt(user_command, analysis_clean):
            -> {{{{ "Schedules In UTC": "02/10/2026 07:15 AM, 02/10/2026 11:00 AM" }}}}
          * System will auto-detect and split to fill multiple datetime inputs
          * DO NOT create separate "Start Time" and "End Time" fields unless explicitly mentioned
+
+       - **SECTION-QUALIFIED DATETIME FIELDS** (IMPORTANT):
+         * When user specifies "PreEvent Phase Start Date Time(UTC)", "Active Phase End Date Time (UTC)"
+         * Use the FULL label including section prefix as the key
+         * This helps system find the correct field when multiple sections have same field names
+         * Examples:
+           - "PreEvent Phase Start Date Time(UTC): 02/11/2026 07:15 AM" → key = "PreEvent Phase Start Date Time(UTC)"
+           - "Active Phase End Date Time (UTC): 02/14/2026 11:00 AM" → key = "Active Phase End Date Time (UTC)"
+         * DO NOT strip the section prefix!
+
+       - **SAVE_FORM MODE** (IMPORTANT):
+         * "bấm save", "bấm nút save", "click Save", "nhấn Save" → {{{{ "action": "save_form", "mode": "save" }}}} (just Save, NOT Save & Continue)
+         * "bấm save & continue", "Save & Continue" → {{{{ "action": "save_form", "mode": "continue" }}}}
+         * Default (no specific instruction): {{{{ "action": "save_form" }}}} = auto-detect
+
+       - **SPLITTING FORM UPDATES ACROSS SAVE ACTIONS** (CRITICAL):
+         * When user says "fill A, B -> save -> fill C, D -> save & continue"
+         * Create SEPARATE update_form actions for each group split by save
+         * Example: "sửa Gate: r80, Lock Time Offset: 5 bấm save -> sửa Start Time: X bấm save & continue"
+           → update_form(Gate, Lock Time Offset) + save_form(mode=save) + update_form(Start Time) + save_form(mode=continue)
+
+       - **SIDEBAR/MENU CLICK**:
+         * "Bấm vào Menu X ở bên trái", "Click sidebar X" → {{{{ "action": "click", "target": "X" }}}}
+         * Used for sidebar navigation within a detail page (e.g., Milestone Rewards, Rewards Per Battle)
 
     10. **CLONE FLOW (CRITICAL)**:
        - Command: "Clone 'A' -> New ID: B, gate: C, chọn radio Use another currency, currency: D"
@@ -492,6 +557,40 @@ def get_formatting_prompt(user_command, analysis_clean):
           "Schedules In UTC": "02/10/2026 07:15 AM, 02/10/2026 11:00 AM"
       }}}} }}}},
       {{{{ "action": "save_form" }}}}
+    ]
+
+    Ex 13: "Vào Live Events -> Versus -> Tournament -> Sửa ID: VS_Tournament_Feb2026_Wk1 -> Đợi trang load -> Sửa Gate: r80, Leaderboard Type: Bracketed, Bracket Preset: Bracket_Standard_24HR, PreEvent Phase Start Date Time(UTC): 02/11/2026 07:15 AM, PreEvent Phase End Date Time(UTC): 02/11/2026 11:00 AM, Lock Time Offset: 5 bấm nút save -> Active Phase Start Date Time (UTC): 02/11/2026 11:00 AM, Active Phase End Date Time (UTC): 02/14/2026 11:00 AM -> Bấm save & continue -> Bấm vào Menu Milestone Rewards -> Export CSV tournament_milestone.csv -> Import CSV -> Bấm save & continue -> Bấm The Brick -> Chọn Versus Tournament -> Process"
+    EXPLANATION:
+      - Section-qualified datetime fields: "PreEvent Phase Start Date Time(UTC)" keeps the section prefix
+      - Lock Time Offset has an Edit button on the web page - system handles inline edit automatically
+      - "bấm nút save" = save_form with mode="save" (just Save, NOT Save & Continue)
+      - "Bấm save & continue" = save_form with mode="continue"
+      - Separate update_form groups split by save actions
+      - "Bấm vào Menu Milestone Rewards" = click sidebar item
+      - Export then Import CSV reuses filename
+    JSON: [
+      {{{{ "action": "navigate", "path": ["Live Events", "Versus", "Tournament"] }}}},
+      {{{{ "action": "edit_row", "target": "VS_Tournament_Feb2026_Wk1" }}}},
+      {{{{ "action": "wait" }}}},
+      {{{{ "action": "update_form", "data": {{{{
+          "Gate": "r80",
+          "Leaderboard Type": "Bracketed",
+          "Bracket Preset": "Bracket_Standard_24HR",
+          "PreEvent Phase Start Date Time(UTC)": "02/11/2026 07:15 AM",
+          "PreEvent Phase End Date Time(UTC)": "02/11/2026 11:00 AM",
+          "Lock Time Offset": "5"
+      }}}} }}}},
+      {{{{ "action": "save_form", "mode": "save" }}}},
+      {{{{ "action": "update_form", "data": {{{{
+          "Active Phase Start Date Time (UTC)": "02/11/2026 11:00 AM",
+          "Active Phase End Date Time (UTC)": "02/14/2026 11:00 AM"
+      }}}} }}}},
+      {{{{ "action": "save_form", "mode": "continue" }}}},
+      {{{{ "action": "click", "target": "Milestone Rewards" }}}},
+      {{{{ "action": "download", "target": "Export CSV", "value": "tournament_milestone.csv" }}}},
+      {{{{ "action": "upload", "target": "Import CSV", "value": "tournament_milestone.csv" }}}},
+      {{{{ "action": "save_form", "mode": "continue" }}}},
+      {{{{ "action": "process_deployment", "options": ["Versus Tournament"] }}}}
     ]
 
     INPUT CONTEXT:

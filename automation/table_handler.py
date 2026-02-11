@@ -322,13 +322,17 @@ class TableHandlerMixin:
 
             # [CRITICAL] Check for Locked Item popup after edit/clone click
             # Some items may be locked by other users
-            time.sleep(0.5)  # Brief wait for popup to appear
+            # Chờ đủ lâu để popup có thời gian render (tăng từ 0.5s lên 1s)
+            time.sleep(1.0)
             if action_type == "edit" or action_type == "clone":
                 popup_handled = self._handle_locked_item_popup(page)
                 if popup_handled:
                     # After acquiring lock, wait for form to fully load
                     time.sleep(1.0)
                     print("      ✅ Ready to update form.")
+                else:
+                    # No popup = item unlocked, proceed normally
+                    time.sleep(0.5)
         elif "Row Not Found" in result:
             if self._auto_filter_data(page, target_text):
                 result = page.evaluate(
@@ -338,11 +342,13 @@ class TableHandlerMixin:
                 if "Clicked" in result and (
                     action_type == "edit" or action_type == "clone"
                 ):
-                    time.sleep(0.5)
+                    time.sleep(1.0)
                     popup_handled = self._handle_locked_item_popup(page)
                     if popup_handled:
                         time.sleep(1.0)
                         print("      ✅ Ready to update form.")
+                    else:
+                        time.sleep(0.5)
             else:
                 raise Exception(f"Không tìm thấy dòng '{target_text}'")
 

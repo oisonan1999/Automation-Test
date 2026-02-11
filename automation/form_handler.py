@@ -79,6 +79,23 @@ class FormHandlerMixin:
                 target_element = self._find_input_element(page, label)
 
                 if target_element:
+                    # [FIX] Kiểm tra xem field có nút Edit không TRƯỚC KHI cố gắng điền
+                    # Nếu có, gọi inline edit handler trước
+                    if self._has_nearby_edit_button(page, target_element, label):
+                        print(
+                            f"         ✏️ Detected Edit button for '{label}', using inline edit..."
+                        )
+                        success = self._handle_inline_edit_field(page, label, value)
+                        if success:
+                            print(f"         ✅ Inline edit completed for '{label}'")
+                            time.sleep(3)
+                            continue
+                        else:
+                            # Nếu inline edit thất bại, thử điền bình thường
+                            print(
+                                f"         ⚠️ Inline edit failed, trying normal fill..."
+                            )
+
                     # Bước 2: Điền dữ liệu (Logic thông minh nằm ở đây)
                     success = self._fill_element_smartly(page, target_element, value)
                     if not success:
@@ -119,8 +136,13 @@ class FormHandlerMixin:
                             print(f"         ❌ Retry fill failed for '{label}'")
                     else:
                         print(
-                            f"         ❌ Cannot find field '{label}' even after retry. Trying alternative search..."
+                            f"         ❌ Cannot find field '{label}' even after retry. Trying inline edit..."
                         )
+                        # Try inline edit handling (for fields with Edit buttons like Lock Time Offset)
+                        if self._handle_inline_edit_field(page, label, value):
+                            print(f"         ✅ Inline edit handled for '{label}'")
+                            time.sleep(3)
+                            continue
                         # Debug: In ra các label/legend hiển thị để debug
                         try:
                             all_labels = page.locator("label, legend").all()
@@ -529,38 +551,73 @@ class FormHandlerMixin:
 
             # =========================================================
             # CHIẾN THUẬT 1: TÌM NÚT THEO THỨ TỰ ƯU TIÊN CAO
-            # [FIX] Save & Continue > Save > Update > Create
-            # Ưu tiên workflow continuation buttons trước action buttons
+            # Hỗ trợ mode="save" (chỉ Save) vs mode="continue" (Save & Continue)
             # =========================================================
-            priority_buttons = [
-                "Save & Continue",  # Highest priority - workflow continuation
-                "Save and Continue",
-                "Continue",
-                "Save",
-                "Update",
-                "Clone",  # Clone form
-                "Create",
-                "Submit",
-                "Confirm",
-                "OK",
-                "Yes",
-            ]
+            if mode == "save":
+                # Mode "save": Chỉ bấm Save (KHÔNG bấm Save & Continue)
+                priority_buttons = [
+                    "Save",
+                    "Update",
+                    "Submit",
+                    "Confirm",
+                    "OK",
+                ]
+            else:
+                # Mode "continue" (default): Ưu tiên Save & Continue
+                priority_buttons = [
+                    "Save & Continue",
+                    "Save and Continue",
+                    "Continue",
+                    "Save",
+                    "Update",
+                    "Clone",
+                    "Create",
+                    "Submit",
+                    "Confirm",
+                    "OK",
+                    "Yes",
+                ]
 
             for btn_text in priority_buttons:
-                btn = (
-                    scope.locator("button, a.btn, input[type='submit']")
-                    .filter(
-                        has_text=re.compile(
-                            f"^\\s*{re.escape(btn_text)}\\s*$|{re.escape(btn_text)}",
-                            re.IGNORECASE,
+                if mode == "save" and btn_text.lower() == "save":
+                    # EXACT MATCH: Tìm button "Save" nhưng KHÔNG match "Save & Continue"
+                    all_btns = scope.locator(
+                        "button, a.btn, input[type='submit']"
+                    ).all()
+                    for candidate_btn in all_btns:
+                        if candidate_btn.is_visible():
+                            try:
+                                txt = candidate_btn.inner_text().strip()
+                                # Remove icons/emojis, check if remaining text is just "Save"
+                                txt_clean = re.sub(r"[^\w\s&]", "", txt).strip()
+                                if (
+                                    re.match(r"^save$", txt_clean, re.IGNORECASE)
+                                    and "continue" not in txt.lower()
+                                ):
+                                    target_btn = candidate_btn
+                                    print(
+                                        f"      🎯 Found exact 'Save' button (mode=save)"
+                                    )
+                                    break
+                            except:
+                                pass
+                    if target_btn:
+                        break
+                else:
+                    btn = (
+                        scope.locator("button, a.btn, input[type='submit']")
+                        .filter(
+                            has_text=re.compile(
+                                f"^\\s*{re.escape(btn_text)}\\s*$|{re.escape(btn_text)}",
+                                re.IGNORECASE,
+                            )
                         )
+                        .last
                     )
-                    .last
-                )
-                if btn.count() > 0 and btn.is_visible():
-                    print(f"      🎯 Found button: '{btn_text}'")
-                    target_btn = btn
-                    break
+                    if btn.count() > 0 and btn.is_visible():
+                        print(f"      🎯 Found button: '{btn_text}'")
+                        target_btn = btn
+                        break
 
             # =========================================================
             # CHIẾN THUẬT 2: TÌM THEO CLASS
@@ -753,6 +810,15 @@ class FormHandlerMixin:
         label_normalized = re.sub(r"[\s_-]+", "", label_lower)
 
         # ========================================
+        # SECTION-AWARE SEARCH: Handle "Section Name Field Name" patterns
+        # VD: "PreEvent Phase Start Date Time(UTC)" → section="PreEvent Phase", field="Start Date Time(UTC)"
+        # VD: "Active Phase End Date Time (UTC)" → section="Active Phase", field="End Date Time (UTC)"
+        # ========================================
+        section_result = self._try_section_aware_search(page, label_text)
+        if section_result:
+            return section_result
+
+        # ========================================
         # SPECIAL CASE: "New Event ID", "New ID", "New Section ID"
         # Form Clone có input với placeholder chứa "suffix" hoặc label chứa "New"
         # ========================================
@@ -789,7 +855,141 @@ class FormHandlerMixin:
 
         safe_label = re.compile(re.escape(label_text), re.IGNORECASE)
 
-        # [FIX] Thêm <legend> vào danh sách tìm kiếm (Gate field dùng <legend>)
+        # [FIX] PREMIER STRATEGY: Trước hết tìm label + parent container + element trong container đó
+        # Đây là cách đáng tin cậy nhất để tránh bỏ qua hoặc chọn nhầm
+        try:
+            label_candidates = (
+                page.locator("label, legend, span, h5, th, strong, div, b")
+                .filter(has_text=safe_label)
+                .all()
+            )
+            visible_candidates = [c for c in label_candidates if c.is_visible()]
+
+            print(
+                f"         📋 Found {len(visible_candidates)} visible label candidates"
+            )
+
+            # [NEW] Sắp xếp candidates theo độ match
+            for label_el in visible_candidates:
+                label_actual_text = label_el.inner_text().strip()
+
+                # [DEBUG] Log which label was checked
+                if label_actual_text.lower() == label_lower:
+                    print(f"         ✅ Exact label match: '{label_actual_text}'")
+                else:
+                    print(f"         ~ Partial match: '{label_actual_text[:50]}...'")
+
+                # [CRITICAL] TRỪ CASE: Label chứa radio (skip nếu không exact match)
+                has_radio = label_el.locator("input[type='radio']").count() > 0
+                if has_radio and label_actual_text.lower() != label_lower:
+                    print(f"         ⏭️ Skip (radio label without exact match)")
+                    continue
+
+                # [NEW STRATEGY] Tìm parent container (form-group)
+                # LUÔN tìm input/select TRONG container này trước, không dùng fallback
+                parent_containers = None
+                container_source = None
+                for xpath in [
+                    "xpath=ancestor::div[contains(@class,'form-group')]",
+                    "xpath=ancestor::div[contains(@class,'control-group')]",
+                    "xpath=ancestor::fieldset",
+                    "xpath=ancestor::div[contains(@class,'row')]",
+                ]:
+                    try:
+                        container = label_el.locator(xpath).first
+                        if container.count() > 0 and container.is_visible():
+                            parent_containers = container
+                            container_source = xpath
+                            print(f"         🔗 Found parent container: {xpath}")
+                            break
+                    except:
+                        pass
+
+                if parent_containers:
+                    # [CRITICAL] Tìm input/select TRONG container này
+                    # Không dùng sibling/following, chỉ dùng child elements
+                    elements = parent_containers.locator(
+                        "select, input:not([type='radio']):not([type='button']), textarea"
+                    ).all()
+
+                    print(
+                        f"         📦 Found {len(elements)} input/select elements in container"
+                    )
+
+                    if len(elements) > 0:
+                        element = elements[0]  # Prefer first element in container
+                        print(f"         ✅ Found element in same form-group container")
+
+                        # Validate: Kiểm tra element name/id có liên quan đến label không
+                        el_name = element.get_attribute("name") or ""
+                        el_id = element.get_attribute("id") or ""
+                        el_type = element.evaluate("el => el.tagName") or "UNKNOWN"
+
+                        print(
+                            f"         🔍 Element: tag={el_type}, name='{el_name}', id='{el_id}'"
+                        )
+
+                        # Nếu element là select, check name/id để tránh nhầm lẫn
+                        if el_type == "SELECT":
+                            el_name_norm = el_name.lower().replace("-", "_")
+                            el_id_norm = el_id.lower().replace("-", "_")
+                            label_norm = label_lower.replace(" ", "_")
+
+                            # [FIX] More strict validation - check if any significant word from label appears in element name/id
+                            # VD: "Leaderboard Types" -> words: ["leaderboard", "types", "type"]
+                            label_words = label_norm.split("_")
+                            # Remove common words that don't add meaning
+                            meaningful_words = [
+                                w
+                                for w in label_words
+                                if len(w) > 2 and w not in ["the", "and", "for"]
+                            ]
+
+                            # Also check singular form (types -> type)
+                            expanded_words = meaningful_words.copy()
+                            for word in meaningful_words:
+                                if word.endswith("s"):
+                                    expanded_words.append(word.rstrip("s"))
+
+                            # Check if ANY meaningful word from label appears in element name/id
+                            is_related = False
+                            for word in expanded_words:
+                                if word in el_name_norm or word in el_id_norm:
+                                    is_related = True
+                                    break
+
+                            # [DEBUG] Log validation details
+                            print(
+                                f"         🔬 Validation: label_norm='{label_norm}', meaningful_words={meaningful_words}"
+                            )
+                            print(
+                                f"         🔬 Element: name_norm='{el_name_norm}', id_norm='{el_id_norm}'"
+                            )
+                            print(f"         ✓ Related: {is_related}")
+
+                            if not is_related:
+                                print(
+                                    f"         ⚠️ Element name/id không match label, skip container này"
+                                )
+                                continue
+
+                        # Element tìm thấy trong container - check if visible
+                        if not element.is_visible():
+                            # Hidden SELECT - tìm wrapper
+                            if el_type == "SELECT":
+                                wrapper = self._find_custom_dropdown_wrapper(element)
+                                if wrapper:
+                                    print(
+                                        f"         ✅ Found wrapper for hidden SELECT"
+                                    )
+                                    return wrapper
+
+                        print(f"         ✅ Returning element from container search")
+                        return element
+        except Exception as e:
+            print(f"         ⚠️ Container-based search error: {e}")
+
+        # [OLD CODE] Fallback đến label candidates search
         candidates = (
             page.locator("label, legend, span, h5, th, strong, div, b")
             .filter(has_text=safe_label)
@@ -885,7 +1085,199 @@ class FormHandlerMixin:
                         print(f"         ⏭️ Skip radio target for '{for_attr}'")
                         continue
 
-                    print(f"         ✅ Found target by for attribute: #{for_attr}")
+                    # [FIX CRITICAL] Validate target match với label text
+                    # Tránh trường hợp tìm nhầm element không liên quan
+                    # VD: Label "Leaderboard Types" có for="tag" nhưng tag là field khác
+                    try:
+                        # Kiểm tra xem target có phải là field đúng không bằng cách:
+                        # 1. So sánh name attribute với label text
+                        # 2. So sánh id với label text (normalized)
+                        target_id = target.get_attribute("id") or ""
+                        target_name = target.get_attribute("name") or ""
+
+                        # Normalize label và target để so sánh
+                        label_normalized = label_lower.replace(" ", "_").replace(
+                            "-", "_"
+                        )
+                        id_normalized = target_id.replace("-", "_").lower()
+                        name_normalized = target_name.replace("-", "_").lower()
+
+                        # Check if target ID/name relates to label
+                        is_related = (
+                            label_normalized in id_normalized
+                            or id_normalized in label_normalized
+                            or label_normalized in name_normalized
+                            or name_normalized in label_normalized
+                        )
+
+                        if not is_related:
+                            # ID/name không liên quan → Có thể tìm nhầm
+                            print(
+                                f"         ⚠️ Target id/name ('{target_id}'/'{target_name}') doesn't match label '{label_text}'"
+                            )
+                            print(f"         🔍 Searching for better match...")
+
+                            # Tìm element có ID/name khớp với label
+                            # VD: "Leaderboard Types" → tìm id="leaderboard_type" hoặc name="leaderboard_type"
+                            better_match = None
+
+                            # Pattern 1: leaderboard_type, leaderboard-type, leaderboardtype
+                            id_patterns = [
+                                label_normalized,
+                                label_normalized.rstrip("s"),  # "types" -> "type"
+                                label_lower.replace(" ", "_"),
+                                label_lower.replace(" ", "-"),
+                                label_lower.replace(" ", ""),
+                            ]
+
+                            # [FIX] Thu thập TẤT CẢ candidates match pattern
+                            all_candidates = []
+
+                            for pattern in id_patterns:
+                                # Try by ID - collect all matches
+                                candidates_by_id = page.locator(
+                                    f"#{pattern}, [id*='{pattern}']"
+                                ).all()
+                                for cand in candidates_by_id:
+                                    if cand.is_visible():
+                                        all_candidates.append(("id", pattern, cand))
+
+                                # Try by name - collect all matches
+                                candidates_by_name = page.locator(
+                                    f"[name='{pattern}'], [name*='{pattern}']"
+                                ).all()
+                                for cand in candidates_by_name:
+                                    if cand.is_visible():
+                                        all_candidates.append(("name", pattern, cand))
+
+                            if all_candidates:
+                                print(
+                                    f"         📋 Found {len(all_candidates)} potential matches"
+                                )
+
+                                # [STRATEGY 1] Chọn candidate TRONG CÙNG CONTAINER với label
+                                label_containers = []
+                                try:
+                                    for container_xpath in [
+                                        "xpath=ancestor::div[contains(@class,'form-group')]",
+                                        "xpath=ancestor::div[contains(@class,'control-group')]",
+                                        "xpath=ancestor::fieldset",
+                                        "xpath=ancestor::div[contains(@class,'row')]",
+                                        "xpath=../..",  # 2 levels up
+                                    ]:
+                                        container = label_el.locator(
+                                            container_xpath
+                                        ).first
+                                        if container.count() > 0:
+                                            label_containers.append(container)
+                                except:
+                                    pass
+
+                                # Check candidates trong container
+                                for match_type, pattern, cand in all_candidates:
+                                    for label_container in label_containers:
+                                        try:
+                                            # Check if candidate is child of label's container
+                                            container_inputs = label_container.locator(
+                                                "select, input"
+                                            ).all()
+                                            for ci in container_inputs:
+                                                try:
+                                                    if ci.evaluate(
+                                                        "(el, other) => el.isSameNode(other)",
+                                                        cand,
+                                                    ):
+                                                        better_match = cand
+                                                        print(
+                                                            f"         ✅ Found match in same container by {match_type}: '{pattern}'"
+                                                        )
+                                                        break
+                                                except:
+                                                    pass
+                                            if better_match:
+                                                break
+                                        except:
+                                            pass
+                                    if better_match:
+                                        break
+
+                                # [STRATEGY 2] Nếu không tìm được trong container, chọn GẦN NHẤT với label
+                                if not better_match:
+                                    try:
+                                        label_box = label_el.bounding_box()
+                                        if label_box:
+                                            min_distance = float("inf")
+                                            closest_candidate = None
+
+                                            for (
+                                                match_type,
+                                                pattern,
+                                                cand,
+                                            ) in all_candidates:
+                                                try:
+                                                    cand_box = cand.bounding_box()
+                                                    if cand_box:
+                                                        # Tính khoảng cách
+                                                        distance = abs(
+                                                            cand_box["x"]
+                                                            - label_box["x"]
+                                                        ) + abs(
+                                                            cand_box["y"]
+                                                            - label_box["y"]
+                                                        )
+
+                                                        # Ưu tiên field DƯỚI hoặc PHẢI label
+                                                        is_below_or_right = (
+                                                            cand_box["y"]
+                                                            >= label_box["y"] - 50
+                                                        )
+
+                                                        if (
+                                                            distance < min_distance
+                                                            and is_below_or_right
+                                                        ):
+                                                            min_distance = distance
+                                                            closest_candidate = (
+                                                                match_type,
+                                                                pattern,
+                                                                cand,
+                                                            )
+                                                except:
+                                                    pass
+
+                                            if closest_candidate:
+                                                match_type, pattern, cand = (
+                                                    closest_candidate
+                                                )
+                                                better_match = cand
+                                                print(
+                                                    f"         ✅ Found closest match by {match_type} ({min_distance:.0f}px): '{pattern}'"
+                                                )
+                                    except:
+                                        pass
+
+                                # [STRATEGY 3] Fallback: Lấy candidate đầu tiên
+                                if not better_match and all_candidates:
+                                    match_type, pattern, cand = all_candidates[0]
+                                    better_match = cand
+                                    print(
+                                        f"         ⚠️ Using first match by {match_type}: '{pattern}'"
+                                    )
+
+                            if better_match:
+                                target = better_match
+                            else:
+                                print(
+                                    f"         ⚠️ No better match found, using original target #{for_attr}"
+                                )
+
+                    except Exception as validate_err:
+                        print(f"         ⚠️ Validation error: {validate_err}")
+                        # Continue with original target
+
+                    print(
+                        f"         ✅ Found target by for attribute: #{target.get_attribute('id') or for_attr}"
+                    )
 
                     # Nếu target bị ẩn (Select), thử tìm wrapper ngay lập tức
                     if not target.is_visible():
@@ -980,10 +1372,55 @@ class FormHandlerMixin:
             pass
 
         # [NEW] Fallback 2: Tìm select element hiển thị có label gần
+        # [IMPROVED] Hạn chế scope để tránh bỏ qua field đúng
         try:
             selects = page.locator("select:visible").all()
+            # [FIX] Sort selects by proximity to visible labels (làm giảm false matches)
+            label_candidates_boxes = []
+            for cand in visible_candidates:
+                try:
+                    box = cand.bounding_box()
+                    if box:
+                        label_candidates_boxes.append(box)
+                except:
+                    pass
+
             for sel in selects:
                 try:
+                    # [CRITICAL] Nếu select có name/id khác biệt xa so với label, BỎ QUA
+                    # VD: Label "Leaderboard Types" không nên match select có name="rbe_id"
+                    sel_name = sel.get_attribute("name") or ""
+                    sel_id = sel.get_attribute("id") or ""
+
+                    # Check if select name/id is related to label
+                    sel_name_normalized = sel_name.lower().replace("-", "_")
+                    sel_id_normalized = sel_id.lower().replace("-", "_")
+                    label_normalized = label_lower.replace(" ", "_")
+
+                    # Build list of acceptable name patterns
+                    acceptable_patterns = [
+                        label_normalized,  # "leaderboard_types"
+                        label_normalized.rstrip("s"),  # "leaderboard_type"
+                        label_lower.replace(" ", "_"),  # "leaderboard_types"
+                        label_lower.replace(" ", "-").lower(),  # "leaderboard-types"
+                    ]
+
+                    is_related = False
+                    for pattern in acceptable_patterns:
+                        if (
+                            pattern in sel_name_normalized
+                            or pattern in sel_id_normalized
+                        ):
+                            is_related = True
+                            break
+
+                    if not is_related:
+                        # Select name/id không liên quan đến label -> BỎ QUA
+                        print(
+                            f"         ⏭️ Skip unrelated select (name='{sel_name}', id='{sel_id}')"
+                        )
+                        continue
+
                     # Tìm label gần select này
                     parent = sel.locator(
                         "xpath=ancestor::div[@class='form-group'] | ancestor::div[contains(@class,'col')]"
@@ -1013,34 +1450,573 @@ class FormHandlerMixin:
 
         return None
 
+    # ============================
+    # SECTION-AWARE FIELD SEARCH
+    # ============================
+    def _try_section_aware_search(self, page, label_text):
+        """
+        Tách label thành Section + Field name nếu có prefix section.
+        VD: "PreEvent Phase Start Date Time(UTC)" → section="PreEvent Phase", field="Start Date Time(UTC)"
+        VD: "Active Phase End Date Time (UTC)" → section="Active Phase", field="End Date Time (UTC)"
+        """
+        section_prefixes = [
+            "PreEvent Phase",
+            "Pre-Event Phase",
+            "Pre Event Phase",
+            "Active Phase",
+            "Post Event Settings",
+            "Post Event",
+        ]
+
+        for prefix in section_prefixes:
+            if label_text.lower().startswith(prefix.lower()):
+                # Tách field name (phần còn lại sau prefix)
+                field_name = label_text[len(prefix) :].strip()
+                if field_name:
+                    print(
+                        f"         🔍 Section-aware: section='{prefix}', field='{field_name}'"
+                    )
+                    result = self._find_field_in_section(page, prefix, field_name)
+                    if result:
+                        return result
+        return None
+
+    def _find_field_in_section(self, page, section_name, field_name):
+        """
+        Tìm input trong một section cụ thể (dùng khi có nhiều section
+        có cùng label name, VD: PreEvent Phase vs Active Phase đều có
+        "Start Date Time (UTC)")
+        """
+        try:
+            section_lower = section_name.lower().strip()
+            field_lower = field_name.lower().strip()
+
+            # ========================================
+            # STRATEGY 1: Tìm fieldset/div có header chứa section name
+            # ========================================
+            container_selectors = [
+                "fieldset",
+                "div.card",
+                "div.panel",
+                "div[class*='phase']",
+                "div[class*='section']",
+                "div.form-section",
+                "div.card-body",
+            ]
+
+            for sel in container_selectors:
+                containers = page.locator(sel).all()
+
+                for container in containers:
+                    if not container.is_visible():
+                        continue
+
+                    # Kiểm tra xem container có chứa section name trong header không
+                    container_text = ""
+                    try:
+                        container_text = container.inner_text()[:200].lower()
+                    except:
+                        continue
+
+                    if section_lower not in container_text:
+                        continue
+
+                    # Verify là header section (không phải chỉ mentioned trong content)
+                    has_section_header = False
+                    try:
+                        headers = container.locator(
+                            "legend, h2, h3, h4, h5, strong, b, .card-header, .panel-heading"
+                        ).all()
+                        for h in headers:
+                            if (
+                                h.is_visible()
+                                and section_lower in h.inner_text().lower()
+                            ):
+                                has_section_header = True
+                                break
+                    except:
+                        pass
+
+                    if not has_section_header:
+                        continue
+
+                    print(f"         📍 Found section container: '{section_name}'")
+
+                    # Tìm field trong container này
+                    field_regex = re.compile(re.escape(field_name), re.IGNORECASE)
+
+                    # Tìm label trong container
+                    labels = (
+                        container.locator("label, legend, span, strong, b")
+                        .filter(has_text=field_regex)
+                        .all()
+                    )
+                    visible_labels = [l for l in labels if l.is_visible()]
+                    visible_labels.sort(key=lambda el: len(el.inner_text().strip()))
+
+                    for lbl in visible_labels:
+                        lbl_text = lbl.inner_text().strip()
+                        if len(lbl_text) > len(field_name) * 3:
+                            continue
+
+                        # Tìm input liên kết
+                        for_attr = lbl.get_attribute("for")
+                        if for_attr:
+                            target = page.locator(f"#{for_attr}").first
+                            if target.count() > 0:
+                                if not target.is_visible():
+                                    wrapper = self._find_custom_dropdown_wrapper(target)
+                                    if wrapper:
+                                        return wrapper
+                                print(
+                                    f"         ✅ [Section] Found by 'for' attr: #{for_attr}"
+                                )
+                                return target
+
+                        # Input lồng bên trong label
+                        nested = lbl.locator(
+                            "input:not([type='radio']), select, textarea"
+                        ).first
+                        if nested.count() > 0:
+                            return nested
+
+                        # Sibling input
+                        sibling = lbl.locator(
+                            "xpath=following::input[not(@type='radio')][1] | following::select[1]"
+                        ).first
+                        if sibling.count() > 0 and sibling.is_visible():
+                            # Verify sibling is within same section container
+                            try:
+                                sib_box = sibling.bounding_box()
+                                cont_box = container.bounding_box()
+                                if sib_box and cont_box:
+                                    if (
+                                        sib_box["y"] >= cont_box["y"]
+                                        and sib_box["y"]
+                                        <= cont_box["y"] + cont_box["height"]
+                                    ):
+                                        print(
+                                            f"         ✅ [Section] Found sibling input for '{field_name}'"
+                                        )
+                                        return sibling
+                            except:
+                                return sibling
+
+                    # Fallback: Tìm datetime inputs trong section (theo thứ tự Start/End)
+                    datetime_inputs = container.locator(
+                        "input.flatpickr-input, input[data-toggle='flatpickr'], "
+                        "input[data-toggle='datetimepicker'], input.datetimepicker, "
+                        "input.datepicker, input[type='datetime-local']"
+                    ).all()
+                    visible_dt = [i for i in datetime_inputs if i.is_visible()]
+
+                    # Cũng tìm thêm text inputs có khả năng là datetime
+                    if not visible_dt:
+                        text_inputs = container.locator("input[type='text']").all()
+                        for inp in text_inputs:
+                            if inp.is_visible():
+                                inp_class = (inp.get_attribute("class") or "").lower()
+                                inp_placeholder = (
+                                    inp.get_attribute("placeholder") or ""
+                                ).lower()
+                                inp_id = (inp.get_attribute("id") or "").lower()
+                                if any(
+                                    kw in inp_class + inp_placeholder + inp_id
+                                    for kw in [
+                                        "date",
+                                        "time",
+                                        "calendar",
+                                        "picker",
+                                        "utc",
+                                    ]
+                                ):
+                                    visible_dt.append(inp)
+
+                    if visible_dt:
+                        if "start" in field_lower and len(visible_dt) >= 1:
+                            print(
+                                f"         ✅ [Section] Found START datetime in '{section_name}'"
+                            )
+                            return visible_dt[0]
+                        elif "end" in field_lower and len(visible_dt) >= 2:
+                            print(
+                                f"         ✅ [Section] Found END datetime in '{section_name}'"
+                            )
+                            return visible_dt[1]
+                        elif len(visible_dt) == 1:
+                            return visible_dt[0]
+
+            # ========================================
+            # STRATEGY 2: Proximity-based search (tìm theo vị trí Y)
+            # Tìm section header trên trang, rồi tìm field phía dưới nó
+            # ========================================
+            print(f"         🔍 [Section] Strategy 2: Proximity search...")
+            section_headers = (
+                page.locator("legend, h2, h3, h4, h5, strong, b, span")
+                .filter(has_text=re.compile(re.escape(section_name), re.IGNORECASE))
+                .all()
+            )
+
+            for header in section_headers:
+                if not header.is_visible():
+                    continue
+                header_box = header.bounding_box()
+                if not header_box:
+                    continue
+
+                # Tìm tất cả labels phía dưới section header
+                all_labels = (
+                    page.locator("label, legend, span, strong")
+                    .filter(has_text=re.compile(re.escape(field_name), re.IGNORECASE))
+                    .all()
+                )
+
+                for lbl in all_labels:
+                    if not lbl.is_visible():
+                        continue
+                    lbl_box = lbl.bounding_box()
+                    if not lbl_box:
+                        continue
+
+                    # Label phải nằm DƯỚI section header (y lớn hơn)
+                    # và không quá xa (trong khoảng 500px)
+                    if (
+                        lbl_box["y"] > header_box["y"]
+                        and lbl_box["y"] - header_box["y"] < 500
+                    ):
+                        # Tìm input gần label này
+                        for_attr = lbl.get_attribute("for")
+                        if for_attr:
+                            target = page.locator(f"#{for_attr}").first
+                            if target.count() > 0:
+                                print(
+                                    f"         ✅ [Proximity] Found field '{field_name}' under '{section_name}'"
+                                )
+                                return target
+
+                        sibling = lbl.locator(
+                            "xpath=following::input[not(@type='radio')][1] | following::select[1]"
+                        ).first
+                        if sibling.count() > 0 and sibling.is_visible():
+                            print(
+                                f"         ✅ [Proximity] Found sibling for '{field_name}'"
+                            )
+                            return sibling
+
+            return None
+        except Exception as e:
+            print(f"         ⚠️ Section search error: {e}")
+            return None
+
+    # ============================
+    # INLINE EDIT FIELD HANDLER
+    # ============================
+    def _handle_inline_edit_field(self, page, label_text, value):
+        """
+        Handle fields with Edit buttons (e.g., Lock Time Offset, Buffer Time, Player-Base Gathering Time).
+        These fields show as read-only text with an ✏️ Edit button.
+        Flow: Click Edit → type new value → click Save/OK next to it.
+        """
+        try:
+            label_lower = label_text.lower().strip()
+            print(f"         ✏️ Trying inline edit for '{label_text}'...")
+
+            # Strategy 1: Tìm container nhỏ nhất chứa label text VÀ có nút Edit
+            # Duyệt từ container nhỏ đến lớn
+            candidates = (
+                page.locator("div, tr, fieldset, span, td, li, p")
+                .filter(has_text=re.compile(re.escape(label_text), re.IGNORECASE))
+                .all()
+            )
+
+            # Sort theo kích thước text (nhỏ nhất trước = container chính xác nhất)
+            visible_candidates = []
+            for c in candidates:
+                if c.is_visible():
+                    try:
+                        text_len = len(c.inner_text().strip())
+                        if text_len < 1000:  # Bỏ qua container quá lớn
+                            visible_candidates.append((text_len, c))
+                    except:
+                        pass
+
+            visible_candidates.sort(key=lambda x: x[0])
+
+            for text_len, container in visible_candidates:
+                # Tìm nút Edit trong container
+                edit_btn = container.locator(
+                    "button:has-text('Edit'), a:has-text('Edit'), "
+                    "button:has-text('✏'), a:has-text('✏'), "
+                    "button[title*='edit' i], a[title*='edit' i], "
+                    ".btn-edit, [class*='edit-btn']"
+                ).first
+
+                if edit_btn.count() == 0 or not edit_btn.is_visible():
+                    continue
+
+                print(
+                    f"         ✏️ Found Edit button near '{label_text}' (container size={text_len})"
+                )
+                edit_btn.scroll_into_view_if_needed()
+                time.sleep(0.3)
+                edit_btn.click()
+                time.sleep(1.5)  # Chờ input xuất hiện hoặc popup mở
+
+                # Sau khi click Edit, tìm input editable trong container
+                # Có thể input mới xuất hiện hoặc field cũ trở nên editable
+                editable_input = None
+
+                # Check 1: Tìm trong cùng container
+                inputs_in_container = container.locator(
+                    "input[type='text']:visible, input[type='number']:visible, "
+                    "input:not([type='radio']):not([type='checkbox']):not([type='hidden']):visible"
+                ).all()
+                for inp in inputs_in_container:
+                    if inp.is_visible() and inp.is_editable():
+                        editable_input = inp
+                        break
+
+                # Check 2: Tìm modal/popup mới xuất hiện
+                if not editable_input:
+                    try:
+                        modal = page.locator(
+                            ".modal.show, .swal2-popup, .popover.show"
+                        ).last
+                        if modal.is_visible():
+                            modal_input = modal.locator(
+                                "input[type='text']:visible, input[type='number']:visible"
+                            ).first
+                            if modal_input.count() > 0 and modal_input.is_visible():
+                                editable_input = modal_input
+                    except:
+                        pass
+
+                # Check 3: Tìm input mới xuất hiện gần vị trí nút Edit
+                if not editable_input:
+                    try:
+                        edit_box = edit_btn.bounding_box()
+                        if edit_box:
+                            all_inputs = page.locator("input:visible").all()
+                            for inp in all_inputs:
+                                if inp.is_editable():
+                                    inp_box = inp.bounding_box()
+                                    if inp_box:
+                                        # Input gần nút Edit (trong khoảng 200px dọc)
+                                        y_diff = abs(inp_box["y"] - edit_box["y"])
+                                        if y_diff < 200:
+                                            editable_input = inp
+                                            break
+                    except:
+                        pass
+
+                if editable_input:
+                    # Fill value
+                    try:
+                        editable_input.fill("")
+                        time.sleep(0.2)
+                        editable_input.fill(str(value))
+                        print(f"         ✅ Filled inline field: '{value}'")
+                    except:
+                        editable_input.evaluate(
+                            "(el, v) => { el.value = v; el.dispatchEvent(new Event('input', {bubbles: true})); }",
+                            str(value),
+                        )
+
+                    time.sleep(0.5)
+
+                    # Tìm và click nút Save/OK/Confirm gần đó
+                    save_btn = None
+
+                    # Tìm trong container
+                    save_btn_candidates = container.locator(
+                        "button:has-text('Save'), a:has-text('Save'), "
+                        "button:has-text('OK'), button:has-text('Apply'), "
+                        "button:has-text('✓'), button:has-text('Confirm'), "
+                        "button.btn-success, button.btn-primary"
+                    ).all()
+                    for btn in save_btn_candidates:
+                        if btn.is_visible() and btn != edit_btn:
+                            # Không click nhầm nút Edit (đã biến thành Cancel?)
+                            btn_text = btn.inner_text().strip().lower()
+                            if "edit" not in btn_text and "cancel" not in btn_text:
+                                save_btn = btn
+                                break
+
+                    # Tìm trong modal nếu có
+                    if not save_btn:
+                        try:
+                            modal = page.locator(".modal.show, .swal2-popup").last
+                            if modal.is_visible():
+                                modal_save = modal.locator(
+                                    "button:has-text('Save'), button:has-text('OK'), button.btn-primary"
+                                ).first
+                                if modal_save.is_visible():
+                                    save_btn = modal_save
+                        except:
+                            pass
+
+                    if save_btn:
+                        save_btn.click()
+                        print(f"         💾 Clicked inline Save for '{label_text}'")
+                        time.sleep(2)
+                    else:
+                        # Try Enter to confirm
+                        editable_input.press("Enter")
+                        print(f"         ⏎ Pressed Enter to confirm '{label_text}'")
+                        time.sleep(1)
+
+                    # Chờ page ổn định
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=3000)
+                    except:
+                        pass
+
+                    return True
+                else:
+                    print(
+                        f"         ⚠️ Edit button clicked but no editable input found for '{label_text}'"
+                    )
+                    # Đóng popup nếu có
+                    try:
+                        page.keyboard.press("Escape")
+                    except:
+                        pass
+                    continue
+
+            return False
+        except Exception as e:
+            print(f"         ⚠️ Inline edit error for '{label_text}': {e}")
+            return False
+
+    def _has_nearby_edit_button(self, page, element, label_text):
+        """
+        Kiểm tra xem field có nút Edit gần đó không.
+        Trả về True nếu phát hiện có nút Edit (báo hiệu cần inline edit flow).
+        """
+        try:
+            # Strategy 1: Kiểm tra element có readonly và có Edit button trong cùng container
+            is_readonly = element.get_attribute("readonly") is not None
+            is_disabled = not element.is_enabled()
+
+            # Nếu field có thể edit bình thường, không cần Edit button
+            if not is_readonly and not is_disabled:
+                return False
+
+            # Tìm container cha chứa cả input và potential Edit button
+            containers = []
+
+            # Thử các parent levels
+            for xpath in [
+                "xpath=..",  # Parent trực tiếp
+                "xpath=../..",  # Grandparent
+                "xpath=../../..",  # Great-grandparent
+                "xpath=ancestor::div[@class='form-group']",
+                "xpath=ancestor::tr",  # Nếu trong table
+                "xpath=ancestor::fieldset",
+            ]:
+                try:
+                    container = element.locator(xpath).first
+                    if container.count() > 0:
+                        containers.append(container)
+                except:
+                    pass
+
+            # Strategy 2: Tìm container chứa label text
+            try:
+                label_containers = (
+                    page.locator("div, tr, fieldset, td")
+                    .filter(has_text=re.compile(re.escape(label_text), re.IGNORECASE))
+                    .all()
+                )
+                # Chỉ lấy container nhỏ (< 500 chars) để tránh container quá lớn
+                for c in label_containers:
+                    if c.is_visible():
+                        text_len = len(c.inner_text().strip())
+                        if 10 < text_len < 500:  # Container hợp lý
+                            containers.append(c)
+            except:
+                pass
+
+            # Kiểm tra từng container có Edit button không
+            for container in containers:
+                try:
+                    # Tìm nút Edit
+                    edit_btn = container.locator(
+                        "button:has-text('Edit'), a:has-text('Edit'), "
+                        "button:has-text('✏'), a:has-text('✏'), "
+                        "button[title*='edit' i], a[title*='edit' i], "
+                        ".btn-edit, [class*='edit-btn'], button[class*='edit'], "
+                        "i.fa-edit, i.fa-pencil"  # Icon buttons
+                    ).first
+
+                    if edit_btn.count() > 0 and edit_btn.is_visible():
+                        print(f"         🔍 Detected Edit button near '{label_text}'")
+                        return True
+                except:
+                    continue
+
+            # Strategy 3: Tìm Edit button gần vị trí element (300px)
+            try:
+                el_box = element.bounding_box()
+                if el_box:
+                    all_edit_btns = page.locator(
+                        "button:has-text('Edit'), a:has-text('Edit'), "
+                        "button:has-text('✏'), i.fa-edit, i.fa-pencil"
+                    ).all()
+
+                    for btn in all_edit_btns:
+                        if btn.is_visible():
+                            btn_box = btn.bounding_box()
+                            if btn_box:
+                                # Kiểm tra khoảng cách
+                                x_diff = abs(btn_box["x"] - el_box["x"])
+                                y_diff = abs(btn_box["y"] - el_box["y"])
+
+                                # Edit button thường nằm cùng hàng (y gần) và bên phải (x > x_el)
+                                if y_diff < 100 and x_diff < 300:
+                                    print(
+                                        f"         🔍 Detected Edit button by proximity near '{label_text}'"
+                                    )
+                                    return True
+            except:
+                pass
+
+            return False
+
+        except Exception as e:
+            print(f"         ⚠️ Error checking edit button for '{label_text}': {e}")
+            return False
+
     def _find_custom_dropdown_wrapper(self, hidden_select):
         """Tìm thẻ bao (Wrapper) hiển thị của Select2 hoặc Chosen.js"""
         try:
+            sel_id = hidden_select.get_attribute("id")
+
             # 1. Tìm theo ID Biến thể (Quan trọng cho Chosen)
             # ID gốc: clone-gate -> Chosen ID: clone_gate_chosen (dấu - thành _)
-            sel_id = hidden_select.get_attribute("id")
             if sel_id:
                 # Case A: ID gốc + _chosen (Chuẩn Chosen)
                 chosen_id = f"#{sel_id}_chosen"
-                if hidden_select.page.locator(chosen_id).is_visible():
-                    return hidden_select.page.locator(chosen_id)
+                chosen_by_id = hidden_select.page.locator(chosen_id).first
+                if chosen_by_id.count() > 0 and chosen_by_id.is_visible():
+                    return chosen_by_id
 
                 # Case B: Thay '-' thành '_' rồi + _chosen (Fix lỗi ID của bạn)
                 alt_id = sel_id.replace("-", "_") + "_chosen"
-                if hidden_select.page.locator(f"#{alt_id}").is_visible():
-                    return hidden_select.page.locator(f"#{alt_id}")
+                alt_chosen = hidden_select.page.locator(f"#{alt_id}").first
+                if alt_chosen.count() > 0 and alt_chosen.is_visible():
+                    return alt_chosen
 
                 # Case C: Select2 container ID
                 s2_id = f"#select2-{sel_id}-container"
-                if hidden_select.page.locator(s2_id).is_visible():
+                s2_container = hidden_select.page.locator(s2_id).first
+                if s2_container.count() > 0 and s2_container.is_visible():
                     # Trả về cha của container (là .select2-container)
-                    return (
-                        hidden_select.page.locator(s2_id)
-                        .locator(
-                            "xpath=ancestor::span[contains(@class,'select2-container')]"
-                        )
-                        .first
-                    )
+                    s2_parent = s2_container.locator(
+                        "xpath=ancestor::span[contains(@class,'select2-container')]"
+                    ).first
+                    if s2_parent.count() > 0:
+                        return s2_parent
 
             # 2. Tìm theo Sibling (Ngay bên cạnh)
             # Chosen: div.chosen-container
@@ -1064,8 +2040,50 @@ class FormHandlerMixin:
             if multiselect_sib.count() > 0 and multiselect_sib.is_visible():
                 return multiselect_sib
 
-        except:
-            pass
+            # 3. Tìm trong cùng parent container (Parent search)
+            # Wrapper có thể nằm cùng parent với SELECT nhưng không phải sibling trực tiếp
+            try:
+                parent = hidden_select.locator("xpath=..").first
+                if parent.count() > 0:
+                    # Tìm wrapper trong parent
+                    wrappers_in_parent = parent.locator(
+                        "div.chosen-container, span.select2-container, div.multiselect"
+                    ).all()
+
+                    for wrapper in wrappers_in_parent:
+                        if wrapper.is_visible():
+                            return wrapper
+            except:
+                pass
+
+            # 4. Global search gần SELECT (trong vòng 200px)
+            # Last resort: Tìm wrapper gần vị trí SELECT
+            try:
+                sel_box = hidden_select.bounding_box()
+                if sel_box:
+                    all_wrappers = hidden_select.page.locator(
+                        "div.chosen-container:visible, span.select2-container:visible, div.multiselect:visible"
+                    ).all()
+
+                    for wrapper in all_wrappers:
+                        try:
+                            w_box = wrapper.bounding_box()
+                            if w_box:
+                                # Kiểm tra khoảng cách
+                                x_diff = abs(w_box["x"] - sel_box["x"])
+                                y_diff = abs(w_box["y"] - sel_box["y"])
+
+                                # Wrapper thường nằm cùng vị trí với SELECT
+                                if x_diff < 200 and y_diff < 100:
+                                    return wrapper
+                        except:
+                            continue
+            except:
+                pass
+
+        except Exception as e:
+            print(f"         ⚠️ Wrapper search error: {e}")
+
         return None
 
     def _fill_element_smartly(self, page, element, value):
@@ -1285,15 +2303,161 @@ class FormHandlerMixin:
 
             element.scroll_into_view_if_needed()
 
+            # [FIX CRITICAL] Xử lý SELECT: Kiểm tra có phải custom dropdown không
+            # Ngay cả khi SELECT visible, nó có thể được wrap bởi Chosen/Select2
             if tag_name == "select":
-                try:
-                    element.select_option(label=str(value))
-                except:
-                    element.select_option(value=str(value))
-                print(f"         ✅ Selected option '{value}'")
+                print(
+                    f"         🔍 Detect SELECT element. Checking for custom dropdown wrapper..."
+                )
+
+                # Kiểm tra có wrapper không (Chosen/Select2/Multiselect)
+                wrapper = self._find_custom_dropdown_wrapper(element)
+
+                if wrapper and wrapper.is_visible():
+                    # Có wrapper → Đây là custom dropdown
+                    wrapper_class = wrapper.get_attribute("class") or ""
+                    lib = "chosen"
+                    if "select2" in wrapper_class:
+                        lib = "select2"
+                    elif "multiselect" in wrapper_class:
+                        lib = "multiselect"
+
+                    print(
+                        f"         ✅ Found custom dropdown wrapper ({lib}). Using handler..."
+                    )
+                    return self._handle_js_dropdown(page, wrapper, value, lib)
+                else:
+                    # Không có wrapper → SELECT bình thường
+                    print(
+                        f"         ℹ️ Native SELECT detected (no wrapper). Using select_option..."
+                    )
+
+                    selected = False
+
+                    # Strategy 1: Select by label (exact match)
+                    try:
+                        element.select_option(label=str(value), timeout=2000)
+                        print(f"         ✅ Selected by label (exact): '{value}'")
+                        selected = True
+                    except Exception as e1:
+                        # Strategy 2: Select by value (exact match)
+                        try:
+                            element.select_option(value=str(value), timeout=2000)
+                            print(f"         ✅ Selected by value (exact): '{value}'")
+                            selected = True
+                        except Exception as e2:
+                            # Strategy 3: Fallback - Tìm option khớp text (fuzzy matching)
+                            print(
+                                f"         ⚠️ Exact match failed. Finding option by text match..."
+                            )
+                            try:
+                                options = element.locator("option").all()
+                                print(
+                                    f"         📋 Available options ({len(options)} total):"
+                                )
+
+                                match_found = None
+                                value_lower = value.lower().strip()
+
+                                for opt in options:
+                                    try:
+                                        opt_text = opt.inner_text().strip()
+                                        opt_value = opt.get_attribute("value") or ""
+
+                                        # Log first 10 options for debugging
+                                        if (
+                                            len(
+                                                [
+                                                    o
+                                                    for o in options
+                                                    if options.index(o) < 10
+                                                ]
+                                            )
+                                            <= 10
+                                        ):
+                                            print(
+                                                f"            - '{opt_text}' (value='{opt_value}')"
+                                            )
+
+                                        # Matching strategies (in priority order)
+                                        # 1. Exact match (case-insensitive)
+                                        if opt_text.lower() == value_lower:
+                                            match_found = (
+                                                opt,
+                                                opt_text,
+                                                opt_value,
+                                                "exact",
+                                            )
+                                            break
+
+                                        # 2. Contains match (value in option text)
+                                        if (
+                                            not match_found
+                                            and value_lower in opt_text.lower()
+                                        ):
+                                            match_found = (
+                                                opt,
+                                                opt_text,
+                                                opt_value,
+                                                "contains",
+                                            )
+
+                                        # 3. Reverse contains (option text in value)
+                                        if (
+                                            not match_found
+                                            and opt_text.lower() in value_lower
+                                        ):
+                                            match_found = (
+                                                opt,
+                                                opt_text,
+                                                opt_value,
+                                                "reverse",
+                                            )
+                                    except:
+                                        continue
+
+                                if match_found:
+                                    opt, opt_text, opt_value, match_type = match_found
+                                    print(
+                                        f"         🎯 Match found ({match_type}): '{opt_text}'"
+                                    )
+
+                                    # Try to select by value first
+                                    try:
+                                        element.select_option(
+                                            value=opt_value, timeout=2000
+                                        )
+                                        print(
+                                            f"         ✅ Selected option: '{opt_text}' (value='{opt_value}')"
+                                        )
+                                        selected = True
+                                    except:
+                                        # Fallback: Force select with JS
+                                        print(
+                                            f"         🔧 Using JS to force select..."
+                                        )
+                                        element.evaluate(
+                                            f"el => {{ el.value = '{opt_value}'; el.dispatchEvent(new Event('change', {{bubbles: true}})); }}"
+                                        )
+                                        print(f"         ✅ JS-selected: '{opt_text}'")
+                                        selected = True
+                                else:
+                                    print(
+                                        f"         ❌ No matching option found for value: '{value}'"
+                                    )
+                            except Exception as e3:
+                                print(f"         ❌ Text match error: {e3}")
+
+                    if not selected:
+                        print(
+                            f"         ⚠️ WARNING: Could not select '{value}' in dropdown"
+                        )
+                        return False
             else:
+                # Input thường (text, textarea, etc.)
                 element.fill("")
                 element.fill(str(value))
+                print(f"         ✅ Filled: '{value}'")
 
             # [QUAN TRỌNG]: Ép buộc lưu dữ liệu bằng cách Tab ra ngoài
             element.press("Tab")
@@ -1303,7 +2467,6 @@ class FormHandlerMixin:
             except:
                 pass
 
-            print(f"         ✅ Filled & Saved: '{value}'")
             return True
 
         except Exception as e:
@@ -1334,7 +2497,7 @@ class FormHandlerMixin:
                 container.click()
 
             # ========================================
-            # 2. CHỜ DROPDOWN OPTIONS LOAD XONG
+            # 2. CHỜ DROPDOWN OPTIONS LOAD XONG (Improved with more selectors)
             # ========================================
             print(f"         ⏳ Waiting for dropdown options to load...")
             wait_start = time.time()
@@ -1344,9 +2507,19 @@ class FormHandlerMixin:
             while time.time() - wait_start < max_wait:
                 try:
                     if lib_type == "chosen":
+                        # [FIX] More comprehensive selectors for Chosen dropdowns
                         options = container.locator(
-                            ".chosen-drop .active-result, .chosen-drop li"
+                            ".chosen-drop .active-result, .chosen-drop li.active-result, "
+                            ".chosen-results li"
                         ).all()
+                        # Also check dropdown visibility
+                        dropdown = container.locator(".chosen-drop").first
+                        if dropdown.count() > 0:
+                            is_open = "chosen-with-drop" in (
+                                container.get_attribute("class") or ""
+                            )
+                            if not is_open:
+                                print(f"         🔄 Dropdown not open yet, waiting...")
                     elif lib_type == "multiselect":
                         options = page.locator(
                             ".multiselect__element, .multiselect__option"
@@ -1373,16 +2546,30 @@ class FormHandlerMixin:
             # ========================================
             # 3. STRATEGY A: Tìm và click TRỰC TIẾP option khớp text (không cần search)
             #    Ưu tiên exact match trước, partial match sau
+            #    [FIX] Improved for simple dropdowns with no search (e.g., Bracketed/Normal)
             # ========================================
             clicked_exact = False
             try:
                 all_visible_opts = []
                 if lib_type == "chosen":
+                    # [FIX] More comprehensive selectors for Chosen dropdown options
                     all_visible_opts = [
                         o
-                        for o in container.locator(".chosen-drop .active-result").all()
+                        for o in container.locator(
+                            ".chosen-drop .active-result, .chosen-drop li.active-result, "
+                            ".chosen-results li"
+                        ).all()
                         if o.is_visible()
                     ]
+                    # [NEW] Also try global search if container search fails
+                    if not all_visible_opts:
+                        all_visible_opts = [
+                            o
+                            for o in page.locator(
+                                ".chosen-drop:visible .active-result, .chosen-drop:visible li"
+                            ).all()
+                            if o.is_visible()
+                        ]
                 elif lib_type == "multiselect":
                     all_visible_opts = [
                         o
@@ -1398,6 +2585,10 @@ class FormHandlerMixin:
                         if o.is_visible()
                     ]
 
+                print(
+                    f"         📋 Found {len(all_visible_opts)} visible options for direct selection"
+                )
+
                 value_lower = value_str.lower().replace("_", " ").replace("-", " ")
 
                 # Exact match (bao gồm cả underscore/space variants)
@@ -1405,7 +2596,7 @@ class FormHandlerMixin:
                     opt_text = opt.inner_text().strip()
                     opt_lower = opt_text.lower().replace("_", " ").replace("-", " ")
                     if opt_lower == value_lower or opt_text == value_str:
-                        opt.click()
+                        opt.click(force=True)  # [FIX] Use force=True for reliability
                         print(
                             f"         ✅ [Dropdown] Exact match clicked: '{opt_text}'"
                         )
@@ -1418,7 +2609,9 @@ class FormHandlerMixin:
                         opt_text = opt.inner_text().strip()
                         opt_lower = opt_text.lower().replace("_", " ").replace("-", " ")
                         if value_lower in opt_lower or opt_lower in value_lower:
-                            opt.click()
+                            opt.click(
+                                force=True
+                            )  # [FIX] Use force=True for reliability
                             print(
                                 f"         ✅ [Dropdown] Partial match clicked: '{opt_text}'"
                             )
@@ -1429,15 +2622,38 @@ class FormHandlerMixin:
 
             if clicked_exact:
                 time.sleep(0.5)
+                # [FIX] Trigger change event to update dependent fields
+                try:
+                    if lib_type == "chosen":
+                        # Find the original select element
+                        select_id = container.get_attribute("id") or ""
+                        if select_id and "_chosen" in select_id:
+                            original_id = select_id.replace("_chosen", "")
+                            page.evaluate(
+                                f"""() => {{
+                                    const sel = document.getElementById('{original_id}');
+                                    if (sel) {{
+                                        sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+                                        if (typeof jQuery !== 'undefined') {{
+                                            jQuery(sel).trigger('change');
+                                        }}
+                                    }}
+                                }}"""
+                            )
+                except Exception as e:
+                    print(f"         ⚠️ Change event trigger warning: {e}")
                 page.keyboard.press("Tab")
                 return True
 
             # ========================================
-            # 4. STRATEGY B: Dùng Search box
+            # 4. STRATEGY B: Dùng Search box (nếu có)
+            # CHÚ Ý: Dropdowns đơn giản (VD: Bracketed/Normal) không có search box
             # ========================================
             search_box = None
             if lib_type == "chosen":
-                search_box = container.locator(".chosen-drop input").first
+                search_box = container.locator(
+                    ".chosen-drop input, .chosen-search input"
+                ).first
             elif lib_type == "multiselect":
                 search_box = container.locator(".multiselect__input").first
             else:
@@ -1445,12 +2661,38 @@ class FormHandlerMixin:
                     ".select2-container--open input.select2-search__field"
                 ).first
 
+            # Check if search box exists and is visible
+            has_search = False
             try:
-                search_box.wait_for(state="visible", timeout=2000)
+                search_box.wait_for(state="visible", timeout=1000)
+                has_search = True
             except:
-                pass
+                # [FIX] No search box = simple dropdown. Strategy A should have worked.
+                print(
+                    f"         ⚠️ No search box found. This is a simple dropdown (e.g., 2 options)."
+                )
+                if not clicked_exact and all_visible_opts:
+                    # Last resort: Try clicking first matching option again with different approach
+                    print(f"         🔄 Retrying with keyboard navigation...")
+                    try:
+                        # Use keyboard to navigate
+                        page.keyboard.press("Home")  # Go to first option
+                        for opt in all_visible_opts:
+                            opt_text = opt.inner_text().strip()
+                            opt_lower = (
+                                opt_text.lower().replace("_", " ").replace("-", " ")
+                            )
+                            if value_lower in opt_lower:
+                                # Navigate with arrow keys until we find it
+                                page.keyboard.press("ArrowDown")
+                                time.sleep(0.2)
+                        page.keyboard.press("Enter")
+                        print(f"         ✅ [Keyboard] Selected via navigation")
+                        return True
+                    except Exception as e:
+                        print(f"         ⚠️ Keyboard navigation error: {e}")
 
-            if search_box and search_box.is_visible():
+            if has_search and search_box and search_box.is_visible():
                 # [FIX] Dùng search term ngắn hơn nếu value dài (tăng tỷ lệ match)
                 search_term = value_str
                 # Nếu value có underscore → thử tìm bằng phần đầu hoặc thay _ bằng space

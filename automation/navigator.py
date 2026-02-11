@@ -223,58 +223,174 @@ class NavigatorMixin:
         Returns True if popup was handled, False otherwise.
         """
         try:
-            # --- ƯU TIÊN 1: SELECTOR CHÍNH XÁC (Dựa trên ảnh HTML) ---
+            print("      🔍 Checking for Locked Item popup...")
+
+            # Chờ một chút để popup render
+            time.sleep(0.5)
+
+            # --- STRATEGY 1: SELECTOR CHÍNH XÁC (Dựa trên ảnh HTML) ---
             # Tìm nút có class .btn-acquire-lock (thường là thẻ <a>)
             lock_btn = page.locator(".btn-acquire-lock, a.btn-acquire-lock").first
 
-            # Check visible với timeout ngắn
-            if lock_btn.is_visible(timeout=2000):
-                print("      🔒 Phát hiện Locked Item (Class match).")
-                print("      🔓 Đang bấm 'Acquire Lock'...")
+            # Chờ nút xuất hiện với timeout dài hơn (5s)
+            try:
+                lock_btn.wait_for(state="visible", timeout=5000)
+                print("      🔒 Detected Locked Item popup (Class match).")
+                print("      🔓 Clicking 'Acquire Lock' button...")
 
                 # Force click để đảm bảo bấm được dù có overlay
                 lock_btn.click(force=True)
 
-                # Chờ loading sau khi acquire (thường trang sẽ reload)
+                print("      ⏳ Waiting for lock acquisition...")
+
+                # Chờ loading sau khi acquire (thường trang sẽ reload hoặc popup đóng)
                 try:
-                    page.wait_for_load_state("domcontentloaded", timeout=5000)
-                    time.sleep(1.0)  # Additional buffer
-                    print("      ✅ Lock acquired successfully!")
+                    # Strategy A: Chờ popup biến mất
+                    page.locator(".btn-acquire-lock").first.wait_for(
+                        state="hidden", timeout=5000
+                    )
+                    print("      ✅ Lock popup closed")
                 except:
-                    time.sleep(2.0)
+                    pass
+
+                try:
+                    # Strategy B: Chờ page load
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                except:
+                    pass
+
+                # Additional buffer để form load xong
+                time.sleep(1.5)
+                print("      ✅ Lock acquired successfully!")
                 return True
+            except:
+                # Nút không xuất hiện trong 5s
+                pass
 
-            # --- ƯU TIÊN 2: QUÉT TEXT (Fallback cho các modal kiểu khác) ---
-            popup = (
-                page.locator(".modal-content, #vit_locker, .swal2-popup")
-                .filter(has_text=re.compile("locked|is locked", re.IGNORECASE))
-                .last
-            )
+            # --- STRATEGY 2: TÌM POPUP QUA TEXT (Fallback cho các modal kiểu khác) ---
+            print("      🔍 Checking for lock popup by text...")
 
-            if popup.is_visible(timeout=1000):
-                print("      🔒 Phát hiện Locked Item (Text match).")
+            # Tìm modal/popup chứa text "locked"
+            popup_selectors = [
+                ".modal-content",
+                ".modal.show",
+                "#vit_locker",
+                ".swal2-popup",
+                "[role='dialog']",
+                ".popup",
+                ".dialog",
+            ]
+
+            popup_found = None
+            for selector in popup_selectors:
+                try:
+                    popup = (
+                        page.locator(selector)
+                        .filter(
+                            has_text=re.compile(
+                                "locked|is locked|acquire lock", re.IGNORECASE
+                            )
+                        )
+                        .first
+                    )
+
+                    if popup.count() > 0 and popup.is_visible():
+                        popup_found = popup
+                        print(f"      🔒 Detected lock popup via selector: {selector}")
+                        break
+                except:
+                    continue
+
+            if popup_found:
                 # Tìm nút bấm chứa text Acquire hoặc Unlock hoặc Kick
-                btn = (
-                    popup.locator("a, button")
-                    .filter(has_text=re.compile("Acquire|Unlock|Kick", re.IGNORECASE))
+                btn_patterns = [
+                    "Acquire Lock",
+                    "Acquire",
+                    "Unlock",
+                    "Kick",
+                    "Take Lock",
+                    "Override",
+                ]
+
+                btn = None
+                for pattern in btn_patterns:
+                    try:
+                        btn_candidate = (
+                            popup_found.locator("a, button")
+                            .filter(
+                                has_text=re.compile(re.escape(pattern), re.IGNORECASE)
+                            )
+                            .first
+                        )
+
+                        if btn_candidate.count() > 0 and btn_candidate.is_visible():
+                            btn = btn_candidate
+                            print(f"      🎯 Found button: '{pattern}'")
+                            break
+                    except:
+                        continue
+
+                if btn:
+                    print("      🔓 Clicking lock button...")
+                    btn.click(force=True)
+
+                    # Chờ popup đóng
+                    try:
+                        popup_found.wait_for(state="hidden", timeout=5000)
+                        print("      ✅ Lock popup closed")
+                    except:
+                        pass
+
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    except:
+                        pass
+
+                    time.sleep(1.5)
+                    print("      ✅ Lock acquired successfully!")
+                    return True
+                else:
+                    print("      ⚠️ Lock popup found but no action button detected")
+
+            # --- STRATEGY 3: Global scan for any visible acquire lock button ---
+            print("      🔍 Global scan for acquire lock button...")
+            try:
+                global_lock_btn = (
+                    page.locator("a, button")
+                    .filter(
+                        has_text=re.compile(
+                            "Acquire Lock|Acquire|Take Lock", re.IGNORECASE
+                        )
+                    )
                     .first
                 )
 
-                if btn.is_visible():
-                    btn.click(force=True)
+                if global_lock_btn.count() > 0 and global_lock_btn.is_visible():
+                    print("      🔒 Found lock button via global scan")
+                    print("      🔓 Clicking button...")
+                    global_lock_btn.click(force=True)
+
+                    try:
+                        global_lock_btn.wait_for(state="hidden", timeout=5000)
+                    except:
+                        pass
+
                     try:
                         page.wait_for_load_state("domcontentloaded", timeout=5000)
-                        time.sleep(1.0)
-                        print("      ✅ Lock acquired successfully!")
                     except:
-                        time.sleep(2.0)
-                    return True
+                        pass
 
+                    time.sleep(1.5)
+                    print("      ✅ Lock acquired successfully!")
+                    return True
+            except:
+                pass
+
+            print("      ℹ️ No lock popup detected (item is unlocked)")
             return False  # No popup detected
 
         except Exception as e:
-            # Suppress error để không crash automation
-            # print(f"      ⚠️ Lỗi check lock: {e}")
+            print(f"      ⚠️ Error checking lock popup: {e}")
             return False
 
     def process_deployment(self, page, options=[]):
@@ -389,55 +505,169 @@ class NavigatorMixin:
         ]
 
         for sel in sidebar_selectors:
-            sidebar = page.locator(sel).first
-            if sidebar.is_visible():
-                item = (
-                    sidebar.locator(f"a, div[role='button'], li, span, div.menu-item")
-                    .filter(has_text=re.compile(re.escape(target_clean), re.IGNORECASE))
-                    .last
-                )
-                if item.is_visible():
-                    print(f"         ✅ Found '{target_text}' in Sidebar ({sel})")
-                    item.scroll_into_view_if_needed()
-                    item.click()
-                    clicked = True
-                    break
+            try:
+                sidebar = page.locator(sel).first
+                if sidebar.count() > 0 and sidebar.is_visible():
+                    item = (
+                        sidebar.locator(
+                            f"a, div[role='button'], li, span, div.menu-item"
+                        )
+                        .filter(
+                            has_text=re.compile(re.escape(target_clean), re.IGNORECASE)
+                        )
+                        .last
+                    )
+                    if item.count() > 0 and item.is_visible():
+                        print(f"         ✅ Found '{target_text}' in Sidebar ({sel})")
+                        item.scroll_into_view_if_needed()
+                        time.sleep(0.3)
+                        item.click()
+                        clicked = True
+                        break
+            except:
+                continue
 
         # 2. TABS
         if not clicked:
-            tab = (
-                page.locator(f"a[data-toggle='tab'], button[role='tab'], li.nav-item a")
-                .filter(has_text=re.compile(re.escape(target_clean), re.IGNORECASE))
-                .first
-            )
-            if tab.is_visible():
-                print(f"         ✅ Found Tab '{target_text}'")
-                tab.click()
-                clicked = True
+            try:
+                tab = (
+                    page.locator(
+                        f"a[data-toggle='tab'], button[role='tab'], li.nav-item a"
+                    )
+                    .filter(has_text=re.compile(re.escape(target_clean), re.IGNORECASE))
+                    .first
+                )
+                if tab.count() > 0 and tab.is_visible():
+                    print(f"         ✅ Found Tab '{target_text}'")
+                    tab.scroll_into_view_if_needed()
+                    time.sleep(0.3)
+                    tab.click()
+                    clicked = True
+            except:
+                pass
 
-        # 3. GENERIC TEXT
+        # 3. CHECK IF ALREADY ACTIVE
+        # Element có thể đã được click rồi (class active/selected)
+        if not clicked:
+            try:
+                active_items = (
+                    page.locator("a.active, li.active, div.active, [class*='selected']")
+                    .filter(has_text=re.compile(re.escape(target_clean), re.IGNORECASE))
+                    .all()
+                )
+
+                for item in active_items:
+                    if item.is_visible():
+                        item_text = item.inner_text().strip()
+                        if target_clean.lower() in item_text.lower():
+                            print(
+                                f"         ℹ️ Element '{target_text}' is already active/selected"
+                            )
+                            clicked = True
+                            break
+            except:
+                pass
+
+        # 4. GENERIC TEXT (Multiple strategies)
         if not clicked:
             print(f"         ⚠️ Sidebar/Tab not found. Trying generic text match...")
-            element = (
-                page.locator(f"button, a, div[role='button']")
-                .filter(
-                    has_text=re.compile(f"^{re.escape(target_clean)}$", re.IGNORECASE)
-                )
-                .first
-            )
-            if not element.is_visible():
-                element = page.locator(f"text={target_clean}").first
 
-            if element.is_visible():
-                element.click()
-                clicked = True
+            # Strategy A: Exact match with buttons/links
+            try:
+                element = (
+                    page.locator(f"button, a, div[role='button'], span[role='button']")
+                    .filter(
+                        has_text=re.compile(
+                            f"^\\s*{re.escape(target_clean)}\\s*$", re.IGNORECASE
+                        )
+                    )
+                    .first
+                )
+                if element.count() > 0 and element.is_visible():
+                    element.scroll_into_view_if_needed()
+                    time.sleep(0.3)
+                    element.click()
+                    clicked = True
+            except:
+                pass
+
+            # Strategy B: Contains match (broader)
+            if not clicked:
+                try:
+                    element = (
+                        page.locator(
+                            f"button, a, div[role='button'], span[role='button'], li, div.menu-item"
+                        )
+                        .filter(
+                            has_text=re.compile(re.escape(target_clean), re.IGNORECASE)
+                        )
+                        .first
+                    )
+                    if element.count() > 0 and element.is_visible():
+                        element.scroll_into_view_if_needed()
+                        time.sleep(0.3)
+                        element.click()
+                        clicked = True
+                except:
+                    pass
+
+            # Strategy C: Playwright's text= selector (most lenient)
+            if not clicked:
+                try:
+                    element = page.locator(f"text={target_clean}").first
+                    if element.count() > 0 and element.is_visible():
+                        element.scroll_into_view_if_needed()
+                        time.sleep(0.3)
+                        element.click()
+                        clicked = True
+                except:
+                    pass
 
         if clicked:
             # Gọi hàm chờ loading được update bên dưới
             self._wait_for_long_loading(page)
             return True
 
-        raise Exception(f"Cannot click element: '{target_text}'")
+        # [FIX] KHÔNG CRASH - Log error và return False
+        print(f"         ❌ FAILED: Cannot find clickable element '{target_text}'")
+        print(f"         💡 Possible reasons:")
+        print(
+            f"            - Element not loaded yet (try adding wait/delay before this step)"
+        )
+        print(f"            - Element text might be different (check page source)")
+        print(f"            - Element might be in iframe/shadow DOM")
+
+        # Debug: In ra các elements có text tương tự
+        try:
+            print(f"         🔍 Looking for similar elements...")
+            similar = (
+                page.locator("a, button, div[role='button'], li, span")
+                .filter(
+                    has_text=re.compile(
+                        (
+                            target_clean.split()[0]
+                            if target_clean.split()
+                            else target_clean
+                        ),
+                        re.IGNORECASE,
+                    )
+                )
+                .all()[:5]
+            )
+
+            if similar:
+                print(f"         📋 Found {len(similar)} similar elements:")
+                for el in similar:
+                    if el.is_visible():
+                        try:
+                            text = el.inner_text().strip()[:60]
+                            print(f"            - '{text}'")
+                        except:
+                            pass
+        except:
+            pass
+
+        return False
 
     def _wait_for_long_loading(self, page):
         """

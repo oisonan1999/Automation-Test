@@ -344,17 +344,40 @@ class SmartTesterMixin:
                 except:
                     pass
 
-                # 2. Xử lý Modal Confirm trung gian (nếu có)
-                time.sleep(0.5)
-                # Dùng JS check nút confirm trong modal
-                page.evaluate(
-                    """
-                    const btn = Array.from(document.querySelectorAll('.modal.show button')).find(b => 
-                        /upload|confirm|yes|import/i.test(b.innerText)
-                    );
-                    if (btn) btn.click();
-                """
-                )
+                # 2. [FIX] Xử lý Confirmation Popup "Are you sure?" (nếu có)
+                time.sleep(1)  # Đợi popup xuất hiện
+                try:
+                    # Tìm confirmation popup
+                    popup = page.locator(
+                        ".modal.show, .swal2-popup:visible, .swal-modal:visible"
+                    ).first
+                    if popup.count() > 0 and popup.is_visible():
+                        print(f"      🔔 Confirmation popup detected for import")
+
+                        # Tìm nút "Yes, do it!" hoặc các nút confirm khác
+                        confirm_btn = popup.locator(
+                            "button:has-text('Yes'), button:has-text('yes'), "
+                            "button:has-text('Confirm'), button:has-text('confirm'), "
+                            "button:has-text('OK'), button:has-text('ok'), "
+                            "button:has-text('Continue'), button:has-text('continue'), "
+                            "button:has-text('do it'), button:has-text('Do it'), "
+                            "button.confirm, button.swal2-confirm, "
+                            "button[class*='confirm'], a:has-text('Yes')"
+                        ).first
+
+                        if confirm_btn.count() > 0 and confirm_btn.is_visible():
+                            confirm_btn_text = confirm_btn.inner_text().strip()
+                            print(
+                                f"      ✅ Clicking confirmation button: '{confirm_btn_text}'"
+                            )
+                            confirm_btn.click()
+                            time.sleep(0.5)  # Đợi popup confirm đóng
+                        else:
+                            print(
+                                f"      ⚠️ Confirmation popup detected but no button found"
+                            )
+                except Exception as conf_err:
+                    print(f"      ℹ️ No confirmation popup: {conf_err}")
 
                 # 3. CHỜ POPUP KẾT QUẢ (QUAN TRỌNG)
                 # Dùng wait_for_selector thay vì vòng lặp while để Playwright tự handle việc chờ element xuất hiện

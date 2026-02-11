@@ -233,12 +233,13 @@ class BrickAutomation(
                             print(
                                 f"      🔄 Detect Sidebar Item '{tgt}' in Checkbox command. Switching to CLICK."
                             )
-                            self.smart_click(page, tgt)
+                            click_success = self.smart_click(page, tgt)
                             report_logs.append(
                                 {
                                     "step": "Sidebar Click",
-                                    "status": "PASS",
-                                    "details": f"Redirected from Checkbox: {tgt}",
+                                    "status": "PASS" if click_success else "FAIL",
+                                    "details": f"Redirected from Checkbox: {tgt}"
+                                    + ("" if click_success else " - Element not found"),
                                 }
                             )
 
@@ -277,10 +278,22 @@ class BrickAutomation(
                                 )
                     elif act == "click" or act == "select":
                         # Ưu tiên dùng hàm smart_click chuyên biệt
-                        self.smart_click(page, tgt)
+                        click_success = self.smart_click(page, tgt)
                         report_logs.append(
-                            {"step": "Click", "status": "PASS", "details": tgt}
+                            {
+                                "step": "Click",
+                                "status": "PASS" if click_success else "FAIL",
+                                "details": tgt
+                                + ("" if click_success else " - Element not found"),
+                            }
                         )
+
+                        # [FIX] Nếu click thất bại, dừng execution để không làm hỏng các bước sau
+                        if not click_success:
+                            print(
+                                f"      ⚠️ Click failed for '{tgt}'. Stopping execution to prevent errors."
+                            )
+                            break
                     elif act == "wait" or act == "wait_for_page_load":
                         print("      ⏳ Explicit WAIT requested...")
                         # Gọi hàm chờ Loading chuyên dụng
@@ -306,9 +319,14 @@ class BrickAutomation(
                             }
                         )
                     elif act == "save_form":
-                        self._save_form(page)
+                        mode = step.get("mode", "continue")
+                        self._save_form(page, mode=mode)
                         report_logs.append(
-                            {"step": "Save", "status": "PASS", "details": "OK"}
+                            {
+                                "step": "Save",
+                                "status": "PASS",
+                                "details": f"OK (mode={mode})",
+                            }
                         )
 
                     elif act == "download":

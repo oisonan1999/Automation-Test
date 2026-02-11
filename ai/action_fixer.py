@@ -59,6 +59,8 @@ DEPLOYMENT_KEYWORDS = [
     "social box gacha",
     "monthly bonus",
     "versus tournament",
+    "tournament",
+    "versus",
     "player league",
     "strap and medal",
     "superstars",
@@ -523,6 +525,10 @@ def _auto_infer_deployment_options(plan):
         "perk_": "Perks",
         "mission_": "Missions",
         "config_": "Data Configs",
+        # Tournament / Versus contexts
+        "tournament": "Versus Tournament",
+        "versus": "Versus Tournament",
+        "tournament_": "Versus Tournament",
     }
 
     result = []
