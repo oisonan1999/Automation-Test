@@ -74,6 +74,10 @@ Example 15:
 Input: "Vào Live Events -> Versus -> Tournament -> Sửa ID: VS_Tournament_Feb2026_Wk1 -> Đợi trang load -> Sửa Gate: r80, Leaderboard Type: Bracketed, Bracket Preset: Bracket_Standard_24HR, PreEvent Phase Start Date Time(UTC): 02/11/2026 07:15 AM, PreEvent Phase End Date Time(UTC): 02/11/2026 11:00 AM, Lock Time Offset: 5 bấm nút save -> Active Phase Start Date Time (UTC): 02/11/2026 11:00 AM, Active Phase End Date Time (UTC): 02/14/2026 11:00 AM -> Bấm save & continue -> Bấm vào Menu Milestone Rewards -> Export CSV tournament_milestone.csv -> Import CSV -> Bấm save & continue -> Bấm The Brick -> Chọn Versus Tournament -> Process"
 Output: [{{"action":"navigate","path":["Live Events","Versus","Tournament"]}},{{"action":"edit_row","target":"VS_Tournament_Feb2026_Wk1"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Gate":"r80","Leaderboard Type":"Bracketed","Bracket Preset":"Bracket_Standard_24HR","PreEvent Phase Start Date Time(UTC)":"02/11/2026 07:15 AM","PreEvent Phase End Date Time(UTC)":"02/11/2026 11:00 AM","Lock Time Offset":"5"}}}},{{"action":"save_form","mode":"save"}},{{"action":"update_form","data":{{"Active Phase Start Date Time (UTC)":"02/11/2026 11:00 AM","Active Phase End Date Time (UTC)":"02/14/2026 11:00 AM"}}}},{{"action":"save_form","mode":"continue"}},{{"action":"click","target":"Milestone Rewards"}},{{"action":"download","target":"Export CSV","value":"tournament_milestone.csv"}},{{"action":"upload","target":"Import CSV","value":"tournament_milestone.csv"}},{{"action":"save_form","mode":"continue"}},{{"action":"process_deployment","options":["Versus Tournament"]}}]
 
+Example 16:
+Input: "Vào Data Configs -> Boost -> Boost -> Filter Boost Result Value2 theo các giá trị: Red, Blue, Green -> Mỗi giá trị bấm filter một lần sau đó đợi 10-15s"
+Output: [{{"action":"navigate","path":["Data Configs","Boost","Boost"]}},{{"action":"update_form","data":{{"Boost Result Value2":"Red"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Boost Result Value2":"Blue"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Boost Result Value2":"Green"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}}]
+
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
@@ -134,6 +138,17 @@ CRITICAL RULES:
   * DO NOT merge all fields into one update_form
   * Example: "sửa Gate: r80, Lock Time Offset: 5 bấm save -> sửa Start Time: X bấm save & continue"
     → update_form(Gate, Lock Time Offset) + save_form(mode=save) + update_form(Start Time) + save_form(mode=continue)
+
+- FILTERING WITH MULTIPLE VALUES (CRITICAL):
+  * Pattern: "Filter [Field Name] theo các giá trị: A, B, C -> Mỗi giá trị bấm filter một lần sau đó đợi X giây"
+  * For EACH value in the list, generate 3 actions:
+    1. {{"action":"update_form","data":{{"FieldName":"Value"}}}}
+    2. {{"action":"click","target":"Filter Data"}}  (or "Filter" button)
+    3. {{"action":"wait"}}
+  * Example: "Filter Color: Red, Blue -> Each value click filter then wait"
+    → update_form(Color=Red) + click(Filter Data) + wait + update_form(Color=Blue) + click(Filter Data) + wait
+  * DO NOT group all values into one update_form! Each value must have its own cycle.
+  * Common filter button names: "Filter Data", "Filter", "Apply Filter", "Search"
 
 NOW CONVERT THIS COMMAND (use same action names as examples above):
 "{user_command}"
@@ -197,6 +212,14 @@ def get_reasoning_prompt(user_command):
        - These fields are read-only by default with "Edit" button next to them
        - System handles clicking Edit, filling value, saving inline automatically
        - Just include them in update_form data normally
+    17. **FILTERING WITH MULTIPLE VALUES** (CRITICAL):
+       - Pattern: "Filter [Field] theo các giá trị: A, B, C -> Mỗi giá trị bấm filter một lần sau đó đợi X giây"
+       - This means: For EACH value, do 3 actions: update_form → click Filter button → wait
+       - Example: "Filter Color: Red, Blue -> Each value click filter then wait 10s"
+         * Step 1: Fill Color=Red → Click Filter Data → Wait
+         * Step 2: Fill Color=Blue → Click Filter Data → Wait
+       - DO NOT group all values into one update_form!
+       - Common filter button names: "Filter Data", "Filter", "Apply Filter"
 
     Output ONLY the logical analysis/plan in plain text. Do NOT generate JSON yet.
     """
@@ -422,6 +445,18 @@ def get_formatting_prompt(user_command, analysis_clean):
        - User explicitly says "wait" = They need the wait action in the sequence
        - Example: "Edit ID ABC -> Đợi trang load -> Sửa Gate: X" → edit_row, wait, update_form (NOT edit_row, update_form)
     
+    15. **FILTERING WITH MULTIPLE VALUES** (CRITICAL):
+       - Pattern: "Filter [Field] theo các giá trị: A, B, C -> Mỗi giá trị bấm filter một lần sau đó đợi X giây"
+       - Meaning: For EACH value in the list, generate 3 separate actions:
+         1. {{{{ "action": "update_form", "data": {{{{ "[Field]": "Value" }}}} }}}}
+         2. {{{{ "action": "click", "target": "Filter Data" }}}} (or "Filter", "Apply Filter")
+         3. {{{{ "action": "wait" }}}}
+       - DO NOT merge all values into one update_form! Each value must have its own full cycle.
+       - Example: "Filter Color theo: Red, Blue -> Mỗi giá trị bấm filter rồi đợi 10s"
+         → update_form(Color=Red) + click(Filter Data) + wait
+         → update_form(Color=Blue) + click(Filter Data) + wait
+       - If list has 10 values → Generate 30 actions (10 values × 3 actions each)
+    
     CRITICAL EXAMPLES:
     
     Ex 0: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID bất kỳ -> Export CSV offer_section.csv -> Smart test cycle file offer_section.csv -> Import CSV -> Click logo The Brick -> Chọn checbox Offers -> Bấm nút Process"
@@ -591,6 +626,25 @@ def get_formatting_prompt(user_command, analysis_clean):
       {{{{ "action": "upload", "target": "Import CSV", "value": "tournament_milestone.csv" }}}},
       {{{{ "action": "save_form", "mode": "continue" }}}},
       {{{{ "action": "process_deployment", "options": ["Versus Tournament"] }}}}
+    ]
+
+    Ex 14: "Vào Data Configs -> Boost -> Boost -> Filter Boost Result Value2 theo các giá trị: Blast, Protect, Countdown -> Mỗi giá trị bấm filter một lần sau đó đợi 10-15s"
+    EXPLANATION:
+      - User wants to filter by multiple values, testing EACH value separately
+      - For EACH value: fill the field → click Filter button → wait
+      - DO NOT combine all values into one update_form!
+      - Pattern repeats for each value in the list
+    JSON: [
+      {{{{ "action": "navigate", "path": ["Data Configs", "Boost", "Boost"] }}}},
+      {{{{ "action": "update_form", "data": {{{{ "Boost Result Value2": "Blast" }}}} }}}},
+      {{{{ "action": "click", "target": "Filter Data" }}}},
+      {{{{ "action": "wait" }}}},
+      {{{{ "action": "update_form", "data": {{{{ "Boost Result Value2": "Protect" }}}} }}}},
+      {{{{ "action": "click", "target": "Filter Data" }}}},
+      {{{{ "action": "wait" }}}},
+      {{{{ "action": "update_form", "data": {{{{ "Boost Result Value2": "Countdown" }}}} }}}},
+      {{{{ "action": "click", "target": "Filter Data" }}}},
+      {{{{ "action": "wait" }}}}
     ]
 
     INPUT CONTEXT:

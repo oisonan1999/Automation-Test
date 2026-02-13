@@ -810,6 +810,28 @@ class FormHandlerMixin:
         label_normalized = re.sub(r"[\s_-]+", "", label_lower)
 
         # ========================================
+        # PRIORITY 0: Direct ID/Name Match (Highest Priority)
+        # Tìm element có ID hoặc name khớp với label (underscore/hyphen format)
+        # VD: "Boost Result Value2" -> ID "boost_result_value2"
+        # ========================================
+        label_id_format = label_lower.replace(" ", "_").replace("-", "_")
+        direct_by_id = page.locator(
+            f"#{label_id_format}, [name='{label_id_format}']"
+        ).first
+        if direct_by_id.count() > 0 and direct_by_id.is_visible():
+            print(f"         🎯 DIRECT MATCH by ID/name: '{label_id_format}'")
+            return direct_by_id
+
+        # Try with hyphens too
+        label_id_hyphen = label_lower.replace(" ", "-").replace("_", "-")
+        direct_by_id_hyphen = page.locator(
+            f"#{label_id_hyphen}, [name='{label_id_hyphen}']"
+        ).first
+        if direct_by_id_hyphen.count() > 0 and direct_by_id_hyphen.is_visible():
+            print(f"         🎯 DIRECT MATCH by ID/name (hyphen): '{label_id_hyphen}'")
+            return direct_by_id_hyphen
+
+        # ========================================
         # SECTION-AWARE SEARCH: Handle "Section Name Field Name" patterns
         # VD: "PreEvent Phase Start Date Time(UTC)" → section="PreEvent Phase", field="Start Date Time(UTC)"
         # VD: "Active Phase End Date Time (UTC)" → section="Active Phase", field="End Date Time (UTC)"
@@ -933,7 +955,7 @@ class FormHandlerMixin:
                         if el_type == "SELECT":
                             el_name_norm = el_name.lower().replace("-", "_")
                             el_id_norm = el_id.lower().replace("-", "_")
-                            label_norm = label_lower.replace(" ", "_")
+                            label_norm = label_lower.replace(" ", "_").replace("-", "_")
 
                             # [FIX] More strict validation - check if any significant word from label appears in element name/id
                             # VD: "Leaderboard Types" -> words: ["leaderboard", "types", "type"]
@@ -967,11 +989,19 @@ class FormHandlerMixin:
                             )
                             print(f"         ✓ Related: {is_related}")
 
+                            # [FIX] Nếu name/id không match NHƯNG chỉ có 1 element duy nhất trong container
+                            # → Cho phép vì có thể đây là field đúng (tránh bỏ qua)
                             if not is_related:
-                                print(
-                                    f"         ⚠️ Element name/id không match label, skip container này"
-                                )
-                                continue
+                                if len(elements) == 1:
+                                    print(
+                                        f"         ⚠️ Element name/id không match label, NHƯNG chỉ có 1 element → Accept"
+                                    )
+                                    is_related = True  # Override
+                                else:
+                                    print(
+                                        f"         ⚠️ Element name/id không match label, skip container này"
+                                    )
+                                    continue
 
                         # Element tìm thấy trong container - check if visible
                         if not element.is_visible():
