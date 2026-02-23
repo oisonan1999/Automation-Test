@@ -101,6 +101,7 @@ class BrickAutomation(
                     "update_form",
                     "save_form",
                     "scan_tabs",
+                    "check_fields",
                     "click",
                     "select",
                     "wait",
@@ -130,6 +131,13 @@ class BrickAutomation(
                     "save": "save_form",
                     "edit": "edit_row",
                     "clone": "clone_row",
+                    # check_fields variants
+                    "check_field": "check_fields",
+                    "verify_fields": "check_fields",
+                    "verify_field": "check_fields",
+                    "inspect_fields": "check_fields",
+                    "check_tab_fields": "check_fields",
+                    "check_tabs": "check_fields",
                 }
 
                 for step in action_plan:
@@ -397,6 +405,21 @@ class BrickAutomation(
                                 "details": "Checked all tabs",
                             }
                         )
+
+                    elif act == "check_fields":
+                        # data là dict: {"Tab Name": ["Field1", "Field2"]} hoặc list fields
+                        tabs_data = step.get("data", step.get("tabs", {}))
+                        field_logs = self.check_fields_in_tabs(page, tabs_data)
+                        if field_logs:
+                            report_logs.extend(field_logs)
+                        else:
+                            report_logs.append(
+                                {
+                                    "step": "Check Fields",
+                                    "status": "WARN",
+                                    "details": "No fields were checked (empty tabs_dict)",
+                                }
+                            )
 
                     elif act == "process_deployment":
                         options = step.get("options", [])

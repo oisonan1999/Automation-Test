@@ -510,7 +510,7 @@ def parse_command_to_json(user_command, use_fast_mode=True, context_plan=None):
 
     # BƯỚC 4: POST-PROCESSING - Fix invalid action names (CRITICAL)
     print("\n   🔧 POST-PROCESSING: Fixing AI action names...")
-    plan = fix_action_plan(plan)
+    plan = fix_action_plan(plan, user_command)
 
     # DEBUG: Print FULL plan để kiểm tra
     print("\n" + "=" * 60)

@@ -144,6 +144,14 @@ ACTION_NAME_MAP = {
     "test_cycle": "smart_test_cycle",
     "smart_test": "smart_test_cycle",
     "fuzz_test": "smart_test_cycle",
+    # Check fields variations
+    "check_field": "check_fields",
+    "verify_fields": "check_fields",
+    "verify_field": "check_fields",
+    "inspect_fields": "check_fields",
+    "check_tab_fields": "check_fields",
+    "check_tabs": "check_fields",
+    "kiem_tra_fields": "check_fields",
 }
 
 VALID_ACTIONS = {
@@ -158,6 +166,7 @@ VALID_ACTIONS = {
     "update_form",
     "save_form",
     "scan_tabs",
+    "check_fields",
     "click",
     "select",
     "wait",
@@ -166,10 +175,14 @@ VALID_ACTIONS = {
 }
 
 
-def fix_action_plan(plan):
+def fix_action_plan(plan, user_command=""):
     """
     Post-process AI output: Fix invalid action names and field names.
     This is deterministic and 100% reliable regardless of what AI generates.
+
+    Args:
+        plan: The AI-generated action plan (list of dicts)
+        user_command: The original user command string (used for clone detection)
     """
     if not plan or not isinstance(plan, list):
         return plan
@@ -276,17 +289,38 @@ def fix_action_plan(plan):
                 print(f"   🔧 FILTER: Skipping click action with empty target")
                 continue
 
-            # 🆕 DETECT: click("The Brick"/"logo") → process_deployment
-            target_lower = str(step.get("target", "")).lower()
-            brick_keywords = [
-                "brick",
-                "logo",
-                "the brick",
-                "brick logo",
-                "logo the brick",
-            ]
+            # 🆕 DETECT: click("Save") / click("Save & Continue") → save_form
+            target_lower = str(step.get("target", "")).lower().strip()
+            if target_lower in ("save", "save button", "nút save", "bấm save", "lưu"):
+                step["action"] = "save_form"
+                step["mode"] = "save"
+                step.pop("target", None)
+                action = "save_form"
+                print(f"   🔧 AUTO-FIX: click('Save') → save_form(mode=save)")
+            elif target_lower in (
+                "save & continue",
+                "save and continue",
+                "save continue",
+            ):
+                step["action"] = "save_form"
+                step["mode"] = "continue"
+                step.pop("target", None)
+                action = "save_form"
+                print(
+                    f"   🔧 AUTO-FIX: click('Save & Continue') → save_form(mode=continue)"
+                )
 
-            if any(keyword in target_lower for keyword in brick_keywords):
+            # 🆕 DETECT: click("The Brick"/"logo") → process_deployment
+            elif any(
+                keyword in target_lower
+                for keyword in [
+                    "brick",
+                    "logo",
+                    "the brick",
+                    "brick logo",
+                    "logo the brick",
+                ]
+            ):
                 # Convert to process_deployment
                 old_target = step.get("target")
                 step["action"] = "process_deployment"
@@ -299,6 +333,73 @@ def fix_action_plan(plan):
             # Fix: {menu: [...]} → {path: [...]}
             if "menu" in step and "path" not in step:
                 step["path"] = step.pop("menu")
+
+        elif action == "update_form":
+            # ============================================================
+            # FIX RADIO FIELDS: AI sometimes generates {"radio": "Label text"}
+            # or {"radio option": "Use another currency"} instead of
+            # {"Use another currency": "select"}
+            # Detect these patterns and flip key/value so form_handler
+            # can find the radio by its label text.
+            # ============================================================
+            data = step.get("data", {})
+            if data and isinstance(data, dict):
+                RADIO_KEY_PATTERNS = {
+                    "radio",
+                    "radio option",
+                    "radio button",
+                    "radio btn",
+                    "radiobutton",
+                    "radio_option",
+                    "radio_button",
+                    "select radio",
+                    "choose radio",
+                    "radio selection",
+                    "radio_selection",
+                }
+                new_data = {}
+                for k, v in data.items():
+                    if k.lower().strip() in RADIO_KEY_PATTERNS and isinstance(v, str):
+                        # Flip: use label text as key, "select" as value
+                        new_data[v] = "select"
+                        print(f"   🔧 AUTO-FIX radio: '{k}': '{v}' → '{v}': 'select'")
+                    else:
+                        new_data[k] = v
+                step["data"] = new_data
+
+            # ============================================================
+            # FIX PYTHON LIST STRINGS: AI sometimes wraps multi-value fields
+            # in Python list syntax, e.g. "['2026-02-23 00:00:00', '2026-02-23 11:00:00']"
+            # Convert these to plain comma-separated strings so form_handler
+            # can split them correctly.
+            # ============================================================
+            data = step.get("data", {})
+            if data and isinstance(data, dict):
+                import re as _re
+
+                cleaned_data = {}
+                for k, v in data.items():
+                    if isinstance(v, str):
+                        stripped = v.strip()
+                        # Matches both ['...', '...'] and ["...", "..."] list literals
+                        if stripped.startswith("[") and stripped.endswith("]"):
+                            inner = stripped[1:-1]
+                            # Remove surrounding quotes from each element and rejoin
+                            parts = _re.split(r",\s*", inner)
+                            clean_parts = [
+                                p.strip().strip("'\"")
+                                for p in parts
+                                if p.strip().strip("'\"")
+                            ]
+                            if clean_parts:
+                                new_val = ", ".join(clean_parts)
+                                print(
+                                    f"   🔧 AUTO-FIX list string: '{k}': {stripped!r} → {new_val!r}"
+                                )
+                                cleaned_data[k] = new_val
+                                continue
+                    cleaned_data[k] = v
+                step["data"] = cleaned_data
 
         # Track download filenames
         if action == "download" and step.get("value"):
@@ -332,6 +433,22 @@ def fix_action_plan(plan):
     # If process_deployment has no options, infer from context
     # ============================================================
     merged_plan = _auto_infer_deployment_options(merged_plan)
+
+    # ============================================================
+    # STEP 6: AUTO-INJECT missing clone_row from user command
+    # If user said "Clone ID: X" but AI skipped clone_row entirely,
+    # inject it deterministically based on the original command.
+    # ============================================================
+    merged_plan = _inject_missing_clone_row(merged_plan, user_command)
+
+    # ============================================================
+    # STEP 7: AUTO-INJECT save_form(mode=clone) after clone_row
+    # Pattern: clone_row → update_form → ???
+    # If ??? is not save_form(mode=clone), inject it automatically.
+    # Also splits update_form if it mixes modal fields + post-clone fields.
+    # Also injects modal update_form from user_command if AI skipped it.
+    # ============================================================
+    merged_plan = _inject_clone_save(merged_plan, user_command)
 
     if len(merged_plan) != len(plan):
         print(
@@ -927,3 +1044,460 @@ def _merge_process_deployment_steps(plan):
             print(f"      {idx}: {action}")
 
     return filtered
+
+
+def _inject_missing_clone_row(plan, user_command=""):
+    """
+    AUTO-FIX: Detect when user command mentions "Clone ID: X" but AI
+    completely skipped the clone_row action. Inject it deterministically.
+
+    This handles the case where the AI jumps directly to update_form
+    without first generating clone_row.
+
+    Detection patterns in user command:
+      - "Clone ID: X"
+      - "Bấm nút Clone ID: X"
+      - "Clone X" (where X looks like an ID)
+      - "Bấm Clone X"
+
+    Also ensures "New Event ID" / "New ID" is present in update_form data
+    when "New ID: Y" is mentioned in the command.
+    """
+    import re as _re
+
+    if not plan or not user_command:
+        return plan
+
+    # Check if plan already has a clone_row action
+    has_clone_row = any(step.get("action") == "clone_row" for step in plan)
+    if has_clone_row:
+        return plan
+
+    # --- Detect clone target from user command ---
+    # Patterns (case-insensitive, Vietnamese + English):
+    #   "Clone ID: EventGacha_test_15"
+    #   "Bấm nút Clone ID: EventGacha_test_15"
+    #   "Bấm Clone EventGacha_test_15"
+    #   "Clone EventGacha_test_15"
+    clone_patterns = [
+        # "Clone ID: X" or "Bấm nút Clone ID: X" — ID is part of the label
+        r"(?:bấm\s+(?:nút\s+)?)?clone\s+id\s*:\s*([\w\-\.]+)",
+        # "Clone X" where X looks like an ID (contains underscore or is alphanumeric)
+        r"(?:bấm\s+(?:nút\s+)?)?clone\s+([\w\-\.]+(?:_[\w\-\.]+)+)",
+    ]
+
+    clone_target = None
+    for pattern in clone_patterns:
+        match = _re.search(pattern, user_command, _re.IGNORECASE)
+        if match:
+            clone_target = match.group(1).strip()
+            break
+
+    if not clone_target:
+        return plan
+
+    print(
+        f"   🔧 CRITICAL AUTO-FIX: AI skipped clone_row! Detected 'Clone {clone_target}' in user command."
+    )
+
+    # --- Detect New ID from user command ---
+    new_id = None
+    new_id_patterns = [
+        r"new\s+(?:event\s+)?id\s*:\s*([\w\-\.]+)",
+        r"new\s+id\s*:\s*([\w\-\.]+)",
+    ]
+    for pattern in new_id_patterns:
+        match = _re.search(pattern, user_command, _re.IGNORECASE)
+        if match:
+            new_id = match.group(1).strip()
+            break
+
+    # --- Find injection point ---
+    # Insert clone_row AFTER navigate (if any) and BEFORE the first update_form
+    inject_index = 0
+    for idx, step in enumerate(plan):
+        action = step.get("action", "")
+        if action == "navigate":
+            inject_index = idx + 1
+        elif action in ("update_form", "edit_row"):
+            inject_index = idx
+            break
+
+    # If AI generated edit_row instead of clone_row for the same target, replace it
+    replaced_edit = False
+    for idx, step in enumerate(plan):
+        if step.get("action") == "edit_row" and step.get("target") == clone_target:
+            step["action"] = "clone_row"
+            replaced_edit = True
+            print(
+                f"   🔧 AUTO-FIX: Converted edit_row('{clone_target}') → clone_row('{clone_target}')"
+            )
+            break
+
+    if not replaced_edit:
+        # Inject clone_row at the right position
+        clone_step = {"action": "clone_row", "target": clone_target}
+        plan.insert(inject_index, clone_step)
+        print(
+            f"   🔧 AUTO-FIX: Injected clone_row('{clone_target}') at position {inject_index}"
+        )
+
+    # --- Ensure New Event ID is in the update_form data ---
+    if new_id:
+        # Find the first update_form after clone_row
+        clone_idx = None
+        for idx, step in enumerate(plan):
+            if step.get("action") == "clone_row" and step.get("target") == clone_target:
+                clone_idx = idx
+                break
+
+        if clone_idx is not None:
+            # Look for update_form immediately after clone_row
+            for idx in range(clone_idx + 1, len(plan)):
+                step = plan[idx]
+                if step.get("action") == "update_form":
+                    data = step.get("data", {})
+                    # Check if New Event ID is already present (case-insensitive)
+                    has_new_id = any(
+                        k.lower().replace(" ", "") in ("neweventid", "newid")
+                        for k in data.keys()
+                    )
+                    if not has_new_id:
+                        # Insert New Event ID at the beginning of data
+                        new_data = {"New Event ID": new_id}
+                        new_data.update(data)
+                        step["data"] = new_data
+                        print(
+                            f"   🔧 AUTO-FIX: Added 'New Event ID': '{new_id}' to update_form data"
+                        )
+                    break
+                elif step.get("action") not in ("wait",):
+                    # If there's no update_form directly after clone, create one
+                    new_update = {
+                        "action": "update_form",
+                        "data": {"New Event ID": new_id},
+                    }
+                    plan.insert(idx, new_update)
+                    print(
+                        f"   🔧 AUTO-FIX: Created update_form with 'New Event ID': '{new_id}'"
+                    )
+                    break
+
+    return plan
+
+
+def _extract_clone_modal_fields(user_command):
+    """
+    Parse user command to extract clone modal field values.
+    Returns a dict of modal fields extracted from the command text.
+
+    Handles patterns like:
+      "Clone ID: X -> New ID: Y, gate: Z, radio: Use another currency, currency: W"
+    """
+    import re as _re
+
+    if not user_command:
+        return {}
+
+    modal_data = {}
+
+    # --- Extract the segment between "Clone ID: X ->" and the next action boundary ---
+    # Find everything after "Clone ID: X ->" up to a major action marker
+    clone_segment_match = _re.search(
+        r"clone\s+(?:id\s*:\s*)?[\w\-\.]+\s*->\s*(.*?)(?:->\s*(?:đợi|wait|sửa|bấm nút save|save|click|vào|export|import|process|logo|the brick)|$)",
+        user_command,
+        _re.IGNORECASE,
+    )
+
+    if not clone_segment_match:
+        return {}
+
+    segment = clone_segment_match.group(1).strip()
+    if not segment:
+        return {}
+
+    print(f"   🔍 Parsing clone modal fields from segment: '{segment[:100]}...'")
+
+    # --- Extract New ID ---
+    new_id_match = _re.search(
+        r"new\s+(?:event\s+)?id\s*:\s*([\w\-\.]+)", segment, _re.IGNORECASE
+    )
+    if new_id_match:
+        modal_data["New Event ID"] = new_id_match.group(1).strip()
+
+    # --- Extract Gate ---
+    gate_match = _re.search(r"\bgate\s*:\s*([\w\-\.]+)", segment, _re.IGNORECASE)
+    if gate_match:
+        modal_data["Gate"] = gate_match.group(1).strip()
+
+    # --- Extract Radio selection ---
+    # "radio: Use another currency" or "radio: Auto Generate a new currency"
+    radio_match = _re.search(
+        r"radio\s*:\s*((?:use another currency|auto generate[\w\s]*))",
+        segment,
+        _re.IGNORECASE,
+    )
+    if radio_match:
+        radio_label = radio_match.group(1).strip()
+        # Capitalize properly
+        if "use another" in radio_label.lower():
+            modal_data["Use another currency"] = "select"
+        elif "auto generate" in radio_label.lower():
+            modal_data["Auto Generate a new currency"] = "select"
+        else:
+            modal_data[radio_label] = "select"
+
+    # --- Extract Currency ---
+    # Match "currency: X" but NOT "radio: ... currency" or "another currency"
+    currency_match = _re.search(
+        r"(?<!another\s)(?<!a new\s)\bcurrency\s*:\s*([\w\-\.]+)",
+        segment,
+        _re.IGNORECASE,
+    )
+    if currency_match:
+        val = currency_match.group(1).strip()
+        # Avoid capturing "GachaShard" if it's actually in a radio label context
+        if val.lower() not in ("use", "auto", "another", "a"):
+            modal_data["Currency"] = val
+
+    if modal_data:
+        print(f"   ✅ Extracted clone modal fields: {modal_data}")
+    else:
+        print(f"   ⚠️ Could not extract clone modal fields from command")
+
+    return modal_data
+
+
+def _inject_clone_save(plan, user_command=""):
+    """
+    AUTO-FIX: Inject save_form(mode='clone') after clone_row → update_form pattern.
+
+    The Clone modal has its own set of fields (New Event ID, Gate, radio, Currency).
+    After filling the modal, the user must click the Clone button (= save_form mode=clone).
+    Any fields that belong to the NEW event page (Schedule, etc.) come AFTER that.
+
+    This function:
+    1. Detects clone_row followed by update_form
+    2. Splits update_form into MODAL fields + POST-CLONE fields (if mixed)
+    3. Injects save_form(mode=clone) between them
+    4. If modal update_form is entirely missing, extracts fields from user_command
+    """
+    # Fields that live INSIDE the Clone modal
+    CLONE_MODAL_FIELD_KEYWORDS = {
+        "new event id",
+        "new id",
+        "gate",
+        "currency",
+        "use another currency",
+        "auto generate a new currency",
+        "auto generate",
+        "clone milestones",
+    }
+
+    # Fields that belong OUTSIDE the modal (on the new event page after cloning)
+    POST_CLONE_FIELD_KEYWORDS = {
+        "schedule",
+        "date",
+        "time",
+        "start",
+        "end",
+    }
+
+    def is_modal_field(key):
+        k = key.lower().strip()
+        return any(kw in k for kw in CLONE_MODAL_FIELD_KEYWORDS)
+
+    def is_post_clone_field(key):
+        k = key.lower().strip()
+        # If explicitly a modal field, don't treat as post-clone
+        if is_modal_field(k):
+            return False
+        return any(kw in k for kw in POST_CLONE_FIELD_KEYWORDS)
+
+    if not plan:
+        return plan
+
+    result = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+        action = step.get("action", "")
+
+        if action == "clone_row":
+            result.append(step)
+            i += 1
+
+            # Gather consecutive update_form steps that follow clone_row
+            update_forms = []
+            while i < len(plan) and plan[i].get("action") == "update_form":
+                update_forms.append(plan[i])
+                i += 1
+
+            if not update_forms:
+                # Check if save_form(clone) is immediately after clone_row
+                if (
+                    i < len(plan)
+                    and plan[i].get("action") == "save_form"
+                    and plan[i].get("mode") == "clone"
+                ):
+                    # BAD PATTERN: clone_row → save_form(clone) → [wait?] → update_form(modal fields)
+                    # Look ahead to pull modal update_form fields BEFORE save_form(clone)
+                    j = i + 1  # start looking past save_form(clone)
+
+                    # Skip wait steps between save_form and update_form
+                    skipped_waits = []
+                    while j < len(plan) and plan[j].get("action") == "wait":
+                        skipped_waits.append(plan[j])
+                        j += 1
+
+                    # Collect consecutive update_form steps ahead
+                    lookahead_updates = []
+                    while j < len(plan) and plan[j].get("action") == "update_form":
+                        lookahead_updates.append(plan[j])
+                        j += 1
+
+                    if lookahead_updates:
+                        # Merge all ahead update_form data to check for modal fields
+                        all_data = {}
+                        for uf in lookahead_updates:
+                            all_data.update(uf.get("data") or {})
+
+                        # Check if any modal fields are in the lookahead
+                        has_modal = any(is_modal_field(k) for k in all_data)
+
+                        if has_modal:
+                            # Reorder: split modal vs post-clone, emit correctly
+                            modal_data = {}
+                            post_clone_data = {}
+                            mixed_data = {}
+                            for key, val in all_data.items():
+                                if is_modal_field(key):
+                                    modal_data[key] = val
+                                elif is_post_clone_field(key):
+                                    post_clone_data[key] = val
+                                else:
+                                    mixed_data[key] = val
+                            modal_data.update(mixed_data)
+
+                            if modal_data:
+                                result.append(
+                                    {"action": "update_form", "data": modal_data}
+                                )
+                                print(
+                                    f"   🔧 AUTO-FIX: Moved misplaced modal fields {list(modal_data.keys())} "
+                                    "before save_form(mode=clone)"
+                                )
+                            result.append({"action": "save_form", "mode": "clone"})
+                            for w in skipped_waits:
+                                result.append(w)
+                            if post_clone_data:
+                                result.append(
+                                    {"action": "update_form", "data": post_clone_data}
+                                )
+                                print(
+                                    f"   🔧 AUTO-FIX: Placed post-clone fields {list(post_clone_data.keys())} "
+                                    "after save_form(mode=clone)"
+                                )
+                            # Advance i past all consumed steps
+                            i = j
+                            continue
+
+                    # No modal fields found ahead — try extracting from user command
+                    extracted = _extract_clone_modal_fields(user_command)
+                    if extracted:
+                        result.append({"action": "update_form", "data": extracted})
+                        print(
+                            f"   🔧 CRITICAL AUTO-FIX: Injected missing modal update_form "
+                            f"from user command: {list(extracted.keys())}"
+                        )
+                        result.append({"action": "save_form", "mode": "clone"})
+                        for w in skipped_waits:
+                            result.append(w)
+                        # Re-emit ahead update_forms as post-clone
+                        for uf in lookahead_updates:
+                            result.append(uf)
+                        i = j
+                    else:
+                        # Truly nothing — pass through as-is
+                        pass
+                    continue
+
+                # No update_form AND no save_form(clone) after clone_row
+                # Try extracting modal fields from user command
+                extracted = _extract_clone_modal_fields(user_command)
+                if extracted:
+                    result.append({"action": "update_form", "data": extracted})
+                    print(
+                        f"   🔧 CRITICAL AUTO-FIX: Injected missing modal update_form "
+                        f"from user command: {list(extracted.keys())}"
+                    )
+                result.append({"action": "save_form", "mode": "clone"})
+                print("   🔧 AUTO-FIX: Injected save_form(mode=clone) after clone_row")
+                continue
+
+            # Check if save_form(mode=clone) is already immediately after update_forms
+            already_has = (
+                i < len(plan)
+                and plan[i].get("action") == "save_form"
+                and plan[i].get("mode") == "clone"
+            )
+
+            if already_has:
+                # Already correct — just pass through
+                for uf in update_forms:
+                    result.append(uf)
+                continue
+
+            # Merge all update_form data into one flat dict to analyse
+            all_data = {}
+            for uf in update_forms:
+                all_data.update(uf.get("data") or {})
+
+            # Split: modal fields vs post-clone fields
+            modal_data = {}
+            post_clone_data = {}
+            mixed_data = {}  # Fields that are neither clearly modal nor post-clone
+
+            for key, val in all_data.items():
+                if is_modal_field(key):
+                    modal_data[key] = val
+                elif is_post_clone_field(key):
+                    post_clone_data[key] = val
+                else:
+                    mixed_data[key] = val
+
+            # Fields in mixed_data that have no clear ownership stay with modal
+            # (safe default: they were probably intended for the modal)
+            modal_data.update(mixed_data)
+
+            # If no modal fields found in update_form, try extracting from user command
+            if not modal_data:
+                extracted = _extract_clone_modal_fields(user_command)
+                if extracted:
+                    modal_data = extracted
+                    print(
+                        f"   🔧 CRITICAL AUTO-FIX: No modal fields in update_form, "
+                        f"extracted from user command: {list(extracted.keys())}"
+                    )
+
+            if modal_data:
+                result.append({"action": "update_form", "data": modal_data})
+
+            # Always inject the Clone button click
+            result.append({"action": "save_form", "mode": "clone"})
+            print(
+                f"   🔧 AUTO-FIX: Injected save_form(mode=clone) after clone modal fields {list(modal_data.keys())}"
+            )
+
+            if post_clone_data:
+                result.append({"action": "update_form", "data": post_clone_data})
+                print(
+                    f"   🔧 AUTO-FIX: Separated post-clone fields {list(post_clone_data.keys())} after Clone button"
+                )
+
+            continue
+
+        result.append(step)
+        i += 1
+
+    return result

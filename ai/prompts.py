@@ -10,17 +10,17 @@ def get_fast_mode_prompt(user_command):
     return f"""You are a strict JSON converter. You MUST use action names from examples below.
 
 CRITICAL: ONLY these action names are valid:
-navigate, checkbox, download, upload, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click, wait
+navigate, checkbox, download, upload, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click, wait, check_fields
 
 LEARN FROM THESE 5 EXAMPLES (COPY the action names EXACTLY):
 
-Example 1:
-Input: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID -> Export CSV test.csv"
-Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}}]
+Example 1 (CLONE - MOST IMPORTANT):
+Input: "Vào Live Events -> Gacha Event -> Gacha Event -> Clone ID: EventGacha_test_15 -> New ID: test_230226_8, gate: r80, radio: Use another currency, currency: GachaShard_Feb2026_Wknd1_Main -> Đợi trang load -> Sửa Schedule in UTC: 2026-02-23 00:00:00, 2026-02-23 11:00:00, sửa Milestones Type: Disable -> Bấm nút Save -> Bấm vào logo The Brick -> Chọn checkbox: Gacha Events -> Bấm nút Process"
+Output: [{{"action":"navigate","path":["Live Events","Gacha Event","Gacha Event"]}},{{"action":"clone_row","target":"EventGacha_test_15"}},{{"action":"update_form","data":{{"New Event ID":"test_230226_8","Gate":"r80","Use another currency":"select","Currency":"GachaShard_Feb2026_Wknd1_Main"}}}},{{"action":"save_form","mode":"clone"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Schedule in UTC":"2026-02-23 00:00:00, 2026-02-23 11:00:00","Milestones Type":"Disable"}}}},{{"action":"save_form","mode":"save"}},{{"action":"process_deployment","options":["Gacha Events"]}}]
 
 Example 2:
-Input: "Export CSV data.csv -> Smart test cycle data.csv -> Import CSV data.csv"
-Output: [{{"action":"download","target":"Export CSV","value":"data.csv"}},{{"action":"smart_test_cycle","value":"data.csv"}},{{"action":"upload","target":"Import CSV","value":"data.csv"}}]
+Input: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID -> Export CSV test.csv"
+Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}}]
 
 Example 3:
 Input: "Click logo The Brick -> Chọn checkbox Offers -> Bấm Process"
@@ -33,7 +33,10 @@ Output: [{{"action":"navigate","path":["Data Configs","Perk"]}},{{"action":"edit
 Example 5:
 Input: "Clone EventGacha_ABC -> New ID: test_1, Gate: feb2026"
 Output: [{{"action":"clone_row","target":"EventGacha_ABC"}},{{"action":"update_form","data":{{"New Event ID":"test_1","Gate":"feb2026"}}}},{{"action":"save_form"}}]
-
+Example 5b:
+Input: "Bấm nút Clone ID: EventGacha_test_15 -> New ID: test_230226, gate: r80, radio: Use another currency, currency: GachaShard_Feb2026_Wknd1_Main -> Sửa Schedule in UTC: 2026-02-23 00:00:00, 2026-02-23 11:00:00 -> Bấm nút Save"
+Output: [{{"action":"clone_row","target":"EventGacha_test_15"}},{{"action":"update_form","data":{{"New Event ID":"test_230226","Gate":"r80","Use another currency":"select","Currency":"GachaShard_Feb2026_Wknd1_Main"}}}},{{"action":"save_form","mode":"clone"}},{{"action":"update_form","data":{{"Schedule in UTC":"2026-02-23 00:00:00, 2026-02-23 11:00:00"}}}},{{"action":"save_form","mode":"save"}}]
+RULE: Fields IN the Clone modal (New ID, Gate, radio, Currency) → first update_form. Fields AFTER clicking Clone (Schedule, etc.) → second update_form after save_form(mode=clone).
 Example 6:
 Input: "Vào Offer Section -> Chọn 2 ID -> Export test.csv -> Smart test -> Import -> Process"
 Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}},{{"action":"smart_test_cycle","value":"test.csv"}},{{"action":"upload","target":"Import CSV","value":"test.csv"}},{{"action":"process_deployment","options":["Offers"]}}]
@@ -77,10 +80,34 @@ Output: [{{"action":"navigate","path":["Live Events","Versus","Tournament"]}},{{
 Example 16:
 Input: "Vào Data Configs -> Boost -> Boost -> Filter Boost Result Value2 theo các giá trị: Red, Blue, Green -> Mỗi giá trị bấm filter một lần sau đó đợi 10-15s"
 Output: [{{"action":"navigate","path":["Data Configs","Boost","Boost"]}},{{"action":"update_form","data":{{"Boost Result Value2":"Red"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Boost Result Value2":"Blue"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Boost Result Value2":"Green"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}}]
-
+Example 17:
+Input: "Vào Live Event -> Gacha Event -> Gacha Event -> Sửa EventGacha_test_15 -> Kiểm tra các giá trị sau xem có hiển thị trong các tab hay không: LinkedRBEs (Gacha Info tab), VipCarousel (Gacha Info tab), HardCurrencyValue (Gacha Token tab), DescriptionLarge (Display Info tab) -> Nếu có giá trị hiển thị kết quả fail, nếu không có hiển thị kết quả pass"
+Output: [{"action":"navigate","path":["Live Event","Gacha Event","Gacha Event"]},{"action":"edit_row","target":"EventGacha_test_15"},{"action":"wait"},{"action":"check_fields","data":{"Gacha Info":["LinkedRBEs","VipCarousel"],"Gacha Token":["HardCurrencyValue"],"Display Info":["DescriptionLarge"]}}]
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
+
+- CLONE ACTION (CRITICAL - NEVER SKIP):
+  * "Bấm nút Clone ID: X", "Clone ID: X", "Clone X" → ALWAYS start with {{"action":"clone_row","target":"X"}}
+  * The word "ID" after "Clone" is part of the label ("Clone ID:"), NOT a form field name
+  * AFTER clone_row, use update_form for all new values (New ID, Gate, Currency, Schedule, etc.)
+  * NEVER jump directly to update_form without clone_row first
+  * CORRECT: clone_row("EventGacha_test_15") → update_form({{New Event ID, Gate, ...}}) → save_form
+  * WRONG: update_form({{New Event ID, Gate, ...}}) (missing clone_row!)
+
+- RADIO BUTTON IN CLONE/UPDATE FORM (CRITICAL - NEVER DROP):
+  * "radio: Use another currency" → MUST include {{"Use another currency": "select"}} in update_form data
+  * "radio: Auto Generate a new currency" → MUST include {{"Auto Generate a new currency": "select"}}
+  * The RADIO field MUST appear BEFORE the Currency field it enables in the data object
+  * NEVER drop the radio step — Currency dropdown only appears AFTER radio is selected
+  * CORRECT data order: {{"New Event ID": "...", "Gate": "...", "Use another currency": "select", "Currency": "..."}}
+  * WRONG: {{"New Event ID": "...", "Gate": "...", "Currency": "..."}} (missing radio!)
+
+- CLONE MODAL SUBMIT + POST-CLONE EDITING (CRITICAL):
+  * After filling the Clone modal (New ID, Gate, radio, Currency), ALWAYS add {{"action":"save_form","mode":"clone"}} to click the Clone button
+  * Fields that come AFTER the Clone button (e.g., Schedule, other edits) go in a SEPARATE update_form AFTER save_form(clone)
+  * CORRECT flow: clone_row → update_form(modal fields) → save_form(mode=clone) → update_form(post-clone fields) → save_form(mode=save)
+  * WRONG flow: clone_row → update_form(modal fields + post-clone fields) → save_form (merging everything is WRONG!)
 - NAVIGATION: Always merge menu path into ONE navigate action with "path" array
   - CORRECT: {{"action":"navigate","path":["A","B","C"]}}
   - WRONG: {{"action":"navigate","target":"A"}},{{"action":"navigate","target":"B"}},{{"action":"navigate","target":"C"}}
@@ -196,7 +223,15 @@ def get_reasoning_prompt(user_command):
        - NEVER skip or ignore wait commands even if they seem natural
        - Common after: edit_row, clone_row, click actions (form needs time to load)
        - Example: "Edit ID ABC -> Đợi trang load -> Sửa Gate: X" = THREE actions: edit_row, wait, update_form
-    10. Identify actions: navigate, click, wait, download, upload, edit_row, update_form.
+    9b. **CRITICAL - Clone Action Detection** (NEVER SKIP):
+       - "Bấm nút Clone ID: X", "Clone ID: X", "Clone X" → MUST generate clone_row("X") FIRST
+       - The phrase "Clone ID:" means "click the Clone button for the row with ID = X"
+       - "ID" here is part of the label, NOT a form field - do NOT treat it as update_form data
+       - AFTER clone_row, generate update_form for all new values (New ID, Gate, Currency, Schedule...)
+       - Example: "Bấm nút Clone ID: EventGacha_test_15 -> New ID: test_230226, gate: r80" =
+         * clone_row("EventGacha_test_15") + update_form({{New Event ID: test_230226, Gate: r80}}) + save_form
+       - WRONG: jumping directly to update_form without clone_row!
+    10. Identify actions: navigate, click, wait, download, upload, edit_row, clone_row, update_form.
     11. "Chọn League 5" -> Click on Sidebar "League 5".
     12. "Export CSV" -> Download action.
     13. **SECTION-QUALIFIED FIELDS**: 
@@ -236,10 +271,8 @@ def get_formatting_prompt(user_command, analysis_clean):
     
     Task: Convert them into a detailed, sequential JSON Action Plan.
 
-    ⚠️ CRITICAL RULE #0 - ONLY USE THESE ACTIONS:
-    You MUST ONLY use action names from this exact list. NO OTHER action names allowed:
-    - navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle
-    - clone_row, edit_row, update_form, save_form, scan_tabs, click, wait, process_deployment
+    - VALID actions: navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle
+    - clone_row, edit_row, update_form, save_form, scan_tabs, check_fields, click, wait, process_deployment
     
     INVALID action names (NEVER USE): select_random_ids, export_csv, import_csv, click_logo, select_checkbox, click_button ❌
 
@@ -287,7 +320,13 @@ def get_formatting_prompt(user_command, analysis_clean):
         - Rule: Use when user says "Scan tabs", "Quét các tab", "Duyệt qua các tab".
         - IMPORTANT: If user lists fields to update immediately after "Scan tabs", PUT THEM INSIDE "data".
         - Format: {{{{ "action": "scan_tabs", "data": {{{{ "Field1": "Val1", "Field2": "Val2" }}}} }}}}
-    12. "process_deployment": {{{{ "action": "process_deployment", "options": ["Option1", "Option2"] }}}}
+    12. "check_fields":
+        - Rule: Use when user says "Kiểm tra field có giá trị không", "Check if field is empty", "Verify fields", "Xem các giá trị có hiển thị không".
+        - Logic: FAIL if a field HAS a value, PASS if field is EMPTY.
+        - Format: {{{{ "action": "check_fields", "data": {{{{ "Tab Name": ["Field1", "Field2"], "Tab2": ["Field3"] }}}} }}}}
+        - Each key is a sidebar tab name, each value is the list of fields to check inside that tab.
+        - Example: {{{{ "action": "check_fields", "data": {{{{ "Gacha Info": ["LinkedRBEs", "VipCarousel"], "Display Info": ["DescriptionLarge"] }}}} }}}}
+    13. "process_deployment": {{{{ "action": "process_deployment", "options": ["Option1", "Option2"] }}}}
         - Use when user says: "Click The Brick", "Process", "Deploy", "Tick X then Process".
     13. "click": {{{{ "action": "click", "target": "Name" }}}}
     14. "wait": {{{{ "action": "wait" }}}}
@@ -416,6 +455,18 @@ def get_formatting_prompt(user_command, analysis_clean):
          ]
        - IMPORTANT: Radio button label MUST be the EXACT text shown on screen.
        - For radio: value can be "select", "true", "on", or "1".
+       - CRITICAL - CLICK CLONE BUTTON: After update_form for the Clone modal, ALWAYS add
+         {{{{ "action": "save_form", "mode": "clone" }}}} to click the Clone button.
+         Fields that come AFTER the Clone button (Schedule, etc.) go in a SEPARATE update_form.
+         CORRECT flow:
+           clone_row(A) → update_form({{modal fields}}) → save_form(mode=clone) → update_form({{post-clone fields}}) → save_form(mode=save)
+         WRONG:
+           clone_row(A) → update_form({{modal fields + post-clone fields}}) → save_form ← DO NOT merge!
+       - CRITICAL - NEVER DROP RADIO: When user says "radio: Use another currency":
+         * ALWAYS include {{{{"Use another currency": "select"}}}} in update_form data
+         * Radio field MUST come BEFORE "Currency" in the data object (it enables the Currency dropdown)
+         * WRONG: {{{{"New Event ID":"B","Gate":"C","Currency":"D"}}}} ← missing radio!
+         * CORRECT: {{{{"New Event ID":"B","Gate":"C","Use another currency":"select","Currency":"D"}}}}
        
     11. **TABLE vs FORM DISTINCTION**:
        - Command: "Bấm nút Edit của BagID: ABC" 
@@ -493,7 +544,7 @@ def get_formatting_prompt(user_command, analysis_clean):
       {{{{ "action": "process_deployment", "options": ["Hyper Blueprint"] }}}}
     ]"
     
-    Ex 5: "Clone EventGacha_ABC -> New ID: test_1, gate: feb2026_live, chọn radio Use another currency, currency: GachaShard_XYZ"
+    Ex 5: "Clone EventGacha_ABC -> New ID: test_1, gate: feb2026_live, chọn radio Use another currency, currency: GachaShard_XYZ -> Sửa Schedule in UTC: 2026-02-23 00:00:00, 2026-02-23 11:00:00 -> Save"
     JSON: [
       {{{{ "action": "clone_row", "target": "EventGacha_ABC" }}}},
       {{{{ "action": "update_form", "data": {{{{
@@ -502,8 +553,15 @@ def get_formatting_prompt(user_command, analysis_clean):
           "Use another currency": "select",
           "Currency": "GachaShard_XYZ"
       }}}} }}}},
-      {{{{ "action": "save_form" }}}}
+      {{{{ "action": "save_form", "mode": "clone" }}}},
+      {{{{ "action": "update_form", "data": {{{{
+          "Schedule in UTC": "2026-02-23 00:00:00, 2026-02-23 11:00:00"
+      }}}} }}}},
+      {{{{ "action": "save_form", "mode": "save" }}}}
     ]
+    NOTE: save_form(mode="clone") clicks the Clone button in the modal.
+          Fields AFTER the modal (Schedule, etc.) go in a SEPARATE update_form after save_form(clone).
+          WRONG: merging "Schedule in UTC" into the first update_form!
     
     Ex 6: "Edit BossEvent_ABC -> Acquire lock -> sửa gate: LiveOpsTest -> Save -> Click menu Boss Details -> sửa Wrestler ID: SS_TheRock"
     JSON: [
@@ -645,6 +703,23 @@ def get_formatting_prompt(user_command, analysis_clean):
       {{{{ "action": "update_form", "data": {{{{ "Boost Result Value2": "Countdown" }}}} }}}},
       {{{{ "action": "click", "target": "Filter Data" }}}},
       {{{{ "action": "wait" }}}}
+    ]
+
+    Ex 15: "Vào Live Event -> Gacha Event -> Gacha Event -> Sửa EventGacha_test_15 -> Kiểm tra các giá trị sau xem có hiển thị trong các tab hay không: LinkedRBEs (Gacha Info tab), VipCarousel (Gacha Info tab), HardCurrencyValue (Gacha Token tab), CurrencyLinkedRBEs (Gacha Token tab), DescriptionLarge (Display Info tab), DetailHeadliner (Display Info tab) -> Nếu có giá trị hiển thị kết quả fail, nếu không có hiển thị kết quả pass"
+    EXPLANATION:
+      - User wants to check if fields are EMPTY (expected) or have unexpected values
+      - check_fields action navigates to each sidebar tab and reads each field
+      - FAIL = field has a value (unexpected); PASS = field is empty (expected)
+      - Group fields by their tab, each key = tab name, value = list of field names
+    JSON: [
+      {{{{ "action": "navigate", "path": ["Live Event", "Gacha Event", "Gacha Event"] }}}},
+      {{{{ "action": "edit_row", "target": "EventGacha_test_15" }}}},
+      {{{{ "action": "wait" }}}},
+      {{{{ "action": "check_fields", "data": {{{{
+          "Gacha Info": ["LinkedRBEs", "VipCarousel"],
+          "Gacha Token": ["HardCurrencyValue", "CurrencyLinkedRBEs"],
+          "Display Info": ["DescriptionLarge", "DetailHeadliner"]
+      }}}} }}}}
     ]
 
     INPUT CONTEXT:
