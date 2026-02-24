@@ -84,7 +84,98 @@ DEPLOYMENT_KEYWORDS = [
     "event",
     "config",
     "blueprint",
+    # Toggle All (special)
+    "toggle all",
+    "toogle all",
+    "select all",
+    "check all",
 ]
+
+
+# ============================================================================
+# NAVIGATION PATH MAP - Auto-resolve partial/shorthand paths to full menu paths
+# ============================================================================
+
+# Map: destination keyword (lowercase) → full navigation path
+# When user says "Vào Faction Feud Event", AI may generate navigate(["Faction Feud Event"])
+# This map resolves it to the full path ["Live Events", "Faction Feud", "Faction Feud Event"]
+NAVIGATION_PATH_MAP = {
+    # === Live Events ===
+    # Faction Feud
+    "faction feud event": ["Live Events", "Faction Feud", "Faction Feud Event"],
+    "faction feud": ["Live Events", "Faction Feud"],
+    # Gacha
+    "gacha event": ["Live Events", "Gacha Event", "Gacha Event"],
+    # Offer
+    "offer section": ["Live Events", "Offer", "Offer Section"],
+    "shop tier": ["Live Events", "Offer", "Shop Tier"],
+    # Versus
+    "tournament": ["Live Events", "Versus", "Tournament"],
+    "versus tournament": ["Live Events", "Versus", "Tournament"],
+    # Mission
+    "mission": ["Live Events", "Mission", "Mission"],
+    # Fight Card
+    "fight card": ["Live Events", "Fight Card", "Fight Card"],
+    # Cash Contract
+    "cash contract": ["Live Events", "Cash Contract", "Cash Contract"],
+    # RBE
+    "rbe": ["Live Events", "RBE", "RBE"],
+    # Faction Lockbox
+    "faction lockbox": ["Live Events", "Faction Lockbox", "Faction Lockbox"],
+    # Faction Boss
+    "faction boss event": ["Live Events", "Faction Boss", "Faction Boss Event"],
+    "faction boss": ["Live Events", "Faction Boss"],
+    # Grab Bag
+    "grab bag": ["Live Events", "Grab Bag", "Grab Bag"],
+    "grabbag": ["Live Events", "Grab Bag", "Grab Bag"],
+    # LiveOps Message
+    "liveops message": ["Live Events", "LiveOps Message", "LiveOps Message"],
+    "live ops message": ["Live Events", "LiveOps Message", "LiveOps Message"],
+    # Promo Code
+    "promo code": ["Live Events", "Promo Code", "Promo Code"],
+    # Social Box Gacha
+    "social box gacha": ["Live Events", "Social Box Gacha", "Social Box Gacha"],
+    # Monthly Bonus
+    "monthly bonus": ["Live Events", "Monthly Bonus", "Monthly Bonus"],
+    # Prize Wall
+    "prize wall": ["Live Events", "Prize Wall", "Prize Wall"],
+    # Invasion
+    "invasion": ["Live Events", "Invasion", "Invasion"],
+    # Time Challenge
+    "time challenge": ["Live Events", "Time Challenge", "Time Challenge"],
+    # Moment Poster
+    "moment poster": ["Live Events", "Moment Poster", "Moment Poster"],
+    # PVE
+    "pve": ["Live Events", "PVE", "PVE"],
+    # Hyper Blueprint
+    "hyper blueprint": ["Live Events", "Hyper Blueprint", "Hyper Blueprint"],
+    # === Data Configs ===
+    "perk": ["Data Configs", "Perk", "Perk"],
+    "boost": ["Data Configs", "Boost", "Boost"],
+    "superstar": ["Data Configs", "Superstars", "Superstars"],
+    "superstars": ["Data Configs", "Superstars", "Superstars"],
+    "currency": ["Data Configs", "Currency", "Currency"],
+    "consumable": ["Data Configs", "Consumables", "Consumables"],
+    "consumables": ["Data Configs", "Consumables", "Consumables"],
+    "token": ["Data Configs", "Token", "Token"],
+    "strap and medal": ["Data Configs", "Strap and Medal", "Strap and Medal"],
+    "stat change": ["Data Configs", "Stat Change", "Stat Change"],
+    "feature setting": ["Data Configs", "Feature Setting", "Feature Setting"],
+    "feature gate setting": [
+        "Data Configs",
+        "Feature Gate Setting",
+        "Feature Gate Setting",
+    ],
+    "league config": ["Data Configs", "League Config", "League Config"],
+    "champion rewards": ["Data Configs", "Champion Rewards", "Champion Rewards"],
+    "player league": ["Data Configs", "Player League", "Player League"],
+    "notification": ["Data Configs", "Notification", "Notification"],
+    "chat channels": ["Data Configs", "Chat Channels", "Chat Channels"],
+    "effect cap setting": ["Data Configs", "Effect Cap Setting", "Effect Cap Setting"],
+    "merch store": ["Data Configs", "Merch Store", "Merch Store"],
+    "versus shop": ["Data Configs", "Versus Shop", "Versus Shop"],
+    "battle shop": ["Data Configs", "Battle Shop", "Battle Shop"],
+}
 
 
 # ============================================================================
@@ -123,6 +214,13 @@ ACTION_NAME_MAP = {
     "go_home": "process_deployment",
     "process": "process_deployment",
     "deploy": "process_deployment",
+    # Uncheck variations
+    "uncheck": "checkbox",
+    "uncheck_checkbox": "checkbox",
+    "unselect": "checkbox",
+    "deselect": "checkbox",
+    "untick": "checkbox",
+    "uncheck_box": "checkbox",
     # Click button variations
     "click_button": "click",
     "press_button": "click",
@@ -190,6 +288,26 @@ def fix_action_plan(plan, user_command=""):
     fixed_plan = []
     last_filename = None  # Track filename for reuse
 
+    # Pre-parse user command for uncheck patterns
+    # e.g. "Bỏ chọn checkbox Excel" → uncheck_targets = ["excel"]
+    import re as _re
+
+    uncheck_targets = set()
+    uncheck_patterns = [
+        r"bỏ\s*chọn\s*(?:checkbox\s*)?(\w[\w\s]*?)(?:\s*(?:->|,)|(?:\s+(?:rồi|và|then|and|process|save)\b)|\s*$)",
+        r"bo\s*chon\s*(?:checkbox\s*)?(\w[\w\s]*?)(?:\s*(?:->|,)|(?:\s+(?:rồi|và|then|and|process|save)\b)|\s*$)",
+        r"uncheck\s*(?:checkbox\s*)?(\w[\w\s]*?)(?:\s*(?:->|,)|(?:\s+(?:rồi|và|then|and|process|save)\b)|\s*$)",
+        r"untick\s*(?:checkbox\s*)?(\w[\w\s]*?)(?:\s*(?:->|,)|(?:\s+(?:rồi|và|then|and|process|save)\b)|\s*$)",
+        r"deselect\s*(?:checkbox\s*)?(\w[\w\s]*?)(?:\s*(?:->|,)|(?:\s+(?:rồi|và|then|and|process|save)\b)|\s*$)",
+        r"bỏ\s*tick\s*(?:checkbox\s*)?(\w[\w\s]*?)(?:\s*(?:->|,)|(?:\s+(?:rồi|và|then|and|process|save)\b)|\s*$)",
+    ]
+    cmd_lower = user_command.lower()
+    for pattern in uncheck_patterns:
+        for m in _re.finditer(pattern, cmd_lower, _re.IGNORECASE):
+            uncheck_targets.add(m.group(1).strip().lower())
+    if uncheck_targets:
+        print(f"   🔍 Detected uncheck targets from command: {uncheck_targets}")
+
     for step in plan:
         if not isinstance(step, dict):
             continue
@@ -197,8 +315,9 @@ def fix_action_plan(plan, user_command=""):
         action = step.get("action", "")
 
         # ============================================================
-        # STEP 1: Fix action name
+        # STEP 1: Fix action name (save original for uncheck detection)
         # ============================================================
+        step["_original_action"] = action  # Save for uncheck detection
         if action in ACTION_NAME_MAP:
             old_action = action
             action = ACTION_NAME_MAP[action]
@@ -210,19 +329,99 @@ def fix_action_plan(plan, user_command=""):
         # ============================================================
 
         if action == "checkbox":
-            # Fix: {count: 2} or {number: 2} → {target: "ID", value: "random_2"}
-            if "count" in step:
-                step["value"] = f"random_{step.pop('count')}"
-            elif "number" in step:
-                step["value"] = f"random_{step.pop('number')}"
-            if "target" not in step:
-                step["target"] = "ID"
-            if "value" not in step and "label" in step:
-                step["value"] = step.pop("label")
-            # Fix: value rỗng → default random_1
-            if not step.get("value") or str(step.get("value")).strip() == "":
-                step["value"] = "random_1"
-                print("   🔧 AUTO-FIX: checkbox value rỗng → random_1")
+            # ============================================================
+            # DETECT DEPLOYMENT-CONTEXT CHECKBOXES
+            # If the checkbox target/value/field matches a deployment keyword,
+            # keep it as-is (don't default to random_1) so the merge step
+            # can pick it up later for process_deployment.
+            # ============================================================
+            target_val = str(step.get("target", "")).lower().strip()
+            value_val = str(step.get("value", "")).lower().strip()
+            field_val = str(step.get("field", "")).lower().strip()
+            label_val = str(step.get("label", "")).lower().strip()
+            checkbox_val = str(step.get("checkbox", "")).lower().strip()
+
+            # Check if any field matches deployment keywords
+            is_deployment_checkbox = False
+            deployment_opt_name = None
+            for check_val, check_key in [
+                (checkbox_val, "checkbox"),
+                (field_val, "field"),
+                (label_val, "label"),
+                (target_val, "target"),
+                (value_val, "value"),
+            ]:
+                if check_val:
+                    for keyword in DEPLOYMENT_KEYWORDS:
+                        if keyword in check_val or check_val in keyword:
+                            is_deployment_checkbox = True
+                            deployment_opt_name = step.get(check_key, check_val)
+                            break
+                    if is_deployment_checkbox:
+                        break
+
+            # Detect uncheck intent from original action name, value, target, or any field
+            original_action = step.get("_original_action", "")
+            all_text = " ".join(
+                [
+                    original_action,
+                    value_val,
+                    label_val,
+                    target_val,
+                    field_val,
+                    checkbox_val,
+                    str(step.get("mode", "")),
+                ]
+            ).lower()
+            is_uncheck = any(
+                kw in all_text
+                for kw in [
+                    "uncheck",
+                    "bỏ chọn",
+                    "bo chon",
+                    "unselect",
+                    "deselect",
+                    "untick",
+                    "bỏ tick",
+                    "remove",
+                ]
+            )
+
+            # Also check if this target matches user command's uncheck targets
+            if not is_uncheck and uncheck_targets and deployment_opt_name:
+                opt_lower = str(deployment_opt_name).lower().strip()
+                if opt_lower in uncheck_targets or any(
+                    t in opt_lower or opt_lower in t for t in uncheck_targets
+                ):
+                    is_uncheck = True
+                    print(
+                        f"   🔍 Detected uncheck from command context: '{deployment_opt_name}'"
+                    )
+
+            if is_deployment_checkbox:
+                # Keep deployment checkbox info intact for merge step
+                if not step.get("_deployment_opt"):
+                    step["_deployment_opt"] = (
+                        deployment_opt_name or target_val or value_val
+                    )
+                if is_uncheck:
+                    step["_uncheck"] = True
+                # Don't apply random_1 defaults
+            else:
+                # Normal table checkbox: apply defaults
+                # Fix: {count: 2} or {number: 2} → {target: "ID", value: "random_2"}
+                if "count" in step:
+                    step["value"] = f"random_{step.pop('count')}"
+                elif "number" in step:
+                    step["value"] = f"random_{step.pop('number')}"
+                if "target" not in step:
+                    step["target"] = "ID"
+                if "value" not in step and "label" in step:
+                    step["value"] = step.pop("label")
+                # Fix: value rỗng → default random_1
+                if not step.get("value") or str(step.get("value")).strip() == "":
+                    step["value"] = "random_1"
+                    print("   🔧 AUTO-FIX: checkbox value rỗng → random_1")
 
         elif action == "download":
             # Fix: {filename: "x.csv"} → {target: "Export CSV", value: "x.csv"}
@@ -329,6 +528,30 @@ def fix_action_plan(plan, user_command=""):
                 print(f"   🔧 AUTO-FIX: click('{old_target}') → process_deployment")
                 action = "process_deployment"  # Update action variable for subsequent processing
 
+        elif action in ("edit_row", "clone_row"):
+            # Normalize random/any/bất kỳ targets to RANDOM sentinel
+            _RANDOM_TARGETS = {
+                "random",
+                "any",
+                "bất kỳ",
+                "bat ky",
+                "any row",
+                "first",
+                "một dòng bất kỳ",
+                "bất kỳ dòng",
+                "random_1",
+                "random row",
+                "any id",
+                "bất kỳ id",
+                "id bất kỳ",
+            }
+            tgt = str(step.get("target", "")).lower().strip()
+            if tgt in _RANDOM_TARGETS or tgt == "":
+                step["target"] = "RANDOM"
+                print(
+                    f"   🔧 AUTO-FIX: {action}('{tgt or 'empty'}') → {action}('RANDOM') (random row mode)"
+                )
+
         elif action == "navigate":
             # Fix: {menu: [...]} → {path: [...]}
             if "menu" in step and "path" not in step:
@@ -405,6 +628,9 @@ def fix_action_plan(plan, user_command=""):
         if action == "download" and step.get("value"):
             last_filename = step["value"]
 
+        # Clean up internal keys before adding to plan
+        step.pop("_original_action", None)
+
         # Skip unknown actions that can't be mapped
         if step.get("action") not in VALID_ACTIONS:
             print(
@@ -415,7 +641,13 @@ def fix_action_plan(plan, user_command=""):
         fixed_plan.append(step)
 
     # ============================================================
-    # STEP 3: Merge consecutive NAVIGATE steps into path array
+    # STEP 3: Resolve partial/shorthand navigation paths
+    # e.g. ["Faction Feud Event"] → ["Live Events", "Faction Feud", "Faction Feud Event"]
+    # ============================================================
+    fixed_plan = _resolve_navigation_paths(fixed_plan)
+
+    # ============================================================
+    # STEP 3b: Merge consecutive NAVIGATE steps into path array
     # Pattern: navigate(A) → navigate(B) → navigate(C)
     # Should become: navigate(path=[A, B, C])
     # ============================================================
@@ -426,7 +658,9 @@ def fix_action_plan(plan, user_command=""):
     # Pattern: click_logo → select_checkbox(Offers) → click_button(Process)
     # Should become: process_deployment(options=["Offers"])
     # ============================================================
-    merged_plan = _merge_process_deployment_steps(fixed_plan)
+    merged_plan = _merge_process_deployment_steps(
+        fixed_plan, uncheck_targets=uncheck_targets
+    )
 
     # ============================================================
     # STEP 5: AUTO-INFER deployment options if empty
@@ -456,6 +690,89 @@ def fix_action_plan(plan, user_command=""):
         )
 
     return merged_plan
+
+
+def _resolve_navigation_paths(plan):
+    """
+    Resolve partial/shorthand navigation paths using NAVIGATION_PATH_MAP.
+
+    When user says "Vào Faction Feud Event" instead of
+    "Vào Live Events -> Faction Feud -> Faction Feud Event",
+    the AI generates navigate(path=["Faction Feud Event"]) with only 1 element.
+    This function resolves it to the full path.
+
+    Strategy:
+    1. If path has 1 element → look up in NAVIGATION_PATH_MAP
+    2. If path has 2 elements → check if last element matches a known destination
+       and prepend missing parent(s)
+    3. If path already has 3+ elements → likely already correct, skip
+    """
+    if not plan:
+        return plan
+
+    for step in plan:
+        if step.get("action") != "navigate":
+            continue
+
+        path = step.get("path", [])
+        target = step.get("target", "")
+
+        # Convert single target to path list
+        if not path and target:
+            path = [target]
+
+        if not path or not isinstance(path, list):
+            continue
+
+        # Build a lookup key from the path
+        # Strategy: try matching the LAST element(s) of the path
+        original_path = list(path)  # copy for logging
+
+        # CASE 1: Single element path - most common shorthand
+        # e.g. ["Faction Feud Event"] or ["Perk"]
+        if len(path) == 1:
+            key = path[0].strip().lower()
+            if key in NAVIGATION_PATH_MAP:
+                resolved = NAVIGATION_PATH_MAP[key]
+                step["path"] = list(resolved)
+                if "target" in step:
+                    del step["target"]
+                print(f"   🗺️  PATH-RESOLVE: {original_path} → {resolved}")
+                continue
+
+        # CASE 2: Two element path - might be missing top-level parent
+        # e.g. ["Faction Feud", "Faction Feud Event"] missing "Live Events"
+        # or ["Gacha Event", "Gacha Event"] missing "Live Events"
+        if len(path) == 2:
+            # Try matching the last element
+            last_key = path[-1].strip().lower()
+            if last_key in NAVIGATION_PATH_MAP:
+                resolved = NAVIGATION_PATH_MAP[last_key]
+                # Only replace if the resolved path is longer (has more context)
+                if len(resolved) > len(path):
+                    # Verify the existing path elements match the tail of resolved
+                    path_lower = [p.strip().lower() for p in path]
+                    resolved_lower = [r.lower() for r in resolved]
+                    tail_match = resolved_lower[-len(path) :] == path_lower
+                    if tail_match or path_lower[-1] == resolved_lower[-1]:
+                        step["path"] = list(resolved)
+                        if "target" in step:
+                            del step["target"]
+                        print(f"   🗺️  PATH-RESOLVE: {original_path} → {resolved}")
+                        continue
+
+            # Also try matching the full 2-element join as a key
+            full_key = " ".join(p.strip() for p in path).lower()
+            if full_key in NAVIGATION_PATH_MAP:
+                resolved = NAVIGATION_PATH_MAP[full_key]
+                if len(resolved) > len(path):
+                    step["path"] = list(resolved)
+                    if "target" in step:
+                        del step["target"]
+                    print(f"   🗺️  PATH-RESOLVE: {original_path} → {resolved}")
+                    continue
+
+    return plan
 
 
 def _merge_navigate_steps(plan):
@@ -719,7 +1036,7 @@ def _auto_infer_deployment_options(plan):
     return result
 
 
-def _merge_process_deployment_steps(plan):
+def _merge_process_deployment_steps(plan, uncheck_targets=None):
     """
     Merge patterns like:
       1. checkbox(Offers) → process_deployment → click(Process)
@@ -778,40 +1095,63 @@ def _merge_process_deployment_steps(plan):
                     checkbox_field = prev_step.get(
                         "checkbox", ""
                     )  # 🆕 AI also uses "checkbox" field
+                    field_attr = prev_step.get(
+                        "field", ""
+                    )  # 🆕 AI also uses "field" key (e.g. "Faction Feud")
+                    deployment_opt = prev_step.get(
+                        "_deployment_opt", ""
+                    )  # Pre-detected
+                    is_uncheck = prev_step.get("_uncheck", False)
 
                     # 🆕 SMART DETECTION: Check if this is a deployment option
-                    is_deployment_option = False
+                    is_deployment_option = bool(
+                        deployment_opt
+                    )  # Already detected in STEP 2
 
-                    # Check all possible fields that might contain deployment option name
-                    fields_to_check = [
-                        checkbox_field,  # Check "checkbox" field first!
-                        checkbox_label,
-                        target,
-                        value,
-                    ]
+                    if not is_deployment_option:
+                        # Fallback: Check all possible fields
+                        fields_to_check = [
+                            checkbox_field,
+                            field_attr,
+                            checkbox_label,
+                            target,
+                            value,
+                        ]
 
-                    for field in fields_to_check:
-                        if field:
-                            field_lower = str(field).lower()
-                            for keyword in deployment_keywords:
-                                if keyword in field_lower:
-                                    is_deployment_option = True
+                        for field in fields_to_check:
+                            if field:
+                                field_lower = str(field).lower()
+                                for keyword in deployment_keywords:
+                                    if keyword in field_lower:
+                                        is_deployment_option = True
+                                        break
+                                if is_deployment_option:
                                     break
-                            if is_deployment_option:
-                                break
 
                     # If not random_ OR is deployment option name, merge it
                     if (
                         not value.startswith("random_") and target != "ID"
                     ) or is_deployment_option:
-                        # Prefer "checkbox" field (AI's new convention), then checkbox_label, then target, then value
-                        opt = checkbox_field or checkbox_label or target or value
-                        if opt and opt not in options:
+                        # Prefer _deployment_opt (pre-detected), then other fields
+                        opt = (
+                            deployment_opt
+                            or checkbox_field
+                            or field_attr
+                            or checkbox_label
+                            or target
+                            or value
+                        )
+                        # Add uncheck prefix if this is an uncheck operation
+                        if is_uncheck and opt:
+                            opt_key = f"-{opt}"  # Prefix with - to indicate uncheck
+                        else:
+                            opt_key = opt
+                        if opt_key and opt_key not in options:
                             options.insert(
-                                0, opt
+                                0, opt_key
                             )  # Insert at beginning to preserve order
                             print(
-                                f"   🔧 MERGE (backward): checkbox('{opt}') → process_deployment options"
+                                f"   🔧 MERGE (backward): checkbox('{opt}'{', uncheck' if is_uncheck else ''}) → process_deployment options"
                             )
                             items_to_remove.append(k)
                         k -= 1
@@ -851,38 +1191,60 @@ def _merge_process_deployment_steps(plan):
                     checkbox_field = next_step.get(
                         "checkbox", ""
                     )  # 🆕 AI also uses "checkbox" field
+                    field_attr = next_step.get(
+                        "field", ""
+                    )  # 🆕 AI also uses "field" key (e.g. "Faction Feud")
+                    deployment_opt = next_step.get(
+                        "_deployment_opt", ""
+                    )  # Pre-detected
+                    is_uncheck = next_step.get("_uncheck", False)
 
                     # 🆕 SMART DETECTION: Check if this is a deployment option
-                    # Use same keywords as backward merge
-                    is_deployment_option = False
+                    is_deployment_option = bool(
+                        deployment_opt
+                    )  # Already detected in STEP 2
 
-                    # Check all possible fields that might contain deployment option name
-                    fields_to_check = [
-                        checkbox_field,  # Check "checkbox" field first!
-                        checkbox_label,
-                        target,
-                        value,
-                    ]
+                    if not is_deployment_option:
+                        # Fallback: Check all possible fields
+                        fields_to_check = [
+                            checkbox_field,
+                            field_attr,
+                            checkbox_label,
+                            target,
+                            value,
+                        ]
 
-                    for field in fields_to_check:
-                        if field:
-                            field_lower = str(field).lower()
-                            for keyword in deployment_keywords:
-                                if keyword in field_lower:
-                                    is_deployment_option = True
+                        for field in fields_to_check:
+                            if field:
+                                field_lower = str(field).lower()
+                                for keyword in deployment_keywords:
+                                    if keyword in field_lower:
+                                        is_deployment_option = True
+                                        break
+                                if is_deployment_option:
                                     break
-                            if is_deployment_option:
-                                break
 
                     # If not random_ OR is deployment option name, merge it
-                    # CRITICAL: Even if value is random_X, if target/checkbox contains deployment keyword, still merge it
+                    # CRITICAL: Even if value is random_X, if target/checkbox/field contains deployment keyword, still merge it
                     if not value.startswith("random_") or is_deployment_option:
-                        # Prefer "checkbox" field (AI's new convention), then checkbox_label, then target, then value
-                        opt = checkbox_field or checkbox_label or target or value
-                        if opt and opt != "ID" and opt not in options:
-                            options.append(opt)
+                        # Prefer _deployment_opt (pre-detected), then other fields
+                        opt = (
+                            deployment_opt
+                            or checkbox_field
+                            or field_attr
+                            or checkbox_label
+                            or target
+                            or value
+                        )
+                        # Add uncheck prefix if this is an uncheck operation
+                        if is_uncheck and opt:
+                            opt_key = f"-{opt}"
+                        else:
+                            opt_key = opt
+                        if opt_key and opt_key != "ID" and opt_key not in options:
+                            options.append(opt_key)
                         print(
-                            f"   🔧 MERGE (forward): checkbox('{opt}') → process_deployment options"
+                            f"   🔧 MERGE (forward): checkbox('{opt}'{', uncheck' if is_uncheck else ''}) → process_deployment options"
                         )
                         j += 1
                     else:
@@ -920,6 +1282,25 @@ def _merge_process_deployment_steps(plan):
                 "save",
             ]
             options = [opt for opt in options if opt.lower() not in button_names]
+
+            # Apply uncheck_targets to existing options that weren't from checkbox steps
+            if uncheck_targets:
+                new_options = []
+                for opt in options:
+                    if opt.startswith("-"):
+                        new_options.append(opt)  # Already marked as uncheck
+                    else:
+                        opt_lower = opt.lower().strip()
+                        if opt_lower in uncheck_targets or any(
+                            t in opt_lower or opt_lower in t for t in uncheck_targets
+                        ):
+                            new_options.append(f"-{opt}")
+                            print(
+                                f"   🔧 Applied uncheck prefix to existing option: '{opt}' → '-{opt}'"
+                            )
+                        else:
+                            new_options.append(opt)
+                options = new_options
 
             step["options"] = options
 
@@ -998,10 +1379,11 @@ def _merge_process_deployment_steps(plan):
             value = str(step.get("value", ""))
             checkbox_field = step.get("checkbox", "")
             checkbox_label = step.get("checkbox_label", "")
+            field_attr = step.get("field", "")  # 🆕 AI also uses "field" key
 
             # Check if this is a deployment option checkbox
             is_deployment_checkbox = False
-            for field in [checkbox_field, checkbox_label, target, value]:
+            for field in [checkbox_field, field_attr, checkbox_label, target, value]:
                 if field:
                     field_lower = str(field).lower()
                     for keyword in deployment_keywords:
@@ -1021,13 +1403,112 @@ def _merge_process_deployment_steps(plan):
                         break
 
                 if has_nearby_process_deployment:
-                    deployment_opt = checkbox_field or checkbox_label or target or value
+                    deployment_opt = (
+                        checkbox_field
+                        or field_attr
+                        or checkbox_label
+                        or target
+                        or value
+                    )
                     print(
                         f"   🔧 FILTER: Removing orphaned deployment checkbox('{deployment_opt}') - already merged"
                     )
                     continue
 
         filtered.append(step)
+
+    # Clean up internal keys from all steps
+    # 🆕 SYNTHESIS: If plan has deployment checkboxes but NO process_deployment,
+    # synthesize one. Pattern: checkbox(Toggle All) + checkbox(-Excel) + click(Process)
+    # becomes: process_deployment(options=["Toggle All", "-Excel"])
+    has_pd = any(s.get("action") == "process_deployment" for s in filtered)
+    if not has_pd:
+        deployment_checkboxes = []
+        non_deployment_indices = []
+        click_process_idx = None
+
+        for idx, step in enumerate(filtered):
+            action = step.get("action", "")
+            if action == "checkbox":
+                # Check if deployment checkbox (same logic as orphan filter)
+                target = step.get("target", "")
+                value = str(step.get("value", ""))
+                checkbox_field = step.get("checkbox", "")
+                field_attr = step.get("field", "")
+                checkbox_label = step.get("checkbox_label", "")
+
+                is_dep = False
+                opt_name = None
+                for f in [checkbox_field, field_attr, checkbox_label, target, value]:
+                    if f:
+                        f_lower = str(f).lower()
+                        for kw in deployment_keywords:
+                            if kw in f_lower or f_lower in kw:
+                                is_dep = True
+                                opt_name = f
+                                break
+                        if is_dep:
+                            break
+
+                if is_dep:
+                    deployment_checkboxes.append((idx, opt_name, step))
+                else:
+                    non_deployment_indices.append(idx)
+            elif action == "click" and step.get("target", "").lower() in (
+                "process",
+                "deploy",
+                "bấm process",
+                "nút process",
+                "process button",
+            ):
+                click_process_idx = idx
+
+        if deployment_checkboxes and (
+            click_process_idx is not None or len(deployment_checkboxes) >= 1
+        ):
+            # Build options list
+            options = []
+            for _, opt_name, step in deployment_checkboxes:
+                # Check _uncheck flag (set in STEP 2 of fix_action_plan)
+                is_uncheck = step.get("_uncheck", False)
+                opt = opt_name
+                if is_uncheck:
+                    opt = f"-{opt}"
+                if opt not in options:
+                    options.append(opt)
+
+            # Remove absorbed steps and replace with process_deployment
+            indices_to_remove = set(idx for idx, _, _ in deployment_checkboxes)
+            if click_process_idx is not None:
+                indices_to_remove.add(click_process_idx)
+
+            new_filtered = []
+            pd_inserted = False
+            for idx, step in enumerate(filtered):
+                if idx in indices_to_remove:
+                    if not pd_inserted:
+                        new_filtered.append(
+                            {"action": "process_deployment", "options": options}
+                        )
+                        pd_inserted = True
+                        print(
+                            f"   🔧 SYNTHESIZE: deployment checkboxes + click(Process) → process_deployment(options={options})"
+                        )
+                else:
+                    new_filtered.append(step)
+            if not pd_inserted:
+                new_filtered.append(
+                    {"action": "process_deployment", "options": options}
+                )
+                print(
+                    f"   🔧 SYNTHESIZE: deployment checkboxes → process_deployment(options={options})"
+                )
+            filtered = new_filtered
+
+    # Clean up internal keys from all steps
+    for step in filtered:
+        step.pop("_deployment_opt", None)
+        step.pop("_uncheck", None)
 
     # 🆕 DEBUG: Print plan after merge
     print(f"\n   📋 DEBUG - Plan AFTER merge ({len(filtered)} steps):")
@@ -1079,18 +1560,26 @@ def _inject_missing_clone_row(plan, user_command=""):
     #   "Bấm nút Clone ID: EventGacha_test_15"
     #   "Bấm Clone EventGacha_test_15"
     #   "Clone EventGacha_test_15"
+    #   "Clone một ID bất kỳ"
+    #   "Clone bất kỳ"
+    #   "Clone random"
     clone_patterns = [
         # "Clone ID: X" or "Bấm nút Clone ID: X" — ID is part of the label
         r"(?:bấm\s+(?:nút\s+)?)?clone\s+id\s*:\s*([\w\-\.]+)",
         # "Clone X" where X looks like an ID (contains underscore or is alphanumeric)
         r"(?:bấm\s+(?:nút\s+)?)?clone\s+([\w\-\.]+(?:_[\w\-\.]+)+)",
+        # "Clone bất kỳ", "Clone một ID bất kỳ", "Clone random" → RANDOM
+        r"(?:bấm\s+(?:nút\s+)?)?clone\s+(?:một\s+)?(?:\w+\s+)*(?:bất\s*kỳ|random|any)",
     ]
 
     clone_target = None
-    for pattern in clone_patterns:
+    for idx_p, pattern in enumerate(clone_patterns):
         match = _re.search(pattern, user_command, _re.IGNORECASE)
         if match:
-            clone_target = match.group(1).strip()
+            if idx_p == 2:  # Random pattern matched
+                clone_target = "RANDOM"
+            else:
+                clone_target = match.group(1).strip()
             break
 
     if not clone_target:
@@ -1100,16 +1589,28 @@ def _inject_missing_clone_row(plan, user_command=""):
         f"   🔧 CRITICAL AUTO-FIX: AI skipped clone_row! Detected 'Clone {clone_target}' in user command."
     )
 
-    # --- Detect New ID from user command ---
+    # --- Detect New ID from user command (generic: New Event ID, New FF ID, New ID) ---
     new_id = None
+    new_id_field_name = "New Event ID"  # default
     new_id_patterns = [
-        r"new\s+(?:event\s+)?id\s*:\s*([\w\-\.]+)",
-        r"new\s+id\s*:\s*([\w\-\.]+)",
+        r"(new\s+(?:\w+\s+)?id)\s*:\s*([\w\-\.]+)",
     ]
     for pattern in new_id_patterns:
         match = _re.search(pattern, user_command, _re.IGNORECASE)
         if match:
-            new_id = match.group(1).strip()
+            raw_label = match.group(1)
+            new_id = match.group(2).strip()
+            # Normalize field name
+            words = raw_label.split()
+            normalized = []
+            for w in words:
+                if w.lower() == "id":
+                    normalized.append("ID")
+                elif len(w) <= 2:
+                    normalized.append(w.upper())  # Short abbrevs: "ff" → "FF"
+                else:
+                    normalized.append(w.capitalize())  # "new" → "New"
+            new_id_field_name = " ".join(normalized)
             break
 
     # --- Find injection point ---
@@ -1142,7 +1643,7 @@ def _inject_missing_clone_row(plan, user_command=""):
             f"   🔧 AUTO-FIX: Injected clone_row('{clone_target}') at position {inject_index}"
         )
 
-    # --- Ensure New Event ID is in the update_form data ---
+    # --- Ensure New ID field is in the update_form data ---
     if new_id:
         # Find the first update_form after clone_row
         clone_idx = None
@@ -1157,29 +1658,29 @@ def _inject_missing_clone_row(plan, user_command=""):
                 step = plan[idx]
                 if step.get("action") == "update_form":
                     data = step.get("data", {})
-                    # Check if New Event ID is already present (case-insensitive)
+                    # Check if any New ID variant is already present (case-insensitive)
                     has_new_id = any(
-                        k.lower().replace(" ", "") in ("neweventid", "newid")
+                        _re.search(r"\bnew\b.*\bid\b", k, _re.IGNORECASE)
                         for k in data.keys()
                     )
                     if not has_new_id:
-                        # Insert New Event ID at the beginning of data
-                        new_data = {"New Event ID": new_id}
+                        # Insert New ID field at the beginning of data
+                        new_data = {new_id_field_name: new_id}
                         new_data.update(data)
                         step["data"] = new_data
                         print(
-                            f"   🔧 AUTO-FIX: Added 'New Event ID': '{new_id}' to update_form data"
+                            f"   🔧 AUTO-FIX: Added '{new_id_field_name}': '{new_id}' to update_form data"
                         )
                     break
                 elif step.get("action") not in ("wait",):
                     # If there's no update_form directly after clone, create one
                     new_update = {
                         "action": "update_form",
-                        "data": {"New Event ID": new_id},
+                        "data": {new_id_field_name: new_id},
                     }
                     plan.insert(idx, new_update)
                     print(
-                        f"   🔧 AUTO-FIX: Created update_form with 'New Event ID': '{new_id}'"
+                        f"   🔧 AUTO-FIX: Created update_form with '{new_id_field_name}': '{new_id}'"
                     )
                     break
 
@@ -1193,6 +1694,8 @@ def _extract_clone_modal_fields(user_command):
 
     Handles patterns like:
       "Clone ID: X -> New ID: Y, gate: Z, radio: Use another currency, currency: W"
+      "Clone một ID bất kỳ -> New FF ID: Y, Gate: Z"
+      "Clone random -> New Event ID: Y, Gate: Z"
     """
     import re as _re
 
@@ -1201,29 +1704,54 @@ def _extract_clone_modal_fields(user_command):
 
     modal_data = {}
 
-    # --- Extract the segment between "Clone ID: X ->" and the next action boundary ---
-    # Find everything after "Clone ID: X ->" up to a major action marker
-    clone_segment_match = _re.search(
-        r"clone\s+(?:id\s*:\s*)?[\w\-\.]+\s*->\s*(.*?)(?:->\s*(?:đợi|wait|sửa|bấm nút save|save|click|vào|export|import|process|logo|the brick)|$)",
-        user_command,
-        _re.IGNORECASE,
-    )
-
-    if not clone_segment_match:
+    # --- Step 1: Find the "Clone" keyword in the command ---
+    clone_start = _re.search(r"\bclone\b", user_command, _re.IGNORECASE)
+    if not clone_start:
         return {}
 
-    segment = clone_segment_match.group(1).strip()
+    # --- Step 2: Find the first "->" after "Clone" ---
+    arrow_pos = user_command.find("->", clone_start.start())
+    if arrow_pos == -1:
+        return {}
+
+    # --- Step 3: Extract segment after first "->" up to next action boundary ---
+    remaining = user_command[arrow_pos + 2 :].strip()
+
+    # Find the boundary (next major action marker after ->)
+    boundary_match = _re.search(
+        r"->\s*(?:đợi|wait|sửa|bấm\s+nút\s+save|save|click|vào|export|import|process|logo|the\s+brick)",
+        remaining,
+        _re.IGNORECASE,
+    )
+    if boundary_match:
+        segment = remaining[: boundary_match.start()].strip()
+    else:
+        segment = remaining.strip()
+
     if not segment:
         return {}
 
     print(f"   🔍 Parsing clone modal fields from segment: '{segment[:100]}...'")
 
-    # --- Extract New ID ---
+    # --- Extract New [X] ID (generic: handles New Event ID, New FF ID, New ID, etc.) ---
     new_id_match = _re.search(
-        r"new\s+(?:event\s+)?id\s*:\s*([\w\-\.]+)", segment, _re.IGNORECASE
+        r"(new\s+(?:\w+\s+)?id)\s*:\s*([\w\-\.]+)", segment, _re.IGNORECASE
     )
     if new_id_match:
-        modal_data["New Event ID"] = new_id_match.group(1).strip()
+        raw_label = new_id_match.group(1)  # e.g. "New FF ID", "New Event ID"
+        value = new_id_match.group(2).strip()
+        # Normalize field name: capitalize words, keep ID/FF uppercase
+        words = raw_label.split()
+        normalized = []
+        for w in words:
+            if w.lower() == "id":
+                normalized.append("ID")
+            elif len(w) <= 2:
+                normalized.append(w.upper())  # Short abbrevs: "ff" → "FF"
+            else:
+                normalized.append(w.capitalize())  # "new" → "New", "event" → "Event"
+        field_name = " ".join(normalized)
+        modal_data[field_name] = value
 
     # --- Extract Gate ---
     gate_match = _re.search(r"\bgate\s*:\s*([\w\-\.]+)", segment, _re.IGNORECASE)
@@ -1286,6 +1814,11 @@ def _inject_clone_save(plan, user_command=""):
     CLONE_MODAL_FIELD_KEYWORDS = {
         "new event id",
         "new id",
+        "new ff id",
+        "new gacha id",
+        "new boss id",
+        "new offer id",
+        "new mission id",
         "gate",
         "currency",
         "use another currency",
@@ -1301,11 +1834,24 @@ def _inject_clone_save(plan, user_command=""):
         "time",
         "start",
         "end",
+        "leaderboard",
+        "consumable limit",
+        "milestones type",
+        "bracket preset",
     }
 
     def is_modal_field(key):
+        import re as _re
+
         k = key.lower().strip()
-        return any(kw in k for kw in CLONE_MODAL_FIELD_KEYWORDS)
+        # Direct keyword match
+        if any(kw in k for kw in CLONE_MODAL_FIELD_KEYWORDS):
+            return True
+        # Pattern match: "new ... id" covers all event types
+        # e.g. "New FF ID", "New Event ID", "New Boss ID", etc.
+        if _re.search(r"\bnew\b.*\bid\b", k):
+            return True
+        return False
 
     def is_post_clone_field(key):
         k = key.lower().strip()

@@ -328,14 +328,26 @@ class BrickAutomation(
                         )
                     elif act == "save_form":
                         mode = step.get("mode", "continue")
-                        self._save_form(page, mode=mode)
-                        report_logs.append(
-                            {
-                                "step": "Save",
-                                "status": "PASS",
-                                "details": f"OK (mode={mode})",
-                            }
-                        )
+                        save_result = self._save_form(page, mode=mode)
+                        if isinstance(save_result, str) and save_result.startswith(
+                            "Error:"
+                        ):
+                            report_logs.append(
+                                {
+                                    "step": "Save",
+                                    "status": "FAIL",
+                                    "details": save_result,
+                                }
+                            )
+                            print(f"      ❌ Save failed: {save_result}")
+                        else:
+                            report_logs.append(
+                                {
+                                    "step": "Save",
+                                    "status": "PASS",
+                                    "details": f"OK (mode={mode})",
+                                }
+                            )
 
                     elif act == "download":
                         try:

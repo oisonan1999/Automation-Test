@@ -82,17 +82,29 @@ Input: "Vào Data Configs -> Boost -> Boost -> Filter Boost Result Value2 theo c
 Output: [{{"action":"navigate","path":["Data Configs","Boost","Boost"]}},{{"action":"update_form","data":{{"Boost Result Value2":"Red"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Boost Result Value2":"Blue"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Boost Result Value2":"Green"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"wait"}}]
 Example 17:
 Input: "Vào Live Event -> Gacha Event -> Gacha Event -> Sửa EventGacha_test_15 -> Kiểm tra các giá trị sau xem có hiển thị trong các tab hay không: LinkedRBEs (Gacha Info tab), VipCarousel (Gacha Info tab), HardCurrencyValue (Gacha Token tab), DescriptionLarge (Display Info tab) -> Nếu có giá trị hiển thị kết quả fail, nếu không có hiển thị kết quả pass"
-Output: [{"action":"navigate","path":["Live Event","Gacha Event","Gacha Event"]},{"action":"edit_row","target":"EventGacha_test_15"},{"action":"wait"},{"action":"check_fields","data":{"Gacha Info":["LinkedRBEs","VipCarousel"],"Gacha Token":["HardCurrencyValue"],"Display Info":["DescriptionLarge"]}}]
+Output: [{{"action":"navigate","path":["Live Event","Gacha Event","Gacha Event"]}},{{"action":"edit_row","target":"EventGacha_test_15"}},{{"action":"wait"}},{{"action":"check_fields","data":{{"Gacha Info":["LinkedRBEs","VipCarousel"],"Gacha Token":["HardCurrencyValue"],"Display Info":["DescriptionLarge"]}}}}]
+Example 18 (SHORTHAND NAVIGATION - system auto-resolves full path):
+Input: "Vào Faction Feud Event -> Sửa FF ID: FF_Test_1 -> Đợi trang load -> sửa Gate: r80"
+Output: [{{"action":"navigate","path":["Faction Feud Event"]}},{{"action":"edit_row","target":"FF_Test_1"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Gate":"r80"}}}},{{"action":"save_form"}}]
+Example 19 (SHORTHAND NAVIGATION):
+Input: "Vào Gacha Event -> Sửa EventGacha_test_15"
+Output: [{{"action":"navigate","path":["Gacha Event"]}},{{"action":"edit_row","target":"EventGacha_test_15"}},{{"action":"wait"}}]
+Example 20 (CLONE RANDOM - Faction Feud with New FF ID):
+Input: "Vào Faction Feud Event -> Clone một ID bất kỳ -> New FF ID: FF_Feb2026_Wknd4_FF2_2, Gate: r80 -> Đợi trang load -> Sửa Leaderboard Type: Normal, Consumable Limit: 99, Schedules In UTC: 02/24/2026 00:00 AM, 02/24/2026 11:00 AM -> Save -> Bấm vào logo The Brick -> Chọn checkbox Faction Feud -> Process"
+Output: [{{"action":"navigate","path":["Faction Feud Event"]}},{{"action":"clone_row","target":"RANDOM"}},{{"action":"update_form","data":{{"New FF ID":"FF_Feb2026_Wknd4_FF2_2","Gate":"r80"}}}},{{"action":"save_form","mode":"clone"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Leaderboard Type":"Normal","Consumable Limit":"99","Schedules In UTC":"02/24/2026 00:00 AM, 02/24/2026 11:00 AM"}}}},{{"action":"save_form","mode":"save"}},{{"action":"process_deployment","options":["Faction Feud"]}}]
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
 
 - CLONE ACTION (CRITICAL - NEVER SKIP):
   * "Bấm nút Clone ID: X", "Clone ID: X", "Clone X" → ALWAYS start with {{"action":"clone_row","target":"X"}}
+  * RANDOM CLONE: "Clone bất kỳ", "Clone một ID bất kỳ", "Clone random" → {{"action":"clone_row","target":"RANDOM"}}
   * The word "ID" after "Clone" is part of the label ("Clone ID:"), NOT a form field name
-  * AFTER clone_row, use update_form for all new values (New ID, Gate, Currency, Schedule, etc.)
-  * NEVER jump directly to update_form without clone_row first
-  * CORRECT: clone_row("EventGacha_test_15") → update_form({{New Event ID, Gate, ...}}) → save_form
+  * AFTER clone_row, ALWAYS use update_form for modal fields (New ID/New FF ID/New Event ID, Gate, Currency, radio, etc.)
+  * Clone modal field names vary by event type: "New Event ID" (Gacha), "New FF ID" (Faction Feud), "New ID" (generic)
+  * NEVER jump directly to save_form(clone) without update_form for modal fields first!
+  * CORRECT: clone_row("RANDOM") → update_form({{New FF ID, Gate}}) → save_form(mode=clone) → wait → update_form(post-clone fields) → save_form
+  * WRONG: clone_row("RANDOM") → save_form(mode=clone) (missing update_form for modal fields!)
   * WRONG: update_form({{New Event ID, Gate, ...}}) (missing clone_row!)
 
 - RADIO BUTTON IN CLONE/UPDATE FORM (CRITICAL - NEVER DROP):
@@ -111,6 +123,10 @@ CRITICAL RULES:
 - NAVIGATION: Always merge menu path into ONE navigate action with "path" array
   - CORRECT: {{"action":"navigate","path":["A","B","C"]}}
   - WRONG: {{"action":"navigate","target":"A"}},{{"action":"navigate","target":"B"}},{{"action":"navigate","target":"C"}}
+  - SHORTHAND NAVIGATION: If user only mentions the destination page (e.g., "Vào Faction Feud Event"),
+    generate the path with just that destination. The system will auto-resolve it to the full path.
+    Example: "Vào Faction Feud Event" → {{"action":"navigate","path":["Faction Feud Event"]}}
+    (System will auto-resolve to ["Live Events","Faction Feud","Faction Feud Event"])
 
 - WAIT ACTION (NEVER SKIP):
   * "Đợi trang load", "Wait for page load", "Chờ", "Đợi", "Wait" → MUST generate {{"action":"wait"}}
@@ -135,6 +151,8 @@ CRITICAL RULES:
   * "sửa [normal field]: [value]" after arrow → USE update_form action
   * Example: "Sửa FF ID: FF_ABC -> Đợi trang load -> sửa Gate: r80" = edit_row("FF_ABC") + wait + update_form({{"Gate":"r80"}}) + save_form
   * WRONG: update_form({{"FF ID":"FF_ABC","Gate":"r80"}})
+  * RANDOM ROW: "Sửa FF ID bất kỳ", "Sửa một dòng bất kỳ", "Edit any row", "Sửa bất kỳ" → edit_row("RANDOM")
+  * Example: "Sửa Faction War ID bất kỳ" → {{"action":"edit_row","target":"RANDOM"}}
 
 - MULTIPLE DATETIME VALUES (IMPORTANT):
   * Fields like "Schedules In UTC" may have 2+ datetime inputs (Start, End)
@@ -198,6 +216,8 @@ def get_reasoning_prompt(user_command):
     2. Break it down into a logical sequence of steps.
     3. Extract key details like:
        - Menu paths (e.g., "Data Configs -> Perk -> Perk", "Live Events -> Offer -> Offer").
+       - If user only mentions destination (e.g., "Vào Faction Feud Event"), use just that name.
+         The system will auto-resolve to the full path.
        - File names (e.g., "file2.csv").
        - Specific actions (Upload, Export, Add rows).
        - Data values (e.g., "BagID=Grabbag_hnm").
@@ -215,6 +235,8 @@ def get_reasoning_prompt(user_command):
        - "Sửa [ID-like Field]: [Value]" at START of command → Edit item action (click Edit button on row with that ID)
        - ID-like fields: ID, EventID, BagID, SectionID, FF ID, Boss Event ID, Offer ID, Gacha ID, Mission ID
        - "sửa [normal field]: [value]" AFTER arrow -> Update form action (fill form field)
+       - RANDOM ROW: "Sửa [Field] bất kỳ", "Sửa một [Field] bất kỳ", "Edit any row" → edit_row("RANDOM")
+       - Example: "Sửa FF ID bất kỳ" = edit_row("RANDOM")
        - Example: "Sửa FF ID: FF_ABC -> sửa Gate: r80" = TWO actions: 
          * 1) Edit item with FF ID = FF_ABC (click Edit button)
          * 2) Update form field Gate = r80
@@ -225,11 +247,17 @@ def get_reasoning_prompt(user_command):
        - Example: "Edit ID ABC -> Đợi trang load -> Sửa Gate: X" = THREE actions: edit_row, wait, update_form
     9b. **CRITICAL - Clone Action Detection** (NEVER SKIP):
        - "Bấm nút Clone ID: X", "Clone ID: X", "Clone X" → MUST generate clone_row("X") FIRST
+       - RANDOM CLONE: "Clone bất kỳ", "Clone một ID bất kỳ", "Clone random" → clone_row("RANDOM")
        - The phrase "Clone ID:" means "click the Clone button for the row with ID = X"
        - "ID" here is part of the label, NOT a form field - do NOT treat it as update_form data
-       - AFTER clone_row, generate update_form for all new values (New ID, Gate, Currency, Schedule...)
+       - AFTER clone_row, ALWAYS generate update_form for modal fields (New ID/New FF ID/New Event ID, Gate, Currency...)
+       - Clone modal field names vary by event type: "New Event ID" (Gacha), "New FF ID" (Faction Feud), "New ID" (generic)
+       - NEVER skip update_form for modal fields! clone_row → save_form(clone) without update_form is WRONG!
+       - Example: "Clone một ID bất kỳ -> New FF ID: FF_Test, Gate: r80" =
+         * clone_row("RANDOM") + update_form({{New FF ID: FF_Test, Gate: r80}}) + save_form(mode=clone)
        - Example: "Bấm nút Clone ID: EventGacha_test_15 -> New ID: test_230226, gate: r80" =
          * clone_row("EventGacha_test_15") + update_form({{New Event ID: test_230226, Gate: r80}}) + save_form
+       - WRONG: clone_row → save_form(clone) (missing update_form for modal fields!)
        - WRONG: jumping directly to update_form without clone_row!
     10. Identify actions: navigate, click, wait, download, upload, edit_row, clone_row, update_form.
     11. "Chọn League 5" -> Click on Sidebar "League 5".
@@ -305,6 +333,8 @@ def get_formatting_prompt(user_command, analysis_clean):
        - DO NOT create separate "click" action for "Acquire Lock" or "Unlock"
        - Always add "wait" action after edit_row to ensure form loads completely
        - Example: "Edit ABC -> Acquire lock -> Update field" = edit_row("ABC") + wait + update_form
+       - RANDOM ROW: "Sửa bất kỳ", "Sửa [Field] bất kỳ", "Edit any", "Edit any row" → target = "RANDOM"
+       - Example: "Sửa Faction War ID bất kỳ" → {{{{ "action": "edit_row", "target": "RANDOM" }}}}
     9. "update_form": {{{{ "action": "update_form", "data": {{{{ "Label": "Value", ... }}}} }}}}
        - Used to fill forms/popups. 
        - MUST extract ALL fields mentioned in user command.
@@ -343,6 +373,10 @@ def get_formatting_prompt(user_command, analysis_clean):
        - CORRECT: {{{{"action": "navigate", "path": ["A", "B", "C"]}}}}
        - WRONG: {{{{"action": "navigate", "target": "A"}}}}, {{{{"action": "navigate", "target": "B"}}}}, {{{{"action": "navigate", "target": "C"}}}}
        - Example: "Vào Data Configs -> Perk -> Perk" → {{{{"action": "navigate", "path": ["Data Configs", "Perk", "Perk"]}}}}
+       - SHORTHAND NAVIGATION: If user only mentions the destination page (e.g., "Vào Faction Feud Event"),
+         generate the path with just that destination. The system will auto-resolve to the full menu path.
+         Example: "Vào Faction Feud Event" → {{{{"action": "navigate", "path": ["Faction Feud Event"]}}}}
+         (System will auto-resolve to ["Live Events", "Faction Feud", "Faction Feud Event"])
     
     3. **SAVE AFTER UPDATE** (CRITICAL - NEVER SKIP):
        - ALWAYS add save_form immediately after update_form
@@ -438,10 +472,15 @@ def get_formatting_prompt(user_command, analysis_clean):
 
     10. **CLONE FLOW (CRITICAL)**:
        - Command: "Clone 'A' -> New ID: B, gate: C, chọn radio Use another currency, currency: D"
+       - RANDOM CLONE: "Clone bất kỳ", "Clone một ID bất kỳ", "Clone random" → clone_row("RANDOM")
        - THE FORM DATA MUST INCLUDE:
-         * Input fields: "New Event ID" or just the suffix part
+         * Input fields: "New Event ID", "New FF ID", or "New ID" (varies by event type)
          * Dropdown fields: "Gate", "Currency"  
          * Radio buttons: Use EXACT label text as key (e.g., "Use another currency": "select")
+       - Clone modal field names by event type:
+         * Gacha: "New Event ID"
+         * Faction Feud: "New FF ID"
+         * Generic: "New ID" or "New Event ID"
        - Output:
          [
            {{{{ "action": "clone_row", "target": "A" }}}},
@@ -451,10 +490,14 @@ def get_formatting_prompt(user_command, analysis_clean):
                "Use another currency": "select",
                "Currency": "D"
            }}}} }}}},
-           {{{{ "action": "save_form" }}}}
+           {{{{ "action": "save_form", "mode": "clone" }}}}
          ]
        - IMPORTANT: Radio button label MUST be the EXACT text shown on screen.
        - For radio: value can be "select", "true", "on", or "1".
+       - CRITICAL - NEVER SKIP update_form FOR MODAL FIELDS:
+         After clone_row, you MUST ALWAYS generate update_form for modal fields BEFORE save_form(mode=clone).
+         WRONG: clone_row → save_form(mode=clone) (missing update_form for modal fields!)
+         CORRECT: clone_row → update_form({{modal fields}}) → save_form(mode=clone)
        - CRITICAL - CLICK CLONE BUTTON: After update_form for the Clone modal, ALWAYS add
          {{{{ "action": "save_form", "mode": "clone" }}}} to click the Clone button.
          Fields that come AFTER the Clone button (Schedule, etc.) go in a SEPARATE update_form.
@@ -721,6 +764,35 @@ def get_formatting_prompt(user_command, analysis_clean):
           "Display Info": ["DescriptionLarge", "DetailHeadliner"]
       }}}} }}}}
     ]
+
+    Ex 16 (CLONE RANDOM - Faction Feud with New FF ID):
+    Input: "Vào Faction Feud Event -> Clone một ID bất kỳ -> New FF ID: FF_Feb2026_Wknd4_FF2_2, Gate: r80 -> Đợi trang load -> Sửa Leaderboard Type: Normal, Consumable Limit: 99, Schedules In UTC: 02/24/2026 00:00 AM, 02/24/2026 11:00 AM -> Save -> Bấm vào logo The Brick -> Chọn checkbox Faction Feud -> Process"
+    EXPLANATION:
+      - "Clone một ID bất kỳ" = clone a random row → clone_row("RANDOM")
+      - Clone modal fields: "New FF ID" (Faction Feud uses this instead of "New Event ID"), "Gate"
+      - MUST have update_form for modal fields BEFORE save_form(mode=clone)!
+      - After save_form(clone), wait for page load, then fill post-clone fields
+      - Post-clone fields: Leaderboard Type, Consumable Limit, Schedules In UTC
+    JSON: [
+      {{{{ "action": "navigate", "path": ["Faction Feud Event"] }}}},
+      {{{{ "action": "clone_row", "target": "RANDOM" }}}},
+      {{{{ "action": "update_form", "data": {{{{
+          "New FF ID": "FF_Feb2026_Wknd4_FF2_2",
+          "Gate": "r80"
+      }}}} }}}},
+      {{{{ "action": "save_form", "mode": "clone" }}}},
+      {{{{ "action": "wait" }}}},
+      {{{{ "action": "update_form", "data": {{{{
+          "Leaderboard Type": "Normal",
+          "Consumable Limit": "99",
+          "Schedules In UTC": "02/24/2026 00:00 AM, 02/24/2026 11:00 AM"
+      }}}} }}}},
+      {{{{ "action": "save_form", "mode": "save" }}}},
+      {{{{ "action": "process_deployment", "options": ["Faction Feud"] }}}}
+    ]
+    NOTE: clone_row("RANDOM") MUST be followed by update_form for modal fields!
+          WRONG: clone_row("RANDOM") → save_form(mode=clone) (missing update_form!)
+          CORRECT: clone_row("RANDOM") → update_form({{New FF ID, Gate}}) → save_form(mode=clone)
 
     INPUT CONTEXT:
     - Original Command: "{user_command}"

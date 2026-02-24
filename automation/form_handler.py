@@ -651,11 +651,27 @@ class FormHandlerMixin:
             print(f"         ❌ [ScheduleSmart] Error: {e}")
             return False
 
+    def _fix_datetime_12h_format(self, val):
+        """Fix datetime values for 12-hour format before filling.
+        - '00:00 AM' → '12:00 AM' (midnight)
+        - '00:30 PM' → '12:30 PM' (noon)
+        - Hour 00 is not valid in %I (12-hour), must be 12.
+        """
+        # Fix 00:MM AM/PM → 12:MM AM/PM
+        fixed = re.sub(
+            r"(\s)00:(\d{2})(\s*)(AM|PM)", r"\g<1>12:\2\3\4", val, flags=re.IGNORECASE
+        )
+        if fixed != val:
+            print(f"         🔧 Auto-fixed 12h format: '{val}' → '{fixed}'")
+        return fixed
+
     def _fill_single_datetime_input(self, page, inp, val, idx):
         """Helper: điền 1 giá trị datetime vào 1 input"""
         try:
             # [FIX] Sanitize: strip brackets, quotes from value
             val = re.sub(r"[\[\]'\"]", "", str(val)).strip()
+            # [FIX] Auto-fix 00:xx AM/PM → 12:xx AM/PM for 12-hour format
+            val = self._fix_datetime_12h_format(val)
             print(f"         📅 Filling datetime input {idx+1}: '{val}'")
             inp.scroll_into_view_if_needed()
             time.sleep(0.3)
@@ -935,15 +951,55 @@ class FormHandlerMixin:
                 target_btn.click(force=True)
                 print("      ✅ Clicked successfully.")
 
-                # Gọi hàm wait của bạn (nếu class có method này)
+                # Gọi hàm wait và detect error popup
+                save_result = None
                 if hasattr(self, "_wait_after_save"):
-                    self._wait_after_save(page)
+                    save_result = self._wait_after_save(page)
                 else:
                     # Logic wait mặc định nếu chưa có hàm riêng
                     try:
                         page.wait_for_load_state("networkidle", timeout=3000)
                     except:
                         time.sleep(2)
+
+                # Check if save_result indicates an error
+                if save_result and isinstance(save_result, dict):
+                    if not save_result.get("success", True):
+                        error_msg = save_result.get("error_message", "Unknown error")
+                        print(f"      ❌ Save failed with error: {error_msg}")
+
+                        # ========================================
+                        # AUTO-FIX: Datetime format errors
+                        # e.g. "time data '02/24/2026 00:00 AM' does not match format '%m/%d/%Y %I:%M %p'"
+                        # ========================================
+                        if (
+                            "time data" in error_msg
+                            and "does not match format" in error_msg
+                        ):
+                            print(
+                                "      🔧 Attempting to auto-fix datetime format error..."
+                            )
+                            fixed = self._auto_fix_datetime_on_page(page, error_msg)
+                            if fixed:
+                                print("      🔄 Retrying save after datetime fix...")
+                                time.sleep(1)
+                                target_btn.scroll_into_view_if_needed()
+                                time.sleep(0.3)
+                                target_btn.click(force=True)
+                                retry_result = (
+                                    self._wait_after_save(page)
+                                    if hasattr(self, "_wait_after_save")
+                                    else None
+                                )
+                                if (
+                                    retry_result
+                                    and isinstance(retry_result, dict)
+                                    and not retry_result.get("success", True)
+                                ):
+                                    return f"Error: {retry_result.get('error_message', 'Retry failed')}"
+                                return "Success"
+
+                        return f"Error: {error_msg}"
 
                 return "Success"
 
@@ -961,14 +1017,95 @@ class FormHandlerMixin:
                 pass
 
     def _wait_after_save(self, page):
-        """Hàm phụ: Chờ thông báo thành công hoặc Popup đóng lại"""
+        """Hàm phụ: Chờ thông báo thành công hoặc Popup đóng lại.
+        Returns:
+            dict: {"success": True/False, "error_message": str or None}
+        """
         time.sleep(1)
+
+        # ========================================
+        # CHECK 1: Detect SweetAlert2 error popup (e.g., datetime format error)
+        # ========================================
+        try:
+            swal_popup = page.locator(".swal2-popup")
+            swal_popup.wait_for(state="visible", timeout=3000)
+            if swal_popup.is_visible():
+                popup_text = swal_popup.inner_text().strip()
+                clean_text = popup_text.replace("\n", " ").strip()[:500]
+                print(f"      🚨 Popup detected after save: {clean_text[:200]}")
+
+                # Click OK/Confirm to dismiss the popup
+                try:
+                    ok_btn = swal_popup.locator(
+                        "button.swal2-confirm, button:has-text('OK')"
+                    )
+                    if ok_btn.count() > 0 and ok_btn.first.is_visible():
+                        ok_btn.first.click(force=True)
+                        time.sleep(0.5)
+                except:
+                    try:
+                        page.evaluate(
+                            """
+                            const btn = document.querySelector('button.swal2-confirm');
+                            if (btn) btn.click();
+                        """
+                        )
+                        time.sleep(0.5)
+                    except:
+                        pass
+
+                # Check if it's an error or success
+                text_lower = popup_text.lower()
+                error_keywords = [
+                    "error",
+                    "failed",
+                    "invalid",
+                    "duplicate",
+                    "missing",
+                    "required",
+                    "not number",
+                    "format",
+                    "does not match",
+                    "time data",
+                    "lỗi",
+                    "không hợp lệ",
+                ]
+                if any(k in text_lower for k in error_keywords):
+                    print(f"      ❌ Error popup detected: {clean_text[:200]}")
+                    return {"success": False, "error_message": clean_text}
+                elif "success" in text_lower or "hoàn thành" in text_lower:
+                    print("      ✅ Success popup detected.")
+                    return {"success": True, "error_message": None}
+                else:
+                    # Unknown popup content - treat as potential error
+                    print(f"      ⚠️ Unknown popup: {clean_text[:200]}")
+                    return {"success": False, "error_message": clean_text}
+        except:
+            # No SweetAlert2 popup — that's fine, check other indicators
+            pass
+
+        # ========================================
+        # CHECK 2: Detect Bootstrap alert/toast errors
+        # ========================================
+        try:
+            error_toast = page.locator(".toast-error, .alert-danger, .alert-error")
+            if error_toast.count() > 0 and error_toast.first.is_visible():
+                err_text = error_toast.first.inner_text().strip()[:300]
+                print(f"      ❌ Error toast detected: {err_text}")
+                return {"success": False, "error_message": err_text}
+        except:
+            pass
+
+        # ========================================
+        # CHECK 3: Success indicators
+        # ========================================
         try:
             # Chờ Toast Message xanh lá hiện lên
             page.locator(".toast-success, .alert-success").wait_for(
                 state="visible", timeout=2000
             )
             print("      ✅ Thành công (Toast detected).")
+            return {"success": True, "error_message": None}
         except:
             pass
 
@@ -978,6 +1115,8 @@ class FormHandlerMixin:
         except:
             pass
 
+        return {"success": True, "error_message": None}
+
     def close_popup(self, page):
         try:
             page.keyboard.press("Escape")
@@ -986,6 +1125,124 @@ class FormHandlerMixin:
                 btn.click()
         except:
             pass
+
+    # ============================
+    # AUTO-FIX: DATETIME FORMAT ERROR
+    # ============================
+    def _auto_fix_datetime_on_page(self, page, error_msg):
+        """
+        Parse error message to find the bad datetime value, fix it,
+        then find and update the matching input on the page.
+
+        Example error: "time data '02/24/2026 00:00 AM' does not match format '%m/%d/%Y %I:%M %p'"
+        Fix: '00:00 AM' → '12:00 AM', '00:00 PM' → '12:00 PM'
+        """
+        try:
+            # Extract the bad datetime value from error message
+            match = re.search(r"time data '([^']+)'", error_msg)
+            if not match:
+                print("      ⚠️ Could not parse bad datetime from error message.")
+                return False
+
+            bad_value = match.group(1)
+            fixed_value = self._fix_datetime_format(bad_value)
+
+            if fixed_value == bad_value:
+                print(f"      ⚠️ No fix found for datetime: '{bad_value}'")
+                return False
+
+            print(f"      🔧 Fixing datetime: '{bad_value}' → '{fixed_value}'")
+
+            # Find all datetime/flatpickr inputs on the page and fix matching values
+            datetime_inputs = page.locator(
+                "input.flatpickr-input, input.datetimepicker, input.datepicker, "
+                "input[type='text'][class*='flatpickr'], input[type='text'][class*='date']"
+            ).all()
+
+            fixed_count = 0
+            for inp in datetime_inputs:
+                try:
+                    if not inp.is_visible():
+                        continue
+                    current_val = inp.get_attribute("value") or inp.input_value()
+                    if current_val and current_val.strip() == bad_value.strip():
+                        # Fix this input
+                        inp.evaluate(
+                            "(el, v) => {"
+                            "  el.removeAttribute('readonly');"
+                            "  el.value = v;"
+                            "  el.setAttribute('value', v);"
+                            "  el.dispatchEvent(new Event('input', {bubbles: true}));"
+                            "  el.dispatchEvent(new Event('change', {bubbles: true}));"
+                            "  if(el._flatpickr) { el._flatpickr.setDate(v, true); }"
+                            "}",
+                            fixed_value,
+                        )
+                        fixed_count += 1
+                        print(
+                            f"      ✅ Fixed input value: '{bad_value}' → '{fixed_value}'"
+                        )
+                except:
+                    pass
+
+            # Also try fixing via broader input search
+            if fixed_count == 0:
+                all_inputs = page.locator("input[type='text']").all()
+                for inp in all_inputs:
+                    try:
+                        if not inp.is_visible():
+                            continue
+                        current_val = inp.get_attribute("value") or ""
+                        if current_val.strip() == bad_value.strip():
+                            inp.evaluate(
+                                "(el, v) => {"
+                                "  el.value = v;"
+                                "  el.dispatchEvent(new Event('input', {bubbles: true}));"
+                                "  el.dispatchEvent(new Event('change', {bubbles: true}));"
+                                "  if(el._flatpickr) { el._flatpickr.setDate(v, true); }"
+                                "}",
+                                fixed_value,
+                            )
+                            fixed_count += 1
+                            print(
+                                f"      ✅ Fixed input (broad): '{bad_value}' → '{fixed_value}'"
+                            )
+                    except:
+                        pass
+
+            return fixed_count > 0
+
+        except Exception as e:
+            print(f"      ⚠️ Auto-fix datetime error: {e}")
+            return False
+
+    def _fix_datetime_format(self, value):
+        """
+        Fix common datetime format issues:
+        - '00:00 AM' → '12:00 AM' (12-hour format requires 01-12, not 00)
+        - '00:xx PM' → '12:xx PM'
+        - Ensure proper spacing before AM/PM
+        """
+        fixed = value
+
+        # Fix '00:' at the time part → '12:' (in 12-hour format, midnight/noon = 12, not 00)
+        # Pattern: date part + space + 00:MM + space + AM/PM
+        fixed = re.sub(
+            r"(\d{2}/\d{2}/\d{4})\s+00:(\d{2})\s*(AM|PM)",
+            r"\1 12:\2 \3",
+            fixed,
+            flags=re.IGNORECASE,
+        )
+
+        # Also handle ISO-like format: 2026-02-24 00:00 AM
+        fixed = re.sub(
+            r"(\d{4}-\d{2}-\d{2})\s+00:(\d{2})\s*(AM|PM)",
+            r"\1 12:\2 \3",
+            fixed,
+            flags=re.IGNORECASE,
+        )
+
+        return fixed
 
     # --- HÀM NÂNG CẤP: QUÉT TAB DỰA TRÊN TEXT ---
     def scan_all_tabs(self, page, data_dict):

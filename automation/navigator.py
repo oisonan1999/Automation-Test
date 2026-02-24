@@ -431,11 +431,82 @@ class NavigatorMixin:
 
             # Tick các checkbox options
             for opt in options:
-                print(f"      🔲 Ticking option: '{opt}'")
-                # Strategy 1: Tìm label chứa text và tick checkbox gần nhất
+                # Detect uncheck prefix: "-Excel" means uncheck Excel
+                is_uncheck = opt.startswith("-")
+                opt_name = opt.lstrip("-").strip() if is_uncheck else opt.strip()
+                opt_lower = opt_name.lower()
+
+                # Handle "Toggle All" / "Toogle All" / "Select All" / "Check All"
+                if opt_lower in ("toggle all", "toogle all", "select all", "check all"):
+                    print(f"      🔲 Clicking Toggle All checkbox...")
+                    try:
+                        # Strategy 1: Find by label text
+                        toggle_label = (
+                            page.locator("label")
+                            .filter(
+                                has_text=re.compile(
+                                    r"toggle\s*all|select\s*all|check\s*all",
+                                    re.IGNORECASE,
+                                )
+                            )
+                            .first
+                        )
+                        if toggle_label.is_visible():
+                            toggle_chk = toggle_label.locator(
+                                "input[type='checkbox']"
+                            ).first
+                            if not toggle_chk.is_visible():
+                                id_v = toggle_label.get_attribute("for")
+                                if id_v:
+                                    toggle_chk = page.locator(f"#{id_v}")
+                            if toggle_chk.is_visible():
+                                if is_uncheck:
+                                    if toggle_chk.is_checked():
+                                        toggle_chk.uncheck()
+                                        print(f"         ✅ Unchecked Toggle All")
+                                    else:
+                                        print(
+                                            f"         ✅ Already unchecked: Toggle All"
+                                        )
+                                else:
+                                    if not toggle_chk.is_checked():
+                                        toggle_chk.check()
+                                        print(f"         ✅ Checked Toggle All")
+                                    else:
+                                        print(
+                                            f"         ✅ Already checked: Toggle All"
+                                        )
+                                time.sleep(1)  # Wait for all checkboxes to toggle
+                                continue
+                        # Strategy 2: Find any "Toggle All" button/link
+                        toggle_btn = (
+                            page.locator("button, a, span")
+                            .filter(
+                                has_text=re.compile(
+                                    r"toggle\s*all|select\s*all", re.IGNORECASE
+                                )
+                            )
+                            .first
+                        )
+                        if toggle_btn.is_visible():
+                            toggle_btn.click()
+                            print(f"         ✅ Clicked Toggle All button")
+                            time.sleep(1)
+                            continue
+                        print(f"         ⚠️ Toggle All not found")
+                    except Exception as e:
+                        print(f"         ⚠️ Toggle All error: {e}")
+                    continue
+
+                if is_uncheck:
+                    print(f"      ☐ Unchecking option: '{opt_name}'")
+                else:
+                    print(f"      🔲 Ticking option: '{opt_name}'")
+
+                # Strategy 1: Tìm label chứa text và tick/untick checkbox gần nhất
                 lbl = (
                     page.locator("label")
-                    .filter(has_text=re.compile(opt, re.IGNORECASE))
+                    .filter(has_text=re.compile(re.escape(opt_name), re.IGNORECASE))
                     .first
                 )
                 if lbl.is_visible():
@@ -444,30 +515,58 @@ class NavigatorMixin:
                         id_v = lbl.get_attribute("for")
                         if id_v:
                             chk = page.locator(f"#{id_v}")
-                    if chk.is_visible() and not chk.is_checked():
-                        chk.check()
-                        print(f"         ✅ Ticked: '{opt}'")
-                    elif chk.is_visible() and chk.is_checked():
-                        print(f"         ✅ Already ticked: '{opt}'")
+                    if chk.is_visible():
+                        if is_uncheck:
+                            if chk.is_checked():
+                                chk.uncheck()
+                                print(f"         ✅ Unchecked: '{opt_name}'")
+                            else:
+                                print(f"         ✅ Already unchecked: '{opt_name}'")
+                        else:
+                            if not chk.is_checked():
+                                chk.check()
+                                print(f"         ✅ Ticked: '{opt_name}'")
+                            else:
+                                print(f"         ✅ Already ticked: '{opt_name}'")
                     else:
-                        print(f"         ⚠️ Checkbox not visible for: '{opt}'")
+                        print(f"         ⚠️ Checkbox not visible for: '{opt_name}'")
                 else:
                     # Strategy 2: Tìm text trực tiếp rồi click checkbox bên cạnh
                     try:
-                        text_el = page.locator(f"text='{opt}'").first
+                        text_el = page.locator(f"text='{opt_name}'").first
                         if text_el.is_visible():
                             chk_nearby = text_el.locator(
                                 "xpath=preceding-sibling::input[@type='checkbox'] | following-sibling::input[@type='checkbox'] | ../input[@type='checkbox']"
                             ).first
-                            if chk_nearby.is_visible() and not chk_nearby.is_checked():
-                                chk_nearby.check()
-                                print(f"         ✅ Ticked via nearby: '{opt}'")
+                            if chk_nearby.is_visible():
+                                if is_uncheck:
+                                    if chk_nearby.is_checked():
+                                        chk_nearby.uncheck()
+                                        print(
+                                            f"         ✅ Unchecked via nearby: '{opt_name}'"
+                                        )
+                                    else:
+                                        print(
+                                            f"         ✅ Already unchecked: '{opt_name}'"
+                                        )
+                                else:
+                                    if not chk_nearby.is_checked():
+                                        chk_nearby.check()
+                                        print(
+                                            f"         ✅ Ticked via nearby: '{opt_name}'"
+                                        )
+                                    else:
+                                        print(
+                                            f"         ✅ Already ticked: '{opt_name}'"
+                                        )
                             else:
-                                print(f"         ⚠️ Cannot tick: '{opt}'")
+                                print(
+                                    f"         ⚠️ Cannot {'uncheck' if is_uncheck else 'tick'}: '{opt_name}'"
+                                )
                         else:
-                            print(f"         ⚠️ Label not found: '{opt}'")
+                            print(f"         ⚠️ Label not found: '{opt_name}'")
                     except Exception as e:
-                        print(f"         ⚠️ Strategy 2 failed for '{opt}': {e}")
+                        print(f"         ⚠️ Strategy 2 failed for '{opt_name}': {e}")
 
             # Click nút Process
             print(f"      🖱 Clicking Process button...")

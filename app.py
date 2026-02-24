@@ -2,7 +2,10 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import sys
+import io
 from ai.brain import parse_command_to_json, save_scenario, load_scenarios
+import ai.brain as brain_module
 from automation.core import BrickAutomation
 
 # --- CẤU HÌNH TRANG ---
@@ -173,37 +176,83 @@ if st.session_state.current_plan:
 
     st.json(st.session_state.current_plan)
 
+
+# --- HELPER: Streaming stdout logs to Streamlit ---
+class StreamingLogCapture:
+    """Capture stdout and stream it to a Streamlit container in real-time"""
+
+    def __init__(self, st_container):
+        self.buffer = io.StringIO()
+        self.original_stdout = None
+        self.st_container = st_container
+
+    def __enter__(self):
+        self.original_stdout = sys.stdout
+        sys.stdout = self
+        return self
+
+    def __exit__(self, *args):
+        sys.stdout = self.original_stdout
+
+    def write(self, text):
+        if self.original_stdout:
+            self.original_stdout.write(text)
+        self.buffer.write(text)
+        # Update Streamlit element in real-time
+        current = self.buffer.getvalue()
+        if current.strip():
+            self.st_container.code(current, language="text")
+
+    def flush(self):
+        if self.original_stdout:
+            self.original_stdout.flush()
+
+    def getvalue(self):
+        return self.buffer.getvalue()
+
+
 # --- XỬ LÝ SỰ KIỆN CHẠY (AI BRAIN) ---
 if run_btn and user_input:
-    with st.spinner("🧠 AI đang suy nghĩ..."):
+    with st.status("🧠 AI đang suy nghĩ...", expanded=True) as status:
         # Hiển thị mode
         if st.session_state.use_fast_mode:
             st.info("⚡ Đang sử dụng Fast Mode...")
         else:
             st.info("🧠 Đang sử dụng Careful Mode...")
 
-        # Gọi AI
-        action_plan = parse_command_to_json(
-            user_input, use_fast_mode=st.session_state.use_fast_mode
-        )
+        # Placeholder cho real-time logs
+        log_placeholder = st.empty()
+
+        # Gọi AI với streaming log
+        with StreamingLogCapture(log_placeholder) as ai_log:
+            action_plan = parse_command_to_json(
+                user_input, use_fast_mode=st.session_state.use_fast_mode
+            )
 
         # Lưu kết quả
         st.session_state.current_plan = action_plan
         st.session_state.run_execution = True
         st.session_state.test_logs = []
 
-        # Lưu mode đã dùng
-        if st.session_state.use_fast_mode:
-            st.session_state.last_mode_used = "fast"
-        else:
-            st.session_state.last_mode_used = "careful"
+        # Lưu mode đã dùng (đọc từ brain module - phản ánh mode thực tế sau auto-switch)
+        st.session_state.last_mode_used = brain_module.last_actual_mode
 
-        st.rerun()
+        status.update(
+            label="✅ AI đã phân tích xong!", state="complete", expanded=False
+        )
+
+    st.rerun()
 
 # --- XỬ LÝ SỰ KIỆN THỰC THI (ROBOT ACTION) ---
 if st.session_state.run_execution and st.session_state.current_plan:
     with st.status("🤖 AI đang thực thi...", expanded=True) as status:
-        logs = automation.execute_action(st.session_state.current_plan)
+        # Placeholder cho real-time logs
+        exec_log_placeholder = st.empty()
+
+        # Capture execution logs with streaming
+        with StreamingLogCapture(exec_log_placeholder) as exec_log:
+            logs = automation.execute_action(st.session_state.current_plan)
+
         st.session_state.test_logs = logs
         status.update(label="✅ Hoàn thành!", state="complete", expanded=False)
 

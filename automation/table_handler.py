@@ -282,6 +282,42 @@ class TableHandlerMixin:
             else:
                 print(f"   🧠 Recall Memory: '{target_text}'")
 
+        # Handle RANDOM sentinel: pick a random row from the table
+        _random_keywords = {
+            "random",
+            "any",
+            "bất kỳ",
+            "bat ky",
+            "first",
+            "random_1",
+            "any row",
+            "bất kỳ dòng",
+            "một dòng bất kỳ",
+        }
+        if (
+            str(target_text).lower().strip() in _random_keywords
+            or target_text == "RANDOM"
+        ):
+            print(
+                f"   🎲 Random mode: đang chọn ngẫu nhiên một dòng để {action_type}..."
+            )
+            try:
+                all_rows = page.locator("tbody tr").filter(has=page.locator("td"))
+                total = all_rows.count()
+                if total == 0:
+                    raise Exception("Bảng không có dòng nào để chọn ngẫu nhiên")
+                idx = random.randint(0, total - 1)
+                chosen_row = all_rows.nth(idx)
+                # Get the ID text from second cell (index 1) as identifier
+                try:
+                    target_text = chosen_row.locator("td").nth(1).inner_text().strip()
+                except:
+                    target_text = chosen_row.locator("td").first.inner_text().strip()
+                print(f"   🎲 Chọn ngẫu nhiên dòng #{idx + 1}: '{target_text}'")
+                self.memory["LAST_SELECTED"] = target_text
+            except Exception as e:
+                raise Exception(f"Random row selection failed: {e}")
+
         print(f"   🔎 Tìm dòng '{target_text}' để {action_type}...")
 
         js_script = """

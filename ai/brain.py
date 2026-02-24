@@ -12,6 +12,9 @@ from ai.action_fixer import fix_action_plan
 
 load_dotenv()
 
+# Module-level variable to track the actual mode used in the last parse
+last_actual_mode = "fast"
+
 # === CONFIGURATION ===
 MODEL_REASONING = "deepseek-r1:14b"
 MODEL_FORMATTING = "qwen2.5-coder:14b-instruct-q4_K_M"
@@ -470,6 +473,8 @@ def parse_command_to_json(user_command, use_fast_mode=True, context_plan=None):
     Returns:
         List[dict]: JSON Action Plan
     """
+    global last_actual_mode
+
     print("\n🧠 AI Pipeline Started...")
     print(
         f"   📝 Command: {user_command[:80]}{'...' if len(user_command) > 80 else ''}"
@@ -488,13 +493,16 @@ def parse_command_to_json(user_command, use_fast_mode=True, context_plan=None):
 
     # BƯỚC 2: Chọn pipeline
     if use_fast_mode:
+        last_actual_mode = "fast"
         plan = single_model_pipeline(user_command)
 
         # Auto-fallback: Nếu Fast Mode thất bại, tự động chuyển sang Careful Mode
         if not plan or len(plan) == 0:
             print("   ⚠️  Fast Mode failed! Auto-switching to Careful Mode...")
+            last_actual_mode = "careful"
             plan = dual_model_pipeline(user_command)
     else:
+        last_actual_mode = "careful"
         plan = dual_model_pipeline(user_command)
 
     # BƯỚC 3: Auto-fix nếu cần
