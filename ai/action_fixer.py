@@ -1108,12 +1108,16 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                         deployment_opt
                     )  # Already detected in STEP 2
 
+                    # 🆕 Also check 'option' field (AI sometimes uses this key)
+                    option_attr = prev_step.get("option", "")
+
                     if not is_deployment_option:
                         # Fallback: Check all possible fields
                         fields_to_check = [
                             checkbox_field,
                             field_attr,
                             checkbox_label,
+                            option_attr,
                             target,
                             value,
                         ]
@@ -1138,6 +1142,7 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                             or checkbox_field
                             or field_attr
                             or checkbox_label
+                            or option_attr
                             or target
                             or value
                         )
@@ -1204,12 +1209,16 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                         deployment_opt
                     )  # Already detected in STEP 2
 
+                    # 🆕 Also check 'option' field (AI sometimes uses this key)
+                    option_attr = next_step.get("option", "")
+
                     if not is_deployment_option:
                         # Fallback: Check all possible fields
                         fields_to_check = [
                             checkbox_field,
                             field_attr,
                             checkbox_label,
+                            option_attr,
                             target,
                             value,
                         ]
@@ -1225,7 +1234,7 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                                     break
 
                     # If not random_ OR is deployment option name, merge it
-                    # CRITICAL: Even if value is random_X, if target/checkbox/field contains deployment keyword, still merge it
+                    # CRITICAL: Even if value is random_X, if target/checkbox/field/option contains deployment keyword, still merge it
                     if not value.startswith("random_") or is_deployment_option:
                         # Prefer _deployment_opt (pre-detected), then other fields
                         opt = (
@@ -1233,6 +1242,7 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                             or checkbox_field
                             or field_attr
                             or checkbox_label
+                            or option_attr
                             or target
                             or value
                         )
@@ -1362,9 +1372,32 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                         )
                         continue
 
-                # Filter duplicate process_deployment
+                # Filter duplicate process_deployment → merge options into first one
                 if action == "process_deployment":
-                    print(f"   🔧 FILTER: Removing duplicate process_deployment")
+                    # Find the first process_deployment and merge options into it
+                    first_pd = next(
+                        (
+                            s
+                            for s in filtered
+                            if s.get("action") == "process_deployment"
+                        ),
+                        None,
+                    )
+                    if first_pd is not None:
+                        dup_options = step.get("options", [])
+                        existing_options = first_pd.get("options", [])
+                        for opt in dup_options:
+                            if opt and opt not in existing_options:
+                                existing_options.append(opt)
+                        first_pd["options"] = existing_options
+                        if dup_options:
+                            print(
+                                f"   🔧 FILTER: Merging duplicate process_deployment options {dup_options} → {existing_options}"
+                            )
+                        else:
+                            print(
+                                f"   🔧 FILTER: Removing duplicate process_deployment (no new options)"
+                            )
                     continue
 
         # Filter out click actions with empty/whitespace-only target
@@ -1380,10 +1413,18 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
             checkbox_field = step.get("checkbox", "")
             checkbox_label = step.get("checkbox_label", "")
             field_attr = step.get("field", "")  # 🆕 AI also uses "field" key
+            option_attr = step.get("option", "")  # 🆕 AI also uses "option" key
 
             # Check if this is a deployment option checkbox
             is_deployment_checkbox = False
-            for field in [checkbox_field, field_attr, checkbox_label, target, value]:
+            for field in [
+                checkbox_field,
+                field_attr,
+                checkbox_label,
+                option_attr,
+                target,
+                value,
+            ]:
                 if field:
                     field_lower = str(field).lower()
                     for keyword in deployment_keywords:

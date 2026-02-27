@@ -75,7 +75,8 @@ Output: [{{"action":"edit_row","target":"FF_Feb2026_Test"}},{{"action":"update_f
 
 Example 15:
 Input: "Vào Live Events -> Versus -> Tournament -> Sửa ID: VS_Tournament_Feb2026_Wk1 -> Đợi trang load -> Sửa Gate: r80, Leaderboard Type: Bracketed, Bracket Preset: Bracket_Standard_24HR, PreEvent Phase Start Date Time(UTC): 02/11/2026 07:15 AM, PreEvent Phase End Date Time(UTC): 02/11/2026 11:00 AM, Lock Time Offset: 5 bấm nút save -> Active Phase Start Date Time (UTC): 02/11/2026 11:00 AM, Active Phase End Date Time (UTC): 02/14/2026 11:00 AM -> Bấm save & continue -> Bấm vào Menu Milestone Rewards -> Export CSV tournament_milestone.csv -> Import CSV -> Bấm save & continue -> Bấm The Brick -> Chọn Versus Tournament -> Process"
-Output: [{{"action":"navigate","path":["Live Events","Versus","Tournament"]}},{{"action":"edit_row","target":"VS_Tournament_Feb2026_Wk1"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Gate":"r80","Leaderboard Type":"Bracketed","Bracket Preset":"Bracket_Standard_24HR","PreEvent Phase Start Date Time(UTC)":"02/11/2026 07:15 AM","PreEvent Phase End Date Time(UTC)":"02/11/2026 11:00 AM","Lock Time Offset":"5"}}}},{{"action":"save_form","mode":"save"}},{{"action":"update_form","data":{{"Active Phase Start Date Time (UTC)":"02/11/2026 11:00 AM","Active Phase End Date Time (UTC)":"02/14/2026 11:00 AM"}}}},{{"action":"save_form","mode":"continue"}},{{"action":"click","target":"Milestone Rewards"}},{{"action":"download","target":"Export CSV","value":"tournament_milestone.csv"}},{{"action":"upload","target":"Import CSV","value":"tournament_milestone.csv"}},{{"action":"save_form","mode":"continue"}},{{"action":"process_deployment","options":["Versus Tournament"]}}]
+Output: [{{"action":"navigate","path":["Live Events","Versus","Tournament"]}},{{"action":"edit_row","target":"VS_Tournament_Feb2026_Wk1"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Gate":"r80","Leaderboard Type":"Bracketed","Bracket Preset":"Bracket_Standard_24HR","PreEvent Phase Start Date Time(UTC)":"02/11/2026 07:15 AM","PreEvent Phase End Date Time(UTC)":"02/11/2026 11:00 AM","Lock Time Offset":"5","Active Phase Start Date Time (UTC)":"02/11/2026 11:00 AM","Active Phase End Date Time (UTC)":"02/14/2026 11:00 AM"}}}},{{"action":"save_form","mode":"continue"}},{{"action":"click","target":"Milestone Rewards"}},{{"action":"download","target":"Export CSV","value":"tournament_milestone.csv"}},{{"action":"upload","target":"Import CSV","value":"tournament_milestone.csv"}},{{"action":"save_form","mode":"continue"}},{{"action":"process_deployment","options":["Versus Tournament"]}}]
+RULE for Example 15: Inline edit fields (Lock Time Offset, Buffer Time, Post Event Duration) have their own inline Save buttons handled AUTOMATICALLY by the system. "bấm Save" after these fields = inline save (auto-handled), NOT main form Save. ALL phase fields (PreEvent + Active Phase) MUST go in ONE update_form because the form validates ALL phases on main Save.
 
 Example 16:
 Input: "Vào Data Configs -> Boost -> Boost -> Filter Boost Result Value2 theo các giá trị: Red, Blue, Green -> Mỗi giá trị bấm filter một lần sau đó đợi 10-15s"
@@ -92,6 +93,10 @@ Output: [{{"action":"navigate","path":["Gacha Event"]}},{{"action":"edit_row","t
 Example 20 (CLONE RANDOM - Faction Feud with New FF ID):
 Input: "Vào Faction Feud Event -> Clone một ID bất kỳ -> New FF ID: FF_Feb2026_Wknd4_FF2_2, Gate: r80 -> Đợi trang load -> Sửa Leaderboard Type: Normal, Consumable Limit: 99, Schedules In UTC: 02/24/2026 00:00 AM, 02/24/2026 11:00 AM -> Save -> Bấm vào logo The Brick -> Chọn checkbox Faction Feud -> Process"
 Output: [{{"action":"navigate","path":["Faction Feud Event"]}},{{"action":"clone_row","target":"RANDOM"}},{{"action":"update_form","data":{{"New FF ID":"FF_Feb2026_Wknd4_FF2_2","Gate":"r80"}}}},{{"action":"save_form","mode":"clone"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Leaderboard Type":"Normal","Consumable Limit":"99","Schedules In UTC":"02/24/2026 00:00 AM, 02/24/2026 11:00 AM"}}}},{{"action":"save_form","mode":"save"}},{{"action":"process_deployment","options":["Faction Feud"]}}]
+Example 21 (CLONE Tournament + post-clone edit + Save & Continue - CRITICAL):
+Input: "Vào Tournament -> Clone ID: VS_Tournament_Feb2026_Wknd3, New Tournament ID: VS_Tournament_HieuNM_Test_5, Gate: r80 -> Đợi trang load -> Sửa Leaderboard Type: Normal, Active Phase Schedules In UTC: 02/27/2026 03:30, 02/27/2026 04:00, Energy restart mode radio: Daily, Regen Time: 60 -> Save & Continue -> Bấm vào logo The Brick -> Chọn checkbox Versus Tournament -> Process"
+Output: [{{"action":"navigate","path":["Tournament"]}},{{"action":"clone_row","target":"VS_Tournament_Feb2026_Wknd3"}},{{"action":"update_form","data":{{"New Tournament ID":"VS_Tournament_HieuNM_Test_5","Gate":"r80"}}}},{{"action":"save_form","mode":"clone"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Leaderboard Type":"Normal","Active Phase Schedules In UTC":"02/27/2026 03:30, 02/27/2026 04:00","Energy restart mode radio":"Daily","Regen Time":"60"}}}},{{"action":"save_form","mode":"continue"}},{{"action":"process_deployment","options":["Versus Tournament"]}}]
+RULE for Example 21: After save_form(mode=clone) closes the modal, "Đợi trang load" is a wait, then ALL fields mentioned before "Save & Continue" go into a NEW update_form, then save_form(mode=continue). NEVER jump from save_form(clone) directly to save_form(continue) without update_form in between!
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
@@ -118,8 +123,11 @@ CRITICAL RULES:
 - CLONE MODAL SUBMIT + POST-CLONE EDITING (CRITICAL):
   * After filling the Clone modal (New ID, Gate, radio, Currency), ALWAYS add {{"action":"save_form","mode":"clone"}} to click the Clone button
   * Fields that come AFTER the Clone button (e.g., Schedule, other edits) go in a SEPARATE update_form AFTER save_form(clone)
-  * CORRECT flow: clone_row → update_form(modal fields) → save_form(mode=clone) → update_form(post-clone fields) → save_form(mode=save)
+  * CORRECT flow: clone_row → update_form(modal fields) → save_form(mode=clone) → wait → update_form(post-clone fields) → save_form(mode=save/continue)
   * WRONG flow: clone_row → update_form(modal fields + post-clone fields) → save_form (merging everything is WRONG!)
+  * NEVER skip update_form between save_form(clone) and save_form(continue/save)!
+  * "Đợi trang load -> Sửa X, Y, Z -> Save & Continue" AFTER clone = wait → update_form(X,Y,Z) → save_form(continue)
+  * WRONG: save_form(clone) → save_form(continue)  ← MISSING update_form is ALWAYS WRONG!
 - NAVIGATION: Always merge menu path into ONE navigate action with "path" array
   - CORRECT: {{"action":"navigate","path":["A","B","C"]}}
   - WRONG: {{"action":"navigate","target":"A"}},{{"action":"navigate","target":"B"}},{{"action":"navigate","target":"C"}}
@@ -177,12 +185,27 @@ CRITICAL RULES:
 - SIDEBAR MENU CLICK:
   * "Bấm vào Menu X ở bên trái", "Click sidebar X" → {{"action":"click","target":"X"}}
 
+- INLINE EDIT FIELDS (Lock Time Offset, Buffer Time, Post Event Duration, Player-Base Gathering Time):
+  * These fields have their own Edit button and inline Save button on the web page
+  * System handles clicking Edit, filling value, and clicking inline Save AUTOMATICALLY
+  * When user says "Sửa Lock Time Offset: 5 sau đó bấm Save", the "bấm Save" = inline save (auto-handled)
+  * DO NOT generate a separate save_form action for inline edit fields!
+  * Just include them in update_form data normally, system auto-handles the rest
+
+- MULTI-PHASE FORMS (Tournament, etc.) - FILL ALL BEFORE SAVE:
+  * Forms with multiple phases (PreEvent, Active, Post Event) validate ALL phases when main Save is clicked
+  * ALL phase fields MUST go in ONE update_form before save_form
+  * "bấm Save" after inline edit fields (Lock Time Offset, Buffer Time, Post Event Duration) = inline save, NOT main Save
+  * Only the FINAL "Save" or "Save & Continue" at the end of ALL fields = main save_form
+  * CORRECT: update_form(PreEvent fields + Lock Time Offset + Active Phase fields + Buffer Time + Post Event Duration) → save_form(mode=continue)
+  * WRONG: update_form(PreEvent fields) → save_form(mode=save) → update_form(Active Phase fields) → save_form(mode=continue)
+  * The WRONG pattern causes validation error: "Active Phase End Date must be after Start Date"
+
 - SPLITTING FORM UPDATES ACROSS SAVE ACTIONS:
-  * When user says "fill A -> save -> fill B -> save & continue"
+  * When user says "fill A -> save -> fill B -> save & continue" AND the fields are in DIFFERENT pages/sections loaded by Save
   * Create SEPARATE update_form actions for each group
-  * DO NOT merge all fields into one update_form
-  * Example: "sửa Gate: r80, Lock Time Offset: 5 bấm save -> sửa Start Time: X bấm save & continue"
-    → update_form(Gate, Lock Time Offset) + save_form(mode=save) + update_form(Start Time) + save_form(mode=continue)
+  * EXCEPTION: Do NOT split if fields are on the SAME page (e.g., multi-phase forms like Tournament)
+  * EXCEPTION: "bấm Save" after inline edit fields (Lock Time Offset, Buffer Time, Post Event Duration) is NOT a main save
 
 - FILTERING WITH MULTIPLE VALUES (CRITICAL):
   * Pattern: "Filter [Field Name] theo các giá trị: A, B, C -> Mỗi giá trị bấm filter một lần sau đó đợi X giây"
@@ -259,6 +282,10 @@ def get_reasoning_prompt(user_command):
          * clone_row("EventGacha_test_15") + update_form({{New Event ID: test_230226, Gate: r80}}) + save_form
        - WRONG: clone_row → save_form(clone) (missing update_form for modal fields!)
        - WRONG: jumping directly to update_form without clone_row!
+       - POST-CLONE FIELDS (CRITICAL): Fields mentioned AFTER "Đợi trang load" / "wait" come AFTER save_form(clone)
+         * Pattern: clone modal → save_form(clone) → wait → update_form(post-clone fields) → save_form(mode=save/continue)
+         * NEVER: save_form(clone) → save_form(continue) without update_form in between!
+         * "Đợi trang load -> Sửa X -> Save & Continue" = wait + update_form(X) + save_form(mode=continue)
     10. Identify actions: navigate, click, wait, download, upload, edit_row, clone_row, update_form.
     11. "Chọn League 5" -> Click on Sidebar "League 5".
     12. "Export CSV" -> Download action.
@@ -269,12 +296,21 @@ def get_reasoning_prompt(user_command):
     14. **SAVE vs SAVE & CONTINUE**:
        - "bấm save", "bấm nút save", "click Save" = JUST Save (mode="save")
        - "bấm save & continue" = Save and navigate to next section (mode="continue")
-       - When user splits actions with "bấm save" in between, create separate update_form groups
+       - EXCEPTION: "bấm Save" after inline edit fields (Lock Time Offset, Buffer Time, Post Event Duration) = inline save (auto-handled), NOT main save
+       - For multi-phase forms (Tournament): ALL phases go in ONE update_form, only the FINAL Save generates save_form
     15. **SIDEBAR MENU**: "Bấm vào Menu X ở bên trái" = Click sidebar item X
-    16. **INLINE EDIT FIELDS**: Fields like "Lock Time Offset", "Buffer Time" may have Edit buttons
+    16. **INLINE EDIT FIELDS** (CRITICAL - Lock Time Offset, Buffer Time, Post Event Duration, Player-Base Gathering Time):
        - These fields are read-only by default with "Edit" button next to them
-       - System handles clicking Edit, filling value, saving inline automatically
+       - System handles clicking Edit, filling value, and clicking inline Save AUTOMATICALLY
        - Just include them in update_form data normally
+       - When user says "Sửa Lock Time Offset: 5 sau đó bấm Save", the "bấm Save" = inline save (auto-handled)
+       - DO NOT generate a separate save_form action for inline edit field saves!
+       - DO NOT split update_form at inline edit fields' save points!
+    16b. **MULTI-PHASE FORMS (Tournament, etc.) - FILL ALL BEFORE SAVE** (CRITICAL):
+       - Forms with multiple phases (PreEvent Phase, Active Phase, Post Event) validate ALL phases on main Save
+       - ALL phase fields MUST go in ONE update_form, then ONE save_form at the end
+       - WRONG: update_form(PreEvent) → save_form → update_form(Active) → save_form (causes validation error!)
+       - CORRECT: update_form(PreEvent + Active + inline fields) → save_form(mode=continue)
     17. **FILTERING WITH MULTIPLE VALUES** (CRITICAL):
        - Pattern: "Filter [Field] theo các giá trị: A, B, C -> Mỗi giá trị bấm filter một lần sau đó đợi X giây"
        - This means: For EACH value, do 3 actions: update_form → click Filter button → wait
@@ -441,8 +477,8 @@ def get_formatting_prompt(user_command, analysis_clean):
        - **MULTIPLE DATETIME VALUES**:
          * Fields like "Schedules In UTC" may have 2+ datetime inputs (Start, End)
          * Keep comma-separated values in ONE field value
-         * Example: "Schedules In UTC: 02/10/2026 07:15 AM, 02/10/2026 11:00 AM"
-           -> {{{{ "Schedules In UTC": "02/10/2026 07:15 AM, 02/10/2026 11:00 AM" }}}}
+         * Example: "Schedules In UTC: 02/10/2026, 07:15 AM - 02/10/2026, 11:00 AM"
+           -> {{{{ "Schedules In UTC": "02/10/2026, 07:15 AM - 02/10/2026, 11:00 AM" }}}}
          * System will auto-detect and split to fill multiple datetime inputs
          * DO NOT create separate "Start Time" and "End Time" fields unless explicitly mentioned
 
@@ -451,8 +487,8 @@ def get_formatting_prompt(user_command, analysis_clean):
          * Use the FULL label including section prefix as the key
          * This helps system find the correct field when multiple sections have same field names
          * Examples:
-           - "PreEvent Phase Start Date Time(UTC): 02/11/2026 07:15 AM" → key = "PreEvent Phase Start Date Time(UTC)"
-           - "Active Phase End Date Time (UTC): 02/14/2026 11:00 AM" → key = "Active Phase End Date Time (UTC)"
+           - "PreEvent Phase Start Date Time(UTC): 02/11/2026, 07:15 AM" → key = "PreEvent Phase Start Date Time(UTC)"
+           - "Active Phase End Date Time (UTC): 02/14/2026, 11:00 AM" → key = "Active Phase End Date Time (UTC)"
          * DO NOT strip the section prefix!
 
        - **SAVE_FORM MODE** (IMPORTANT):
@@ -460,11 +496,24 @@ def get_formatting_prompt(user_command, analysis_clean):
          * "bấm save & continue", "Save & Continue" → {{{{ "action": "save_form", "mode": "continue" }}}}
          * Default (no specific instruction): {{{{ "action": "save_form" }}}} = auto-detect
 
-       - **SPLITTING FORM UPDATES ACROSS SAVE ACTIONS** (CRITICAL):
-         * When user says "fill A, B -> save -> fill C, D -> save & continue"
+       - **INLINE EDIT FIELDS** (Lock Time Offset, Buffer Time, Post Event Duration, Player-Base Gathering Time):
+         * These have Edit + inline Save buttons handled AUTOMATICALLY by the system
+         * "Sửa Lock Time Offset: 5 sau đó bấm Save" → the "bấm Save" is the inline save (auto-handled)
+         * DO NOT generate a separate save_form action for inline edit field saves!
+         * Just include them in update_form data; system auto-handles Edit → fill → inline Save
+
+       - **MULTI-PHASE FORMS - FILL ALL BEFORE SAVE** (CRITICAL):
+         * Tournament and similar forms with multiple phases (PreEvent, Active, Post Event) validate ALL phases on main Save
+         * ALL phase fields + inline edit fields MUST go in ONE update_form, then ONE save_form
+         * WRONG: update_form(PreEvent) → save_form(save) → update_form(Active) → save_form(continue)
+           This causes: "Active Phase End Date must be after Start Date" validation error!
+         * CORRECT: update_form(PreEvent + Lock Time Offset + Active Phase + Buffer Time + Post Event Duration) → save_form(continue)
+
+       - **SPLITTING FORM UPDATES ACROSS SAVE ACTIONS**:
+         * When user says "fill A, B -> save -> fill C, D -> save & continue" AND fields are on DIFFERENT pages
          * Create SEPARATE update_form actions for each group split by save
-         * Example: "sửa Gate: r80, Lock Time Offset: 5 bấm save -> sửa Start Time: X bấm save & continue"
-           → update_form(Gate, Lock Time Offset) + save_form(mode=save) + update_form(Start Time) + save_form(mode=continue)
+         * EXCEPTION: Do NOT split if all fields are on the SAME page (e.g., multi-phase forms)
+         * EXCEPTION: "bấm Save" after inline edit fields = inline save (auto-handled), NOT main form save
 
        - **SIDEBAR/MENU CLICK**:
          * "Bấm vào Menu X ở bên trái", "Click sidebar X" → {{{{ "action": "click", "target": "X" }}}}
@@ -502,9 +551,12 @@ def get_formatting_prompt(user_command, analysis_clean):
          {{{{ "action": "save_form", "mode": "clone" }}}} to click the Clone button.
          Fields that come AFTER the Clone button (Schedule, etc.) go in a SEPARATE update_form.
          CORRECT flow:
-           clone_row(A) → update_form({{modal fields}}) → save_form(mode=clone) → update_form({{post-clone fields}}) → save_form(mode=save)
+           clone_row(A) → update_form({{modal fields}}) → save_form(mode=clone) → wait → update_form({{post-clone fields}}) → save_form(mode=save/continue)
          WRONG:
            clone_row(A) → update_form({{modal fields + post-clone fields}}) → save_form ← DO NOT merge!
+         WRONG (CRITICAL - NEVER DO THIS):
+           save_form(mode=clone) → save_form(mode=continue) ← ALWAYS need update_form in between!
+         "Đợi trang load -> Sửa X, Y -> Save & Continue" after clone = wait → update_form(X,Y) → save_form(mode=continue)
        - CRITICAL - NEVER DROP RADIO: When user says "radio: Use another currency":
          * ALWAYS include {{{{"Use another currency": "select"}}}} in update_form data
          * Radio field MUST come BEFORE "Currency" in the data object (it enables the Currency dropdown)
@@ -605,6 +657,9 @@ def get_formatting_prompt(user_command, analysis_clean):
     NOTE: save_form(mode="clone") clicks the Clone button in the modal.
           Fields AFTER the modal (Schedule, etc.) go in a SEPARATE update_form after save_form(clone).
           WRONG: merging "Schedule in UTC" into the first update_form!
+          CRITICAL: NEVER generate save_form(clone) immediately followed by save_form(continue/save)!
+          "Đợi trang load -> Sửa X, Y -> Save & Continue" after clone MUST become:
+          wait → update_form(X, Y fields) → save_form(mode=continue)   ← ALWAYS required!
     
     Ex 6: "Edit BossEvent_ABC -> Acquire lock -> sửa gate: LiveOpsTest -> Save -> Click menu Boss Details -> sửa Wrestler ID: SS_TheRock"
     JSON: [
@@ -698,10 +753,11 @@ def get_formatting_prompt(user_command, analysis_clean):
     Ex 13: "Vào Live Events -> Versus -> Tournament -> Sửa ID: VS_Tournament_Feb2026_Wk1 -> Đợi trang load -> Sửa Gate: r80, Leaderboard Type: Bracketed, Bracket Preset: Bracket_Standard_24HR, PreEvent Phase Start Date Time(UTC): 02/11/2026 07:15 AM, PreEvent Phase End Date Time(UTC): 02/11/2026 11:00 AM, Lock Time Offset: 5 bấm nút save -> Active Phase Start Date Time (UTC): 02/11/2026 11:00 AM, Active Phase End Date Time (UTC): 02/14/2026 11:00 AM -> Bấm save & continue -> Bấm vào Menu Milestone Rewards -> Export CSV tournament_milestone.csv -> Import CSV -> Bấm save & continue -> Bấm The Brick -> Chọn Versus Tournament -> Process"
     EXPLANATION:
       - Section-qualified datetime fields: "PreEvent Phase Start Date Time(UTC)" keeps the section prefix
-      - Lock Time Offset has an Edit button on the web page - system handles inline edit automatically
-      - "bấm nút save" = save_form with mode="save" (just Save, NOT Save & Continue)
-      - "Bấm save & continue" = save_form with mode="continue"
-      - Separate update_form groups split by save actions
+      - Lock Time Offset has an Edit button - system handles inline edit + inline save AUTOMATICALLY
+      - "bấm nút save" after Lock Time Offset = inline save (auto-handled), NOT main form Save
+      - ALL phase fields (PreEvent + Active) MUST go in ONE update_form because form validates all phases on Save
+      - WRONG: split into two update_forms with save_form in between → causes "Active Phase End Date must be after Start Date" error!
+      - "Bấm save & continue" at the END = main save_form with mode="continue"
       - "Bấm vào Menu Milestone Rewards" = click sidebar item
       - Export then Import CSV reuses filename
     JSON: [
@@ -714,10 +770,7 @@ def get_formatting_prompt(user_command, analysis_clean):
           "Bracket Preset": "Bracket_Standard_24HR",
           "PreEvent Phase Start Date Time(UTC)": "02/11/2026 07:15 AM",
           "PreEvent Phase End Date Time(UTC)": "02/11/2026 11:00 AM",
-          "Lock Time Offset": "5"
-      }}}} }}}},
-      {{{{ "action": "save_form", "mode": "save" }}}},
-      {{{{ "action": "update_form", "data": {{{{
+          "Lock Time Offset": "5",
           "Active Phase Start Date Time (UTC)": "02/11/2026 11:00 AM",
           "Active Phase End Date Time (UTC)": "02/14/2026 11:00 AM"
       }}}} }}}},
@@ -793,6 +846,34 @@ def get_formatting_prompt(user_command, analysis_clean):
     NOTE: clone_row("RANDOM") MUST be followed by update_form for modal fields!
           WRONG: clone_row("RANDOM") → save_form(mode=clone) (missing update_form!)
           CORRECT: clone_row("RANDOM") → update_form({{New FF ID, Gate}}) → save_form(mode=clone)
+
+    Ex 17 (CLONE Tournament + post-clone edit + Save & Continue):
+    Input: "Vào Tournament -> Clone ID: VS_Tournament_Feb2026_Wknd3, New Tournament ID: VS_Tournament_HieuNM_Test_5, Gate: r80 -> Đợi trang load -> Sửa Leaderboard Type: Normal, Active Phase Schedules In UTC: 02/27/2026 03:30, 02/27/2026 04:00, Energy restart mode radio: Daily, Regen Time: 60 -> Save & Continue -> Bấm vào logo The Brick -> Chọn checkbox Versus Tournament -> Process"
+    EXPLANATION:
+      - Clone modal fields (before "Đợi trang load"): New Tournament ID, Gate → go in first update_form
+      - save_form(mode=clone) closes the modal
+      - "Đợi trang load" → wait action
+      - Post-clone fields (after "Đợi trang load", before "Save & Continue"): Leaderboard Type, Schedules, radio, Regen Time → go in second update_form
+      - "Save & Continue" → save_form(mode=continue)
+      - CRITICAL: NEVER skip the second update_form! save_form(clone) cannot be directly followed by save_form(continue)!
+    JSON: [
+      {{{{ "action": "navigate", "path": ["Tournament"] }}}},
+      {{{{ "action": "clone_row", "target": "VS_Tournament_Feb2026_Wknd3" }}}},
+      {{{{ "action": "update_form", "data": {{{{
+          "New Tournament ID": "VS_Tournament_HieuNM_Test_5",
+          "Gate": "r80"
+      }}}} }}}},
+      {{{{ "action": "save_form", "mode": "clone" }}}},
+      {{{{ "action": "wait" }}}},
+      {{{{ "action": "update_form", "data": {{{{
+          "Leaderboard Type": "Normal",
+          "Active Phase Schedules In UTC": "02/27/2026 03:30, 02/27/2026 04:00",
+          "Energy restart mode radio": "Daily",
+          "Regen Time": "60"
+      }}}} }}}},
+      {{{{ "action": "save_form", "mode": "continue" }}}},
+      {{{{ "action": "process_deployment", "options": ["Versus Tournament"] }}}}
+    ]
 
     INPUT CONTEXT:
     - Original Command: "{user_command}"

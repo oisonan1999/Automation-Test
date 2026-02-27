@@ -340,6 +340,10 @@ class BrickAutomation(
                                 }
                             )
                             print(f"      ❌ Save failed: {save_result}")
+                            print(
+                                f"      🛑 Stopping execution due to save error. Remaining steps will be skipped."
+                            )
+                            break  # STOP: Không chạy tiếp các bước sau khi Save bị lỗi
                         else:
                             report_logs.append(
                                 {
@@ -348,6 +352,21 @@ class BrickAutomation(
                                     "details": f"OK (mode={mode})",
                                 }
                             )
+                            # [CRITICAL] After save_form(clone), check for Locked Item popup
+                            # Cloning navigates to the new item's edit page which may be locked
+                            if mode == "clone":
+                                print(
+                                    "      ⏳ Waiting for cloned item page to load..."
+                                )
+                                time.sleep(1.5)
+                                popup_handled = self._handle_locked_item_popup(page)
+                                if popup_handled:
+                                    time.sleep(1.0)
+                                    print(
+                                        "      ✅ Lock handled for cloned item. Ready to update form."
+                                    )
+                                else:
+                                    time.sleep(0.5)
 
                     elif act == "download":
                         try:

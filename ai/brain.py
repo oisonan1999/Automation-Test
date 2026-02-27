@@ -16,8 +16,8 @@ load_dotenv()
 last_actual_mode = "fast"
 
 # === CONFIGURATION ===
-MODEL_REASONING = "deepseek-r1:14b"
-MODEL_FORMATTING = "qwen2.5-coder:14b-instruct-q4_K_M"
+MODEL_REASONING = "deepseek-r1:8b"  # 8B: 19.7 tok/s vs 14B: 11.4 tok/s trên M4. Output chỉ là analysis text → 8B đủ chất lượng
+MODEL_FORMATTING = "qwen2.5-coder:14b"  # Giữ 14B cho formatting vì cần JSON chính xác
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "scenarios.json"
@@ -110,6 +110,13 @@ def clean_json_string(text):
     # Pattern match: 'any text' (single quoted strings)
     text = re.sub(r"'([^'\\]*(\\.[^'\\]*)*)'", replace_single_quotes, text)
 
+    # 7. [NEW] Fix LLM merging two fields: "val1 - Key2":"val2" → "val1","Key2":"val2"
+    # Xảy ra khi LLM viết nhầm: "Start Time UTC":"07:00 - End Time UTC":"07:15"
+    # mà đúng phải là:          "Start Time UTC":"07:00","End Time UTC":"07:15"
+    # Pattern: SPACE DASH SPACE [TitleCase key name] QUOTE COLON QUOTE
+    # Dấu hiệu nhận biết: chuỗi kết thúc bằng [TitleCase]":"  → rõ ràng là key JSON bị chèn vào value
+    text = re.sub(r' - ([A-Z][A-Za-z0-9 ()]+)"(\s*:\s*")', r'","\1"\2', text)
+
     # 8. [NEW] Fix incomplete JSON (bị cắt output)
     # Nếu JSON không đóng đúng, tự động thêm closing brackets
     text = text.strip()
@@ -196,7 +203,7 @@ def clean_json_string(text):
     return text.strip()
 
 
-def call_ollama(model_name, prompt, stream=False, optimized=False):
+def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase=None):
     """
     Hàm gọi API Ollama
 
@@ -204,22 +211,42 @@ def call_ollama(model_name, prompt, stream=False, optimized=False):
         model_name: Tên model
         prompt: Prompt text
         stream: Streaming mode
-        optimized: Nếu True, dùng config nhanh hơn (giảm context, giới hạn output)
+        optimized: Nếu True, dùng config nhanh hơn (Fast Mode)
+        careful_phase: "reasoning" | "formatting" - Tối ưu cho từng phase của Careful Mode
     """
-    # Config mặc định (Careful Mode)
+    # Config mặc định (Careful Mode legacy)
     options = {
         "temperature": 0.1,
         "num_ctx": 2867,
         "num_gpu": 99,
     }
 
+    # Config tối ưu cho Careful Mode - Reasoning Phase (DeepSeek-R1:8b)
+    if careful_phase == "reasoning":
+        options = {
+            "temperature": 0.1,
+            "num_ctx": 4096,  # Đủ cho reasoning prompt (~2k tokens)
+            "num_predict": 1024,  # ⬇️ Giảm từ 2048: <think>~500 + analysis~300 = ~800 tokens là đủ
+            "num_gpu": 99,
+            "num_batch": 1024,  # Prompt processing nhanh hơn trên Apple Silicon M4
+        }
+    # Config tối ưu cho Careful Mode - Formatting Phase (Qwen2.5-Coder)
+    elif careful_phase == "formatting":
+        options = {
+            "temperature": 0.1,
+            "num_ctx": 8192,  # ⬆️ Đủ cho formatting prompt lớn (~6k tokens)
+            "num_predict": 4096,  # Đủ cho JSON output
+            "num_gpu": 99,
+            "num_batch": 1024,  # ⬆️ Xử lý prompt nhanh hơn trên Apple Silicon M4
+        }
     # Config tối ưu tốc độ (Fast Mode)
-    if optimized:
+    elif optimized:
         options = {
             "temperature": 0.0,  # Set to 0 for strict adherence to rules
-            "num_ctx": 8192,  # ⬆️ Tăng lên để đủ chứa prompt + output
-            "num_predict": 4096,  # ⬆️ Tăng lên 4096 để tránh cắt output JSON
+            "num_ctx": 8192,  # Đủ chứa Fast Mode prompt (~4k tokens) + output
+            "num_predict": 1024,  # ⬇️ Giảm từ 4096: max output ~400-600 tokens cho lệnh đơn giản
             "num_gpu": 99,
+            "num_batch": 1024,  # Xử lý prompt nhanh hơn trên Apple Silicon M4
         }
 
     payload = {
@@ -252,6 +279,33 @@ def unload_model(model_name):
         pass
 
 
+def ensure_clean_context():
+    """
+    Force-unload tất cả model đang loaded để đảm bảo lần load tiếp theo
+    dùng đúng num_ctx từ request (không bị kế thừa context 131K từ lần load trước).
+
+    VẤN ĐỀ GỐC: Nếu model đã load với num_ctx=131072 (default),
+    Ollama có thể giữ allocation đó cho các request sau dù num_ctx nhỏ hơn.
+    → KV cache 131K chiếm ~20GB trên model 8B/14B → swap → chậm 10x.
+    """
+    try:
+        response = requests.get("http://localhost:11434/api/ps")
+        if response.status_code == 200:
+            models = response.json().get("models", [])
+            for m in models:
+                ctx = m.get("context_length", 0)
+                name = m.get("name", "")
+                if ctx > 16384:  # Model đang load với context quá lớn (131K default)
+                    print(
+                        f"   ⚠️  Model {name} loaded với context={ctx} (quá lớn!) → Force unload..."
+                    )
+                    unload_model(name)
+                # ✅ KHÔNG unload nữa nếu model đang ở ctx hợp lý (8192):
+                # Unload mọi lần = cold-start mỗi request = tốn 15-30s reload từ disk!
+    except:
+        pass
+
+
 # ============================================================================
 # COMPLEXITY DETECTION (MỚI)
 # ============================================================================
@@ -267,9 +321,12 @@ def detect_complexity(user_command):
     command_lower = user_command.lower()
 
     # 1. Từ khóa logic phức tạp
-    complex_keywords = [
+    # PHÂN LOẠI: Từ dài (>= 4 ký tự) dùng substring match, từ ngắn dùng word boundary regex
+    # để tránh false positive (ví dụ: "or" match trong "Normal", "Tournament")
+
+    # Từ khóa dài - an toàn dùng substring match
+    long_keywords = [
         "nếu",
-        "if",
         "else",
         "otherwise",
         "trong trường hợp",
@@ -285,7 +342,6 @@ def detect_complexity(user_command):
         "then find",
         "rồi tìm",
         "hoặc",
-        "or",
         "và nếu",
         "and if",
         "lặp lại",
@@ -293,7 +349,18 @@ def detect_complexity(user_command):
         "loop",
     ]
 
-    has_complex_logic = any(kw in command_lower for kw in complex_keywords)
+    # Từ khóa ngắn - PHẢI dùng word boundary regex để tránh match trong từ khác
+    # "or" match "Normal/Tournament", "if" match "notify/modify"
+    short_keyword_patterns = [
+        r"\bor\b",  # "or" nhưng KHÔNG match "Normal", "Tournament", "Leaderboard"
+        r"\bif\b",  # "if" nhưng KHÔNG match "notify", "modify", "config"
+    ]
+
+    has_long_keyword = any(kw in command_lower for kw in long_keywords)
+    has_short_keyword = any(
+        re.search(pat, command_lower) for pat in short_keyword_patterns
+    )
+    has_complex_logic = has_long_keyword or has_short_keyword
 
     # 2. Đếm số bước (dấu -> hoặc →)
     num_steps = command_lower.count("->") + command_lower.count("→")
@@ -323,11 +390,25 @@ def detect_complexity(user_command):
     is_complex = has_complex_logic or many_steps or is_very_long or many_actions
 
     if is_complex:
-        print(
-            f"   🔍 Complexity Detection: COMPLEX (logic={has_complex_logic}, steps={num_steps}, len={len(user_command)}, actions={action_count})"
-        )
+        # Debug: Hiển thị keyword nào trigger
+        trigger_details = []
+        if has_complex_logic:
+            matched_long = [kw for kw in long_keywords if kw in command_lower]
+            matched_short = [
+                pat for pat in short_keyword_patterns if re.search(pat, command_lower)
+            ]
+            trigger_details.append(f"logic_keywords={matched_long + matched_short}")
+        if many_steps:
+            trigger_details.append(f"steps={num_steps}")
+        if is_very_long:
+            trigger_details.append(f"len={len(user_command)}")
+        if many_actions:
+            trigger_details.append(f"actions={action_count}")
+        print(f"   🔍 Complexity Detection: COMPLEX ({', '.join(trigger_details)})")
     else:
-        print(f"   🔍 Complexity Detection: SIMPLE")
+        print(
+            f"   🔍 Complexity Detection: SIMPLE (steps={num_steps}, len={len(user_command)}, actions={action_count})"
+        )
 
     return is_complex
 
@@ -344,11 +425,15 @@ def single_model_pipeline(user_command):
     """
     print(f"   ⚡ FAST MODE: Single-model pipeline")
 
+    # Đảm bảo không có model nào đang load với context khổng lồ
+    ensure_clean_context()
+
     prompt = get_fast_mode_prompt(user_command)
 
     # Gọi model với config tối ưu (temperature=0 để less creative)
     json_output = call_ollama(MODEL_FORMATTING, prompt, optimized=True)
-    unload_model(MODEL_FORMATTING)
+    # ✅ KHÔNG unload sau Fast Mode: giữ model warm cho request tiếp theo
+    # (Careful Mode sẽ tự unload khi cần VRAM cho DeepSeek-R1)
 
     if not json_output:
         return []
@@ -392,20 +477,27 @@ def single_model_pipeline(user_command):
 
 def dual_model_pipeline(user_command):
     """
-    Pipeline cẩn thận - Dùng 2 models (DeepSeek-R1 + Qwen2.5-Coder)
-    Thời gian: ~1-2 phút
+    Pipeline cẩn thận - Dùng 2 models (DeepSeek-R1:8b + Qwen2.5-Coder:14b)
+    Thời gian dự kiến: ~40-60 giây (M4 24GB)
     """
     print(f"   🧠 CAREFUL MODE: Dual-model pipeline")
 
+    # CRITICAL: Force-unload models có context lớn để tránh swap (131K ctx = 25GB!)
+    ensure_clean_context()
+
     # =========================================================================
-    # BƯỚC 1: SUY LUẬN (REASONING PHASE) - Model: DeepSeek-R1
+    # BƯỚC 1: SUY LUẬN (REASONING PHASE) - Model: DeepSeek-R1:8b
     # =========================================================================
     print(f"   1️⃣  DeepSeek-R1 are currently analyzing the requirements...")
 
     reasoning_prompt = get_reasoning_prompt(user_command)
 
-    # Gọi DeepSeek
-    raw_analysis = call_ollama(MODEL_REASONING, reasoning_prompt)
+    # Gọi DeepSeek-R1:8b với config tối ưu cho reasoning phase
+    raw_analysis = call_ollama(
+        MODEL_REASONING, reasoning_prompt, careful_phase="reasoning"
+    )
+    # Unload reasoning model ngay sau khi xong để nhường VRAM cho formatting model
+    # R1:8b (5.2GB) + Qwen:14b (9GB) = 14.2GB + KV caches có thể gây memory pressure
     unload_model(MODEL_REASONING)
 
     if not raw_analysis:
@@ -427,8 +519,11 @@ def dual_model_pipeline(user_command):
 
     formatting_prompt = get_formatting_prompt(user_command, analysis_clean)
 
-    # Gọi Qwen
-    json_output = call_ollama(MODEL_FORMATTING, formatting_prompt)
+    # Gọi Qwen với config tối ưu cho formatting phase
+    json_output = call_ollama(
+        MODEL_FORMATTING, formatting_prompt, careful_phase="formatting"
+    )
+    # Unload formatting model sau khi xong
     unload_model(MODEL_FORMATTING)
 
     # Làm sạch và Parse JSON

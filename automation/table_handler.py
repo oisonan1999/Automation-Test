@@ -356,11 +356,12 @@ class TableHandlerMixin:
         if "Clicked" in result:
             print(f"   ✅ JS Click Success: {result}")
 
-            # [CRITICAL] Check for Locked Item popup after edit/clone click
+            # [CRITICAL] Check for Locked Item popup after edit click (NOT clone)
+            # Clone just opens a modal - lock popup check happens AFTER save_form(clone)
             # Some items may be locked by other users
             # Chờ đủ lâu để popup có thời gian render (tăng từ 0.5s lên 1s)
             time.sleep(1.0)
-            if action_type == "edit" or action_type == "clone":
+            if action_type == "edit":
                 popup_handled = self._handle_locked_item_popup(page)
                 if popup_handled:
                     # After acquiring lock, wait for form to fully load
@@ -374,10 +375,8 @@ class TableHandlerMixin:
                 result = page.evaluate(
                     js_script, {"text": str(target_text), "action": action_type}
                 )
-                # Same lock check after retry
-                if "Clicked" in result and (
-                    action_type == "edit" or action_type == "clone"
-                ):
+                # Lock check only for edit (not clone)
+                if "Clicked" in result and action_type == "edit":
                     time.sleep(1.0)
                     popup_handled = self._handle_locked_item_popup(page)
                     if popup_handled:
