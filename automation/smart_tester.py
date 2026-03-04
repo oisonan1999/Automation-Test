@@ -1520,7 +1520,6 @@ class SmartTesterMixin:
 
     # ... (Các hàm handle_upload, _find_upload_trigger giữ nguyên)
     def handle_upload(self, page, target_btn_name, file_name):
-        # (Giữ nguyên logic cũ của bạn)
         logs = []
         try:
             real_file_name = file_name
@@ -1539,7 +1538,44 @@ class SmartTesterMixin:
 
             print(f"   📤 Uploading: {real_file_name}")
             self._ensure_popup_closed(page)
-            success, msg = self._perform_upload_action(page, file_path)
+
+            # [FIX] Dùng _upload_single_attempt (đội JS popup capture mạnh hơn _perform_upload_action)
+            max_fix_retries = 2
+            success, msg = False, "Not started"
+            for fix_attempt in range(max_fix_retries + 1):
+                success, msg = self._upload_single_attempt(
+                    page, target_btn_name or "Import CSV", real_file_name
+                )
+
+                if success:
+                    print(f"      ✅ Upload succeeded on attempt {fix_attempt + 1}")
+                    break
+
+                # Upload thất bại - in rõ lỗi
+                print(f"      ❌ Upload failed (attempt {fix_attempt + 1}): {msg}")
+
+                if fix_attempt >= max_fix_retries:
+                    break
+
+                # [AUTO-FIX] Thử sửa CSV nếu lỗi duplicate
+                msg_lower = (msg or "").lower()
+                if any(
+                    k in msg_lower
+                    for k in ["duplicate", "already exist", "exists", "unique"]
+                ):
+                    print(f"      🔧 Duplicate error detected, trying auto-fix...")
+                    fixed = self._fix_duplicate_csv(file_path, msg)
+                    if fixed:
+                        print(f"      🔄 CSV fixed, retrying upload...")
+                        self._ensure_popup_closed(page)
+                        continue
+                    else:
+                        print(f"      ⚠️ Auto-fix failed, cannot retry")
+                        break
+                else:
+                    # Lỗi không phải duplicate → không fix được, dừng
+                    print(f"      ℹ️ Non-fixable error, stopping retries")
+                    break
 
             status = "PASS" if success else "FAIL"
             detail = "Upload successfully" if success else f"Upload failed: {msg}"

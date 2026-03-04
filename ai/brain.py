@@ -58,7 +58,10 @@ def clean_json_string(text):
 
     # 0. [CRITICAL] Fix double braces từ LLM ({{ -> {, }} -> })
     # LLM hay copy pattern từ f-string examples và trả về {{ }} thay vì { }
-    text = text.replace("{{", "{").replace("}}", "}")
+    # [FIX] Chỉ thay thế khi {{ bao quanh identifier/text (f-string style), KHÔNG được thay }}
+    # trong JSON hợp lệ vì "}}" là 2 closing braces của nested objects (VD: "data":{...}})
+    # Thay "{{word}}" → "{word}" (chỉ fix f-string templates thực sự)
+    text = re.sub(r"\{\{([^{}]+)\}\}", r"{\1}", text)
 
     # 1. Xóa Markdown code block (```json ... ```)
     text = re.sub(r"```json|```", "", text)

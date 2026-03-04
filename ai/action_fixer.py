@@ -109,6 +109,7 @@ NAVIGATION_PATH_MAP = {
     # Offer
     "offer section": ["Live Events", "Offer", "Offer Section"],
     "shop tier": ["Live Events", "Offer", "Shop Tier"],
+    "store preview": ["Live Events", "Offer", "Store Preview"],
     # Versus
     "tournament": ["Live Events", "Versus", "Tournament"],
     "versus tournament": ["Live Events", "Versus", "Tournament"],
@@ -152,8 +153,8 @@ NAVIGATION_PATH_MAP = {
     # === Data Configs ===
     "perk": ["Data Configs", "Perk", "Perk"],
     "boost": ["Data Configs", "Boost", "Boost"],
-    "superstar": ["Data Configs", "Superstars", "Superstars"],
-    "superstars": ["Data Configs", "Superstars", "Superstars"],
+    "superstar": ["Data Configs", "Superstar", "Superstar"],
+    "superstars": ["Data Configs", "Superstar", "Superstar"],
     "currency": ["Data Configs", "Currency", "Currency"],
     "consumable": ["Data Configs", "Consumables", "Consumables"],
     "consumables": ["Data Configs", "Consumables", "Consumables"],
@@ -238,6 +239,17 @@ ACTION_NAME_MAP = {
     "duplicate": "clone_row",
     # Save variations
     "save": "save_form",
+    # Reorder / drag-and-drop variations
+    "drag": "reorder",
+    "drag_drop": "reorder",
+    "drag_and_drop": "reorder",
+    "move_to": "reorder",
+    "move_item": "reorder",
+    "move_row": "reorder",
+    "drag_to": "reorder",
+    "set_priority": "reorder",
+    "change_order": "reorder",
+    "reorder_item": "reorder",
     # Smart test variations
     "test_cycle": "smart_test_cycle",
     "smart_test": "smart_test_cycle",
@@ -270,6 +282,7 @@ VALID_ACTIONS = {
     "wait",
     "wait_for_page_load",
     "process_deployment",
+    "reorder",
 }
 
 
@@ -546,7 +559,16 @@ def fix_action_plan(plan, user_command=""):
                 "id bất kỳ",
             }
             tgt = str(step.get("target", "")).lower().strip()
-            if tgt in _RANDOM_TARGETS or tgt == "":
+            # Exact match OR contains "bất kỳ"/"random" pattern
+            # Handles cases like "một Superstar bất kỳ", "Superstar bất kỳ", "random superstar"
+            is_random_target = (
+                tgt in _RANDOM_TARGETS
+                or tgt == ""
+                or "bất kỳ" in tgt
+                or "bat ky" in tgt
+                or ("random" in tgt and tgt != "random_1")
+            )
+            if is_random_target:
                 step["target"] = "RANDOM"
                 print(
                     f"   🔧 AUTO-FIX: {action}('{tgt or 'empty'}') → {action}('RANDOM') (random row mode)"
@@ -684,6 +706,15 @@ def fix_action_plan(plan, user_command=""):
     # ============================================================
     merged_plan = _inject_clone_save(merged_plan, user_command)
 
+    # ============================================================
+    # STEP 8: Merge consecutive update_form → save_form(save) sequences
+    # Pattern: update_form(A) → save_form(save) → update_form(B) → save_form(save)
+    # Becomes: update_form(A ∪ B) → save_form(save)
+    # Prevents validation errors when interdependent fields (e.g. PreEvent
+    # dates + Active Phase dates) are split across separate save operations.
+    # ============================================================
+    merged_plan = _merge_consecutive_update_save(merged_plan)
+
     if len(merged_plan) != len(plan):
         print(
             f"   🔧 AUTO-FIX: Plan {len(plan)} steps → {len(merged_plan)} steps after fix"
@@ -771,6 +802,26 @@ def _resolve_navigation_paths(plan):
                         del step["target"]
                     print(f"   🗺️  PATH-RESOLVE: {original_path} → {resolved}")
                     continue
+
+        # CASE 3: Full path (3+ elements) - check if last element matches a known destination
+        # and use the canonical path from the map. Handles plural/singular mismatches.
+        # e.g. ["Data Configs", "Superstars", "Superstars"] → ["Data Configs", "Superstar", "Superstar"]
+        if len(path) >= 3:
+            last_key = path[-1].strip().lower()
+            if last_key in NAVIGATION_PATH_MAP:
+                resolved = NAVIGATION_PATH_MAP[last_key]
+                if len(resolved) == len(path):
+                    # Same depth - replace if different (fixes plural/singular mismatch)
+                    if [p.strip().lower() for p in path] != [
+                        r.lower() for r in resolved
+                    ]:
+                        step["path"] = list(resolved)
+                        if "target" in step:
+                            del step["target"]
+                        print(
+                            f"   🗺️  PATH-RESOLVE (canonical fix): {original_path} → {resolved}"
+                        )
+                        continue
 
     return plan
 
@@ -1835,6 +1886,75 @@ def _extract_clone_modal_fields(user_command):
         print(f"   ⚠️ Could not extract clone modal fields from command")
 
     return modal_data
+
+
+def _merge_consecutive_update_save(plan):
+    """
+    Merge consecutive update_form → save_form(save) sequences into a single
+    update_form → save_form(save).
+
+    Pattern:
+        update_form(A) → save_form(save) → update_form(B) → save_form(save) → ...
+    Becomes:
+        update_form(A ∪ B ∪ ...) → save_form(save)
+
+    This prevents form validation errors when interdependent fields
+    (e.g. PreEvent Phase dates and Active Phase dates) are split across
+    separate save operations by the AI.
+
+    Only merges save_form with mode='save'. Does NOT merge 'clone' or 'continue'.
+    """
+    if not plan or len(plan) < 4:
+        return plan
+
+    merged = []
+    i = 0
+
+    while i < len(plan):
+        step = plan[i]
+
+        # Check if this starts an update_form → save_form(save) sequence
+        if (
+            step.get("action") == "update_form"
+            and i + 1 < len(plan)
+            and plan[i + 1].get("action") == "save_form"
+            and plan[i + 1].get("mode") == "save"
+        ):
+            # Collect all consecutive update_form → save_form(save) pairs
+            combined_data = dict(step.get("data") or {})
+            pairs_count = 1
+            j = i + 2  # After the first save_form
+
+            while (
+                j < len(plan)
+                and plan[j].get("action") == "update_form"
+                and j + 1 < len(plan)
+                and plan[j + 1].get("action") == "save_form"
+                and plan[j + 1].get("mode") == "save"
+            ):
+                # Merge data from next update_form
+                combined_data.update(plan[j].get("data") or {})
+                pairs_count += 1
+                j += 2  # Skip both update_form and save_form
+
+            if pairs_count > 1:
+                # We merged multiple pairs
+                print(
+                    f"   🔧 MERGE: Combined {pairs_count} update_form+save_form(save) "
+                    f"pairs into 1 (fields: {list(combined_data.keys())})"
+                )
+                merged.append({"action": "update_form", "data": combined_data})
+                merged.append({"action": "save_form", "mode": "save"})
+                i = j
+            else:
+                # Only one pair, keep as-is
+                merged.append(plan[i])
+                i += 1
+        else:
+            merged.append(step)
+            i += 1
+
+    return merged
 
 
 def _inject_clone_save(plan, user_command=""):

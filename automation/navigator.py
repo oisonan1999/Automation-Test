@@ -73,6 +73,32 @@ class NavigatorMixin:
                 # 2. Lọc danh sách hiển thị (Visible)
                 visible_candidates = [el for el in raw_candidates if el.is_visible()]
 
+                # 2b. SINGULAR/PLURAL FALLBACK: Nếu không tìm thấy, thử biến thể số ít/số nhiều
+                # VD: "Superstars" không match menu "Superstar" → thử "Superstar"
+                # VD: "Superstar" không match → thử "Superstars"
+                if not visible_candidates:
+                    alt_name = None
+                    if item_name.lower().endswith("s") and len(item_name) > 2:
+                        alt_name = item_name[:-1]  # Bỏ 's' cuối
+                    else:
+                        alt_name = item_name + "s"  # Thêm 's'
+
+                    alt_regex = self._safe_compile(alt_name)
+                    alt_raw = (
+                        page.locator(
+                            "a, button, div, span, li, b, strong, h1, h2, h3, h4, h5, h6, .dropdown-item, .nav-link, [role='menuitem'], [role='button']"
+                        )
+                        .filter(has_text=alt_regex)
+                        .all()
+                    )
+                    alt_visible = [el for el in alt_raw if el.is_visible()]
+                    if alt_visible:
+                        print(
+                            f"   🔄 Singular/Plural fallback: '{item_name}' → '{alt_name}' ({len(alt_visible)} matches)"
+                        )
+                        visible_candidates = alt_visible
+                        item_name = alt_name  # Cập nhật tên để exact match đúng
+
                 if visible_candidates:
                     # --- BƯỚC LỌC THÔNG MINH (QUAN TRỌNG) ---
 
@@ -609,14 +635,22 @@ class NavigatorMixin:
                 if sidebar.count() > 0 and sidebar.is_visible():
                     item = (
                         sidebar.locator(
-                            f"a, div[role='button'], li, span, div.menu-item"
+                            "a, button, div[role='button'], li, span, div.menu-item"
                         )
                         .filter(
                             has_text=re.compile(re.escape(target_clean), re.IGNORECASE)
                         )
-                        .last
+                        .first  # smallest/first match instead of last to avoid wide containers
                     )
                     if item.count() > 0 and item.is_visible():
+                        # Make sure we're clicking a leaf-level element, not a giant container
+                        # If bounding box is very tall (>120px), likely a container — skip
+                        try:
+                            bbox = item.bounding_box()
+                            if bbox and bbox["height"] > 120:
+                                continue
+                        except Exception:
+                            pass
                         print(f"         ✅ Found '{target_text}' in Sidebar ({sel})")
                         item.scroll_into_view_if_needed()
                         time.sleep(0.3)
@@ -644,6 +678,55 @@ class NavigatorMixin:
                     clicked = True
             except:
                 pass
+
+        # 2.5: CONTENT PANEL / SORTABLE LIST ITEMS
+        # Handles items in Store Preview sections, offer lists, etc.
+        # e.g. "Section_Drip_Offers (2147483647)" matched by target "Section_Drip_Offers"
+        if not clicked:
+            panel_selectors = [
+                # Most specific first — app-specific store sidebar buttons
+                "button[class*='store-sidebar']",
+                "button[class*='sidebar-item']",
+                "button[class*='panel-item']",
+                # Generic sortable/draggable lists
+                ".list-group-item",
+                "li[class*='item']",
+                "li[class*='section']",
+                ".row-item",
+                ".section-item",
+                # Broad fallbacks — skip if bounding box is a giant container
+                "div[class*='sort']",
+                "div[class*='item']",
+                "div[class*='draggable']",
+            ]
+            for panel_sel in panel_selectors:
+                try:
+                    item = (
+                        page.locator(panel_sel)
+                        .filter(
+                            has_text=re.compile(re.escape(target_clean), re.IGNORECASE)
+                        )
+                        .first
+                    )
+                    if item.count() > 0 and item.is_visible():
+                        # Skip containers that are too tall (likely wrapping many items)
+                        try:
+                            bbox = item.bounding_box()
+                            if bbox and bbox["height"] > 120:
+                                continue
+                        except Exception:
+                            pass
+                        text_preview = item.inner_text().strip()[:60]
+                        print(
+                            f"         ✅ Found panel item '{text_preview}' via {panel_sel}"
+                        )
+                        item.scroll_into_view_if_needed()
+                        time.sleep(0.3)
+                        item.click()
+                        clicked = True
+                        break
+                except:
+                    continue
 
         # 3. CHECK IF ALREADY ACTIVE
         # Element có thể đã được click rồi (class active/selected)
@@ -722,6 +805,33 @@ class NavigatorMixin:
                 except:
                     pass
 
+            # Strategy D: Broad div/li/span partial match (last resort for exotic panels)
+            # Catches elements like "Section_Drip_Offers (2147483647)" when target is "Section_Drip_Offers"
+            if not clicked:
+                try:
+                    candidates = (
+                        page.locator("div, li, span, tr, td")
+                        .filter(
+                            has_text=re.compile(re.escape(target_clean), re.IGNORECASE)
+                        )
+                        .all()
+                    )
+                    visible = [el for el in candidates if el.is_visible()]
+                    if visible:
+                        # Pick the element whose text is shortest (most specific / closest match)
+                        best = min(visible, key=lambda el: len(el.inner_text().strip()))
+                        text_preview = best.inner_text().strip()[:80]
+                        if target_clean.lower() in text_preview.lower():
+                            print(
+                                f"         ✅ Strategy D broad match: '{text_preview}'"
+                            )
+                            best.scroll_into_view_if_needed()
+                            time.sleep(0.3)
+                            best.click(force=True)
+                            clicked = True
+                except:
+                    pass
+
         if clicked:
             # Gọi hàm chờ loading được update bên dưới
             self._wait_for_long_loading(page)
@@ -770,50 +880,58 @@ class NavigatorMixin:
 
     def _wait_for_long_loading(self, page):
         """
-        Đợi bánh răng xoay (Gear/Spinner).
+        Đợi bánh răng xoay (Gear/Spinner) hoặc cursor: progress trên body.
         Chiến thuật: Chủ động đợi selector xuất hiện (Wait for attached/visible).
         """
         print("         ⏳ Checking for Loaders/Spinners...")
 
-        # Danh sách selector loading (Ưu tiên HTML bạn cung cấp)
+        # Danh sách selector loading
         spinner_selectors = [
-            "i.fa.fa-cog.fa-spin",  # Chính xác HTML bạn đưa
-            "i.fa-cog.fa-spin",  # Rút gọn
-            ".fa-spin",  # Mọi icon xoay
+            # Body cursor: progress (set bởi app khi đang load - thấy trong DevTools)
+            "body[style*='cursor: progress']",
+            "body[style*='cursor:progress']",
+            # Font Awesome spin icons
+            "i.fa.fa-cog.fa-spin",
+            "i.fa-cog.fa-spin",
+            ".fa-spin",
+            # Bootstrap spinners
+            ".spinner-border",
+            ".spinner-grow",
+            # React / generic spinners
+            "[role='status']",
+            "[class*='loading']",
+            "[class*='spinner']",
+            "[class*='loader']",
+            # Các class thường gặp
             ".loading",
             ".spinner",
             ".loader",
-            "div:has-text('Loading')",
+            # SweetAlert / BlockUI
             ".swal2-loading",
             ".blockUI",
+            # Text Loading
+            "div:has-text('Loading')",
         ]
+
+        def _any_spinner_visible():
+            """Check nhanh nếu có bất kỳ spinner nào đang visible."""
+            for sel in spinner_selectors:
+                try:
+                    if page.locator(sel).first.is_visible(timeout=150):
+                        return sel
+                except Exception:
+                    pass
+            return None
 
         active_spinner = None
 
         # GIAI ĐOẠN 1: PHỤC KÍCH (Ambush)
-        # Đợi tối đa 5s xem có bất kỳ spinner nào xuất hiện không
-        # Dùng Promise.race để bắt cái nào hiện ra trước
-        try:
-            # Tạo list các task wait_for_selector
-            for sel in spinner_selectors:
-                try:
-                    # Wait for visible với timeout ngắn (200ms) để scan nhanh
-                    # Hoặc dùng logic polling của Playwright
-                    if page.locator(sel).first.is_visible():
-                        active_spinner = sel
-                        break
-                except:
-                    pass
-
-            # Nếu chưa thấy ngay, thử đợi 3s xem nó có render ra không (Network delay)
-            if not active_spinner:
-                time.sleep(1.0)  # Đợi render
-                for sel in spinner_selectors:
-                    if page.locator(sel).first.is_visible():
-                        active_spinner = sel
-                        break
-        except:
-            pass
+        # Poll nhiều lần trong 4s để bắt spinner khi nó render ra
+        for attempt in range(8):
+            active_spinner = _any_spinner_visible()
+            if active_spinner:
+                break
+            time.sleep(0.5)
 
         # GIAI ĐOẠN 2: CHỜ BIẾN MẤT (Wait for Hidden)
         if active_spinner:
@@ -821,12 +939,12 @@ class NavigatorMixin:
                 f"         🔄 Spinner DETECTED: '{active_spinner}'. Waiting for it to finish..."
             )
             try:
-                # Chờ tối đa 6s để spinner biến mất
+                # Chờ tối đa 30s để spinner biến mất
                 page.locator(active_spinner).first.wait_for(
-                    state="hidden", timeout=3000
+                    state="hidden", timeout=30000
                 )
                 print("         ✅ Spinner finished (Main content loaded).")
-            except:
+            except Exception:
                 print(
                     "         ⚠️ Spinner wait timed out (It might be stuck or hidden differently)."
                 )
@@ -837,8 +955,8 @@ class NavigatorMixin:
 
         # GIAI ĐOẠN 3: NETWORK IDLE (Chốt chặn)
         try:
-            page.wait_for_load_state("networkidle", timeout=3000)
-        except:
+            page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
             pass
 
         # Nghỉ thêm 1s an toàn

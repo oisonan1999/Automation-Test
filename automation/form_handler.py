@@ -1906,7 +1906,7 @@ class FormHandlerMixin:
                     except:
                         pass
 
-                # Check if it's an error or success
+                # Check if it's an error, warning/confirmation, or success
                 text_lower = popup_text.lower()
                 error_keywords = [
                     "error",
@@ -1922,11 +1922,29 @@ class FormHandlerMixin:
                     "lỗi",
                     "không hợp lệ",
                 ]
+                # Warning/confirmation popups that should NOT block execution
+                # These are informational warnings where clicking OK is the correct action
+                warning_keywords = [
+                    "overlapping",
+                    "overlap",
+                    "already exists",
+                    "are you sure",
+                    "confirm",
+                    "warning",
+                    "proceed",
+                    "continue",
+                ]
                 if any(k in text_lower for k in error_keywords):
                     print(f"      ❌ Error popup detected: {clean_text[:200]}")
                     return {"success": False, "error_message": clean_text}
                 elif "success" in text_lower or "hoàn thành" in text_lower:
                     print("      ✅ Success popup detected.")
+                    return {"success": True, "error_message": None}
+                elif any(k in text_lower for k in warning_keywords):
+                    # Warning/confirmation popup — OK was already clicked above
+                    print(
+                        f"      ⚠️ Warning popup auto-dismissed (OK clicked): {clean_text[:200]}"
+                    )
                     return {"success": True, "error_message": None}
                 else:
                     # Unknown popup content - treat as potential error
@@ -2490,6 +2508,19 @@ class FormHandlerMixin:
 
     def _find_input_element(self, page, label_text):
         print(f"         🔍 Searching for field: '{label_text}'")
+
+        # ─── Auto-scope to modal if one is open ────────────────────────────────────────
+        # Shadow ‘page’ → modal so mọi page.locator() bên dưới đều scoped đúng
+        for _ms in [".modal.show", ".modal.in", ".modal[aria-hidden='false']"]:
+            try:
+                if page.locator(_ms).count() > 0:
+                    page = page.locator(_ms).last
+                    print(f"         🔒 Auto-scoped to modal ({_ms})")
+                    break
+            except Exception:
+                pass
+        # ───────────────────────────────────────────────────────────────────
+
         label_lower = label_text.lower().strip()
         # Tạo version không space/underscore để fuzzy match
         label_normalized = re.sub(r"[\s_-]+", "", label_lower)
@@ -2643,6 +2674,58 @@ class FormHandlerMixin:
                     )
 
                     if len(elements) > 0:
+                        # [FIX] PRE-SCAN: Tìm hidden SELECT (bị ẩn bởi Chosen.js/Select2) TRƯỚC
+                        # Vì select gốc bị ẩn (display:none), code không tìm được nếu chỉ xét visible
+                        # VD: select#id_event_type bị Chosen.js ẩn -> phải tìm wrapper của nó
+                        _pre_scan_label_norm = label_lower.replace(" ", "_").replace(
+                            "-", "_"
+                        )
+                        _pre_scan_words = [
+                            w for w in _pre_scan_label_norm.split("_") if len(w) > 2
+                        ]
+                        for _el in elements:
+                            if (
+                                not _el.is_visible()
+                                and _el.evaluate("el => el.tagName") == "SELECT"
+                            ):
+                                _el_name = (_el.get_attribute("name") or "").lower()
+                                _el_id = (_el.get_attribute("id") or "").lower()
+                                _ps_related = False
+                                if (
+                                    _pre_scan_label_norm in _el_name
+                                    or _pre_scan_label_norm in _el_id
+                                ):
+                                    _ps_related = True
+                                elif _el_name and _el_name in _pre_scan_label_norm:
+                                    _ps_related = True
+                                elif _el_id and _el_id in _pre_scan_label_norm:
+                                    _ps_related = True
+                                else:
+                                    for _pw in _pre_scan_words:
+                                        # Phải khớp cả từ (whole-word) trong name/id, không chỉ substring
+                                        _name_parts = re.split(r"[_\-\s]", _el_name)
+                                        _id_parts = re.split(r"[_\-\s]", _el_id)
+                                        if _pw in _name_parts or _pw in _id_parts:
+                                            _ps_related = True
+                                            break
+                                        if _pw.endswith("s") and (
+                                            _pw[:-1] in _name_parts
+                                            or _pw[:-1] in _id_parts
+                                        ):
+                                            _ps_related = True
+                                            break
+                                if _ps_related:
+                                    _wrapper = self._find_custom_dropdown_wrapper(_el)
+                                    if _wrapper:
+                                        print(
+                                            f"         ✅ Found Chosen/Select2 wrapper for hidden SELECT: name='{_el_name}', id='{_el_id}'"
+                                        )
+                                        return _wrapper
+                                    else:
+                                        print(
+                                            f"         ⚠️ Hidden SELECT matched (name='{_el_name}') but no wrapper found, continuing..."
+                                        )
+
                         # [FIX] Tìm element VISIBLE đầu tiên, KHÔNG lấy mù elements[0]
                         element = None
                         for _el in elements:
@@ -2668,14 +2751,18 @@ class FormHandlerMixin:
                                 elif _el_id in _label_norm and _el_id:
                                     _is_related = True
                                 else:
-                                    # Word-level match
+                                    # Word-level match (whole-word only, không dùng substring)
+                                    # VD: "type" KHÔNG được match "time_deduct_type" (chỉ match "event_type")
+                                    _el_name_parts = set(re.split(r"[_\-\s]", _el_name))
+                                    _el_id_parts = set(re.split(r"[_\-\s]", _el_id))
                                     for _w in _label_words:
-                                        if _w in _el_name or _w in _el_id:
+                                        if _w in _el_name_parts or _w in _el_id_parts:
                                             _is_related = True
                                             break
                                         # Singular form (schedules -> schedule)
                                         if _w.endswith("s") and (
-                                            _w[:-1] in _el_name or _w[:-1] in _el_id
+                                            _w[:-1] in _el_name_parts
+                                            or _w[:-1] in _el_id_parts
                                         ):
                                             _is_related = True
                                             break
@@ -3944,34 +4031,78 @@ class FormHandlerMixin:
 
             if is_datetime_picker and tag_name == "input":
                 print(f"         📅 Xử lý DateTime picker cho '{value}'...")
+                value_str = str(value)
+
+                # Strategy 1: Dùng flatpickr JS API (el._flatpickr.setDate + dateFormat từ config)
                 try:
-                    # Clear giá trị cũ
+                    result = element.evaluate(
+                        f"""
+                        el => {{
+                            if (!el._flatpickr) return 'no_flatpickr';
+                            const cfg = el._flatpickr.config;
+                            const fmt = (cfg && cfg.dateFormat) ? cfg.dateFormat : null;
+                            try {{
+                                if (fmt) {{
+                                    el._flatpickr.setDate('{value_str}', true, fmt);
+                                }} else {{
+                                    el._flatpickr.setDate('{value_str}', true);
+                                }}
+                            }} catch(e1) {{
+                                el._flatpickr.setDate('{value_str}', true);
+                            }}
+                            return 'flatpickr_api:' + (fmt || 'unknown');
+                        }}
+                        """
+                    )
+                    if result and result.startswith("flatpickr_api"):
+                        time.sleep(0.4)
+                        element.evaluate(
+                            "el => { el.dispatchEvent(new Event('input', {bubbles: true})); "
+                            "el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                        )
+                        print(
+                            f"         ✅ [DateTime/flatpickr API] Đã set: '{value_str}' ({result})"
+                        )
+                        return True
+                except Exception as e1:
+                    print(f"         ⚠️ flatpickr API error: {e1}")
+
+                # Strategy 2: Xóa readonly, fill, khôi phục, trigger events
+                try:
+                    element.evaluate("el => el.removeAttribute('readonly')")
+                    time.sleep(0.1)
                     element.fill("")
+                    element.fill(value_str)
                     time.sleep(0.2)
-
-                    # Điền giá trị mới
-                    element.fill(str(value))
-                    time.sleep(0.3)
-
-                    # Trigger blur để đóng picker và apply value
                     element.blur()
-                    time.sleep(0.3)
-
-                    # Trigger change event
+                    time.sleep(0.2)
                     element.evaluate(
-                        "el => { el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                        "el => { el.dispatchEvent(new Event('input', {bubbles: true})); "
+                        "el.dispatchEvent(new Event('change', {bubbles: true})); }"
                     )
-
-                    print(f"         ✅ [DateTime] Đã điền: '{value}'")
-                    return True
-                except Exception as e:
-                    print(f"         ⚠️ DateTime picker error: {e}, trying fallback...")
-                    # Fallback: Dùng JS set value trực tiếp
-                    element.evaluate(f"el => el.value = '{value}'")
-                    element.evaluate(
-                        "el => { el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                    print(
+                        f"         ✅ [DateTime/remove-readonly] Đã điền: '{value_str}'"
                     )
                     return True
+                except Exception as e2:
+                    print(
+                        f"         ⚠️ DateTime picker error: {e2}, trying JS value fallback..."
+                    )
+
+                # Strategy 3: Gán value bằng JS thuần
+                try:
+                    element.evaluate(
+                        f"el => {{ el.removeAttribute('readonly'); el.value = '{value_str}'; }}"
+                    )
+                    element.evaluate(
+                        "el => { el.dispatchEvent(new Event('input', {bubbles: true})); "
+                        "el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                    )
+                    print(f"         ✅ [DateTime/JS value] Đã gán: '{value_str}'")
+                    return True
+                except Exception as e3:
+                    print(f"         ❌ DateTime all strategies failed: {e3}")
+                    return False
 
             # --- 3. HIDDEN SELECT (Chosen/Select2/Vue Multiselect) ---
             is_hidden_select = tag_name == "select" and not is_visible

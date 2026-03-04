@@ -10,7 +10,7 @@ def get_fast_mode_prompt(user_command):
     return f"""You are a strict JSON converter. You MUST use action names from examples below.
 
 CRITICAL: ONLY these action names are valid:
-navigate, checkbox, download, upload, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click, wait, check_fields
+navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click, wait, check_fields, reorder
 
 LEARN FROM THESE 5 EXAMPLES (COPY the action names EXACTLY):
 
@@ -29,6 +29,11 @@ Output: [{{"action":"process_deployment","options":["Offers"]}}]
 Example 4:
 Input: "Vào Data Configs -> Perk -> Edit ABC123"
 Output: [{{"action":"navigate","path":["Data Configs","Perk"]}},{{"action":"edit_row","target":"ABC123"}}]
+
+Example 4b (Superstar - EDIT RANDOM):
+Input: "Vào Superstar -> Đợi trang load -> Sửa một Superstar bất kỳ"
+Output: [{{"action":"navigate","path":["Superstar"]}},{{"action":"wait"}},{{"action":"edit_row","target":"RANDOM"}}]
+RULE: "Sửa một [entity] bất kỳ" = edit_row("RANDOM"). The word before "bất kỳ" is the entity type, NOT a target ID.
 
 Example 5:
 Input: "Clone EventGacha_ABC -> New ID: test_1, Gate: feb2026"
@@ -52,6 +57,11 @@ Output: [{{"action":"process_deployment","options":[]}}]
 Example 9:
 Input: "Vào Data Configs -> Perk -> Perk"
 Output: [{{"action":"navigate","path":["Data Configs","Perk","Perk"]}}]
+
+Example 10b (EDIT CSV FILE - CRITICAL PATTERN):
+Input: "Vào Perk -> Chọn 2 ID bất kỳ -> Export CSV -> Sửa Event Type: PVE_STIPULATION -> Import CSV file đó -> Bấm vào logo The Brick -> Chọn checkbox Perks -> Process"
+Output: [{{"action":"navigate","path":["Perk"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"perk.csv"}},{{"action":"manipulate_csv","target":"perk.csv","operation":"set","data":"Event Type=PVE_STIPULATION"}},{{"action":"upload","target":"Import CSV","value":"perk.csv"}},{{"action":"process_deployment","options":["Perks"]}}]
+RULE for Example 10b: When "Sửa [Field]: [Value]" appears BETWEEN a download (Export CSV) and an upload (Import CSV), it means EDIT THE CSV FILE, NOT the web form. Use {{"action":"manipulate_csv","target":"<filename>","operation":"set","data":"<ColumnName>=<Value>"}}. The filename is the same as the downloaded file. NEVER use update_form for CSV file edits.
 
 Example 10:
 Input: "Export perk_test.csv -> Smart test -> Import -> Chọn checkbox Perks -> Bấm Process"
@@ -97,6 +107,28 @@ Example 21 (CLONE Tournament + post-clone edit + Save & Continue - CRITICAL):
 Input: "Vào Tournament -> Clone ID: VS_Tournament_Feb2026_Wknd3, New Tournament ID: VS_Tournament_HieuNM_Test_5, Gate: r80 -> Đợi trang load -> Sửa Leaderboard Type: Normal, Active Phase Schedules In UTC: 02/27/2026 03:30, 02/27/2026 04:00, Energy restart mode radio: Daily, Regen Time: 60 -> Save & Continue -> Bấm vào logo The Brick -> Chọn checkbox Versus Tournament -> Process"
 Output: [{{"action":"navigate","path":["Tournament"]}},{{"action":"clone_row","target":"VS_Tournament_Feb2026_Wknd3"}},{{"action":"update_form","data":{{"New Tournament ID":"VS_Tournament_HieuNM_Test_5","Gate":"r80"}}}},{{"action":"save_form","mode":"clone"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Leaderboard Type":"Normal","Active Phase Schedules In UTC":"02/27/2026 03:30, 02/27/2026 04:00","Energy restart mode radio":"Daily","Regen Time":"60"}}}},{{"action":"save_form","mode":"continue"}},{{"action":"process_deployment","options":["Versus Tournament"]}}]
 RULE for Example 21: After save_form(mode=clone) closes the modal, "Đợi trang load" is a wait, then ALL fields mentioned before "Save & Continue" go into a NEW update_form, then save_form(mode=continue). NEVER jump from save_form(clone) directly to save_form(continue) without update_form in between!
+Example 22 (STORE PREVIEW - Click a section/panel item by name):
+Input: "Vào Offer -> Store Preview -> Đợi trang load -> Bấm vào Section_Drip_Offers"
+Output: [{{"action":"navigate","path":["Live Events","Offer","Store Preview"]}},{{"action":"wait"}},{{"action":"click","target":"Section_Drip_Offers"}}]
+RULE for Example 22: Items shown in content panels (Sections list, Offers list, etc.) are clicked with {{"action":"click","target":"ItemName"}}. Use only the name part WITHOUT the numeric ID in parentheses (e.g., "Section_Drip_Offers" NOT "Section_Drip_Offers (2147483647)").
+Example 23 (REORDER / DRAG-AND-DROP priority):
+Input: "Vào Store Preview -> Đợi trang load -> Bấm vào Section_Drip_Offers -> Kéo offer alex_drip_test lên vị trí 1"
+Output: [{{"action":"navigate","path":["Live Events","Offer","Store Preview"]}},{{"action":"wait"}},{{"action":"click","target":"Section_Drip_Offers"}},{{"action":"reorder","target":"alex_drip_test","position":1}}]
+RULE for Example 23: Use {{"action":"reorder"}} when user wants to drag an item to change its order/priority.
+  - "target": name/ID of the item to drag (text matching the list row)
+  - "position": 1-based destination index (1 = top/highest priority)
+  - "before": name of the item to insert BEFORE (alternative to position)
+  - "after": name of the item to insert AFTER (alternative to position)
+  - Accepted phrasings: "kéo ... lên", "kéo ... xuống", "đổi thứ tự", "đổi priority", "drag ... to position", "move ... up/down", "đặt ... lên đầu"
+  - EXAMPLES:
+    * "Kéo alex_drip_test lên đầu" → {{"action":"reorder","target":"alex_drip_test","position":1}}
+    * "Kéo alex_drip_test xuống dưới" (NO anchor = move to bottom of list) → {{"action":"reorder","target":"alex_drip_test","position":9999}}
+    * "Kéo alex_drip_test lên trên" (NO anchor = move to top of list) → {{"action":"reorder","target":"alex_drip_test","position":1}}
+    * "Kéo alex_drip_test xuống dưới quanvm_test_drip_offer_1" → {{"action":"reorder","target":"alex_drip_test","after":"quanvm_test_drip_offer_1"}}
+    * "Đặt alex_drip_test trước quanvm_test_drip_offer_1" → {{"action":"reorder","target":"alex_drip_test","before":"quanvm_test_drip_offer_1"}}
+    * "Di chuyển offer_A lên vị trí 2" → {{"action":"reorder","target":"offer_A","position":2}}
+  - CRITICAL: "kéo X xuống dưới" / "move X down" WITHOUT naming another item → position:9999 (last). NEVER emit all-None!
+  - CRITICAL: "target" MUST be the exact item name extracted from the user command (non-empty string). NEVER output {{"target":""}}, {{"target":null}}, or omit "target". If you cannot identify the item name, do NOT emit a reorder action at all.
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
@@ -157,10 +189,16 @@ CRITICAL RULES:
   * "Sửa [ID Field]: [Value]" at START (before arrow ->) where field is ID-like → USE edit_row action
   * ID-like fields: ID, EventID, BagID, FF ID, Boss Event ID, Offer ID, Gacha ID, Event Gacha ID, Mission ID
   * "sửa [normal field]: [value]" after arrow → USE update_form action
+  * "sửa [field]: [value]" BETWEEN a download/Export and an upload/Import step → USE manipulate_csv (editing the CSV file, NOT the web form)
+  * manipulate_csv schema: {{"action":"manipulate_csv","target":"<filename>","operation":"set","data":"<ColumnName>=<Value>"}}
+  * The target filename MUST match the previously downloaded file. Separate multiple CSV column edits with separate manipulate_csv steps.
+  * Example: "Export perk.csv → Sửa Event Type: PVE_STIPULATION → Import perk.csv" = download + manipulate_csv(set,Event Type=PVE_STIPULATION) + upload. NEVER update_form here.
   * Example: "Sửa FF ID: FF_ABC -> Đợi trang load -> sửa Gate: r80" = edit_row("FF_ABC") + wait + update_form({{"Gate":"r80"}}) + save_form
   * WRONG: update_form({{"FF ID":"FF_ABC","Gate":"r80"}})
   * RANDOM ROW: "Sửa FF ID bất kỳ", "Sửa một dòng bất kỳ", "Edit any row", "Sửa bất kỳ" → edit_row("RANDOM")
+  * "Sửa một [entity] bất kỳ" (e.g., "Sửa một Superstar bất kỳ") → edit_row("RANDOM"). The word before "bất kỳ" is entity type, NOT target ID.
   * Example: "Sửa Faction War ID bất kỳ" → {{"action":"edit_row","target":"RANDOM"}}
+  * Example: "Sửa một Superstar bất kỳ" → {{"action":"edit_row","target":"RANDOM"}}
 
 - MULTIPLE DATETIME VALUES (IMPORTANT):
   * Fields like "Schedules In UTC" may have 2+ datetime inputs (Start, End)
@@ -182,8 +220,29 @@ CRITICAL RULES:
   * "bấm save & continue", "Save & Continue", "save and continue" → {{"action":"save_form","mode":"continue"}}
   * If no specific save instruction but need to save after update_form → {{"action":"save_form"}} (default)
 
-- SIDEBAR MENU CLICK:
+- SIDEBAR / PANEL ITEM CLICK:
   * "Bấm vào Menu X ở bên trái", "Click sidebar X" → {{"action":"click","target":"X"}}
+  * "Bấm vào Section_Drip_Offers", "Click Section_Drip_Offers" → {{"action":"click","target":"Section_Drip_Offers"}}
+  * Items in content panels (Store Preview sections, Offer lists, etc.) use {{"action":"click","target":"ItemName"}}
+  * Use ONLY the name part — DO NOT include numeric IDs in parentheses
+
+- REORDER / DRAG-AND-DROP (items with ≡ handles):
+  * Use when user wants to change the order/priority of rows or panel items by dragging
+  * The ≡ (3-line) icon on a row indicates it is draggable
+  * Schema: {{"action":"reorder","target":"<item_name>","position":<1-based-int>}}
+    OR:    {{"action":"reorder","target":"<item_name>","before":"<other_item>"}}
+    OR:    {{"action":"reorder","target":"<item_name>","after":"<other_item>"}}
+  * "target": name/ID of the item to drag (exact text shown in the list)
+  * "position": 1-based destination index (1 = top/first = highest priority)
+  * "before": insert target before this named item
+  * "after":  insert target after this named item
+  * Accepted phrasings: "kéo ... lên trên", "kéo ... xuống dưới", "đổi thứ tự", "đổi priority",
+    "di chuyển ... lên vị trí X", "đặt ... lên đầu", "move ... up", "drag ... to position X"
+  * EXAMPLES:
+    - "Kéo alex_drip_test lên đầu" → {{"action":"reorder","target":"alex_drip_test","position":1}}
+    - "Kéo alex_drip_test xuống dưới quanvm_test_drip_offer_1" → {{"action":"reorder","target":"alex_drip_test","after":"quanvm_test_drip_offer_1"}}
+    - "Đặt alex_drip_test trước quanvm_test_drip_offer_1" → {{"action":"reorder","target":"alex_drip_test","before":"quanvm_test_drip_offer_1"}}
+    - "Di chuyển offer_A lên vị trí 2" → {{"action":"reorder","target":"offer_A","position":2}}
 
 - INLINE EDIT FIELDS (Lock Time Offset, Buffer Time, Post Event Duration, Player-Base Gathering Time):
   * These fields have their own Edit button and inline Save button on the web page
@@ -298,7 +357,9 @@ def get_reasoning_prompt(user_command):
        - "bấm save & continue" = Save and navigate to next section (mode="continue")
        - EXCEPTION: "bấm Save" after inline edit fields (Lock Time Offset, Buffer Time, Post Event Duration) = inline save (auto-handled), NOT main save
        - For multi-phase forms (Tournament): ALL phases go in ONE update_form, only the FINAL Save generates save_form
-    15. **SIDEBAR MENU**: "Bấm vào Menu X ở bên trái" = Click sidebar item X
+    15. **SIDEBAR / PANEL ITEM CLICK**: "Bấm vào Menu X ở bên trái" = Click sidebar item X (action: click, target: X).
+        Also applies to items in content panels, e.g. "Bấm vào Section_Drip_Offers" in Store Preview = click(target="Section_Drip_Offers").
+        Use ONLY the name part — do NOT include numeric IDs in parentheses.
     16. **INLINE EDIT FIELDS** (CRITICAL - Lock Time Offset, Buffer Time, Post Event Duration, Player-Base Gathering Time):
        - These fields are read-only by default with "Edit" button next to them
        - System handles clicking Edit, filling value, and clicking inline Save AUTOMATICALLY
@@ -319,6 +380,13 @@ def get_reasoning_prompt(user_command):
          * Step 2: Fill Color=Blue → Click Filter Data → Wait
        - DO NOT group all values into one update_form!
        - Common filter button names: "Filter Data", "Filter", "Apply Filter"
+    18. **REORDER / DRAG-AND-DROP** (items with ≡ handle):
+       - Use when user says: "kéo ... lên", "kéo ... xuống", "đổi thứ tự", "đổi priority",
+         "di chuyển lên vị trí X", "đặt lên đầu", "move up", "drag to position"
+       - These are list/panel items with a 3-line grip (≡) that can be reordered
+       - Extract: WHAT to move (target name), WHERE to move it (position number, or before/after which item)
+       - Example: "Kéo alex_drip_test lên đầu" = reorder action, target=alex_drip_test, position=1
+       - Example: "Kéo alex_drip_test xuống dưới quanvm_test_drip_offer_1" = reorder, after=quanvm_test_drip_offer_1
 
     Output ONLY the logical analysis/plan in plain text. Do NOT generate JSON yet.
     """
@@ -336,7 +404,7 @@ def get_formatting_prompt(user_command, analysis_clean):
     Task: Convert them into a detailed, sequential JSON Action Plan.
 
     - VALID actions: navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle
-    - clone_row, edit_row, update_form, save_form, scan_tabs, check_fields, click, wait, process_deployment
+    - clone_row, edit_row, update_form, save_form, scan_tabs, check_fields, click, wait, process_deployment, reorder
     
     INVALID action names (NEVER USE): select_random_ids, export_csv, import_csv, click_logo, select_checkbox, click_button ❌
 
@@ -370,7 +438,9 @@ def get_formatting_prompt(user_command, analysis_clean):
        - Always add "wait" action after edit_row to ensure form loads completely
        - Example: "Edit ABC -> Acquire lock -> Update field" = edit_row("ABC") + wait + update_form
        - RANDOM ROW: "Sửa bất kỳ", "Sửa [Field] bất kỳ", "Edit any", "Edit any row" → target = "RANDOM"
+       - "Sửa một [entity] bất kỳ" (e.g., "Sửa một Superstar bất kỳ") → target = "RANDOM" (the entity type is NOT a target ID)
        - Example: "Sửa Faction War ID bất kỳ" → {{{{ "action": "edit_row", "target": "RANDOM" }}}}
+       - Example: "Sửa một Superstar bất kỳ" → {{{{ "action": "edit_row", "target": "RANDOM" }}}}
     9. "update_form": {{{{ "action": "update_form", "data": {{{{ "Label": "Value", ... }}}} }}}}
        - Used to fill forms/popups. 
        - MUST extract ALL fields mentioned in user command.
@@ -400,6 +470,16 @@ def get_formatting_prompt(user_command, analysis_clean):
         - Use for: "Đợi trang load", "Wait for page load", "Chờ load", "Wait", "Đợi"
         - Common after: edit_row, clone_row, click, navigate
         - Format: {{{{ "action": "wait" }}}}
+    15. "reorder": {{{{ "action": "reorder", "target": "item_name", "position": N }}}}
+        - Use when user wants to drag an item (with ≡ handle) to change its order/priority
+        - "target": the name/ID of the item to drag
+        - One of: "position" (1-based int), "before" (item name), or "after" (item name)
+        - Accepted phrasings: "kéo ... lên", "kéo ... xuống", "đổi thứ tự", "đổi priority",
+          "di chuyển ... lên vị trí X", "đặt ... lên đầu", "move ... up", "drag ... to position X"
+        - EXAMPLES:
+          * "Kéo alex_drip_test lên đầu" → {{{{ "action": "reorder", "target": "alex_drip_test", "position": 1 }}}}
+          * "Kéo alex_drip_test xuống dưới quanvm" → {{{{ "action": "reorder", "target": "alex_drip_test", "after": "quanvm" }}}}
+          * "Đặt offer_A trước offer_B" → {{{{ "action": "reorder", "target": "offer_A", "before": "offer_B" }}}}
     CRITICAL RULES:
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
        - "Go to A -> B -> C -> Clone D" => 1. navigate [A,B,C], 2. clone D.
@@ -515,9 +595,11 @@ def get_formatting_prompt(user_command, analysis_clean):
          * EXCEPTION: Do NOT split if all fields are on the SAME page (e.g., multi-phase forms)
          * EXCEPTION: "bấm Save" after inline edit fields = inline save (auto-handled), NOT main form save
 
-       - **SIDEBAR/MENU CLICK**:
+       - **SIDEBAR/PANEL ITEM CLICK**:
          * "Bấm vào Menu X ở bên trái", "Click sidebar X" → {{{{ "action": "click", "target": "X" }}}}
-         * Used for sidebar navigation within a detail page (e.g., Milestone Rewards, Rewards Per Battle)
+         * "Bấm vào Section_Drip_Offers", "Bấm vào [any panel item]" → {{{{ "action": "click", "target": "Section_Drip_Offers" }}}}
+         * Used for sidebar navigation AND for clicking items in content panels (Store Preview sections, offer/section list items, etc.)
+         * Use ONLY the name part — do NOT include numeric IDs in parentheses, e.g. use "Section_Drip_Offers" not "Section_Drip_Offers (2147483647)"
 
     10. **CLONE FLOW (CRITICAL)**:
        - Command: "Clone 'A' -> New ID: B, gate: C, chọn radio Use another currency, currency: D"

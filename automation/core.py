@@ -107,6 +107,7 @@ class BrickAutomation(
                     "wait",
                     "wait_for_page_load",
                     "process_deployment",
+                    "reorder",
                 }
 
                 # Safety-net mapping (in case ai_brain.py fix_action_plan missed something)
@@ -131,6 +132,15 @@ class BrickAutomation(
                     "save": "save_form",
                     "edit": "edit_row",
                     "clone": "clone_row",
+                    "drag": "reorder",
+                    "drag_drop": "reorder",
+                    "drag_and_drop": "reorder",
+                    "move_to": "reorder",
+                    "move_item": "reorder",
+                    "set_priority": "reorder",
+                    "edit_csv": "manipulate_csv",
+                    "modify_csv": "manipulate_csv",
+                    "update_csv": "manipulate_csv",
                     # check_fields variants
                     "check_field": "check_fields",
                     "verify_fields": "check_fields",
@@ -451,6 +461,40 @@ class BrickAutomation(
                                     "details": "No fields were checked (empty tabs_dict)",
                                 }
                             )
+
+                    elif act == "reorder":
+                        reorder_target = step.get("target", "")
+                        reorder_position = step.get("position", None)
+                        reorder_before = step.get("before", None)
+                        reorder_after = step.get("after", None)
+                        print(
+                            f"   🖱️  Reorder: '{reorder_target}' pos={reorder_position} before={reorder_before} after={reorder_after}"
+                        )
+                        if not reorder_target or not str(reorder_target).strip():
+                            msg = "Reorder skipped: AI did not provide a target item name. Please re-run and specify the item to drag (e.g. 'Kéo alex_drip_test xuống dưới')."
+                            print(f"   ❌ {msg}")
+                            report_logs.append(
+                                {"step": "Reorder", "status": "SKIP", "details": msg}
+                            )
+                        else:
+                            try:
+                                reorder_logs = self.drag_to_reorder(
+                                    page,
+                                    target=reorder_target,
+                                    position=reorder_position,
+                                    before=reorder_before,
+                                    after=reorder_after,
+                                )
+                                report_logs.extend(reorder_logs)
+                            except Exception as e:
+                                print(f"   ❌ Reorder Error: {e}")
+                                report_logs.append(
+                                    {
+                                        "step": "Reorder",
+                                        "status": "FAIL",
+                                        "details": str(e),
+                                    }
+                                )
 
                     elif act == "process_deployment":
                         options = step.get("options", [])

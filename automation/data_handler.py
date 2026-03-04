@@ -102,6 +102,20 @@ class DataHandlerMixin:
                         cnt += 1
                 msg = f"Edited {cnt} rows ({sc}={sv})"
 
+            # --- SET LOGIC (ghi đè TẤT CẢ dòng) ---
+            # Format: "ColumnName=NewValue"  (không cần filter)
+            elif operation == "set":
+                col, sv = safe_split(data_instruction)
+                if not col:
+                    return "Invalid SET format"
+                t_col = find_col(col)
+                if not t_col:
+                    return f"Column '{col}' not found"
+                sv = clean_val(sv)
+                for r in rows:
+                    r[t_col] = sv
+                msg = f"Set {len(rows)} rows ({col}={sv})"
+
             # --- DELETE LOGIC ---
             elif operation == "delete":
                 col, val = safe_split(data_instruction)
