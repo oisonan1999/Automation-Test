@@ -4,6 +4,7 @@
 import os
 import json
 import re
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -208,7 +209,7 @@ def clean_json_string(text):
 
 def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase=None):
     """
-    Hàm gọi API Ollama
+    Hàm gọi API Ollama với timing instrumentation
 
     Args:
         model_name: Tên model
@@ -216,6 +217,9 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
         stream: Streaming mode
         optimized: Nếu True, dùng config nhanh hơn (Fast Mode)
         careful_phase: "reasoning" | "formatting" - Tối ưu cho từng phase của Careful Mode
+
+    Returns:
+        str: Response text (None nếu lỗi)
     """
     # Config mặc định (Careful Mode legacy)
     options = {
@@ -229,9 +233,10 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
         options = {
             "temperature": 0.1,
             "num_ctx": 4096,  # Đủ cho reasoning prompt (~2k tokens)
-            "num_predict": 1024,  # ⬇️ Giảm từ 2048: <think>~500 + analysis~300 = ~800 tokens là đủ
+            "num_predict": 1200,  # ⬆️ Tăng từ 768: tránh bị cắt giữa chừng khi lệnh phức tạp (768 hit limit = analysis bị truncate → Qwen fail)
             "num_gpu": 99,
-            "num_batch": 1024,  # Prompt processing nhanh hơn trên Apple Silicon M4
+            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn 30-50% trên Apple Silicon M4
+            "flash_attn": True,  # ⬆️ Flash Attention: giảm memory bandwidth, tăng tốc attention computation
         }
     # Config tối ưu cho Careful Mode - Formatting Phase (Qwen2.5-Coder)
     elif careful_phase == "formatting":
@@ -240,7 +245,8 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
             "num_ctx": 8192,  # ⬆️ Đủ cho formatting prompt lớn (~6k tokens)
             "num_predict": 4096,  # Đủ cho JSON output
             "num_gpu": 99,
-            "num_batch": 1024,  # ⬆️ Xử lý prompt nhanh hơn trên Apple Silicon M4
+            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn cho prompt ~6k tokens
+            "flash_attn": True,  # ⬆️ Flash Attention: tối ưu KV cache access pattern
         }
     # Config tối ưu tốc độ (Fast Mode)
     elif optimized:
@@ -249,7 +255,8 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
             "num_ctx": 8192,  # Đủ chứa Fast Mode prompt (~4k tokens) + output
             "num_predict": 1024,  # ⬇️ Giảm từ 4096: max output ~400-600 tokens cho lệnh đơn giản
             "num_gpu": 99,
-            "num_batch": 1024,  # Xử lý prompt nhanh hơn trên Apple Silicon M4
+            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn cho prompt lớn (few-shot ~4k tokens)
+            "flash_attn": True,  # ⬆️ Flash Attention: giảm memory IO, tăng tốc trên Metal backend
         }
 
     payload = {
@@ -257,11 +264,52 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
         "prompt": prompt,
         "stream": stream,
         "options": options,
+        # keep_alive: Giữ model trong VRAM để tận dụng Prompt Prefix KV Caching
+        # Lần gọi đầu: prompt eval ~84s (full 7715 tokens)
+        # Lần gọi sau: prompt eval ~1-5s (chỉ eval phần user command mới)
+        "keep_alive": "10m",
     }
+
+    wall_start = time.time()
     try:
         response = requests.post(OLLAMA_URL, json=payload)
+        wall_elapsed = time.time() - wall_start
+
         if response.status_code == 200:
-            return response.json().get("response", "")
+            data = response.json()
+            response_text = data.get("response", "")
+
+            # === TIMING METRICS từ Ollama API (nanoseconds → seconds) ===
+            total_ns = data.get("total_duration", 0)
+            load_ns = data.get("load_duration", 0)
+            prompt_eval_ns = data.get("prompt_eval_duration", 0)
+            eval_ns = data.get("eval_duration", 0)
+            prompt_tokens = data.get("prompt_eval_count", 0)
+            output_tokens = data.get("eval_count", 0)
+
+            total_s = total_ns / 1e9
+            load_s = load_ns / 1e9
+            prompt_eval_s = prompt_eval_ns / 1e9
+            eval_s = eval_ns / 1e9
+
+            # Tính tokens/sec
+            prompt_tps = prompt_tokens / prompt_eval_s if prompt_eval_s > 0 else 0
+            output_tps = output_tokens / eval_s if eval_s > 0 else 0
+
+            # Hiển thị timing report
+            phase_label = careful_phase or ("fast" if optimized else "default")
+            print(f"\n   ⏱️  TIMING [{model_name}] ({phase_label}):")
+            print(f"      Model load:    {load_s:6.2f}s")
+            print(
+                f"      Prompt eval:   {prompt_eval_s:6.2f}s ({prompt_tokens} tokens → {prompt_tps:.1f} tok/s)"
+            )
+            print(
+                f"      Generation:    {eval_s:6.2f}s ({output_tokens} tokens → {output_tps:.1f} tok/s)"
+            )
+            print(f"      Total (API):   {total_s:6.2f}s")
+            print(f"      Total (wall):  {wall_elapsed:6.2f}s")
+
+            return response_text
         else:
             print(f"⚠️ Error calling {model_name}: {response.text}")
             return None
@@ -424,9 +472,9 @@ def detect_complexity(user_command):
 def single_model_pipeline(user_command):
     """
     Pipeline nhanh - Chỉ dùng 1 model (Qwen2.5-Coder)
-    Thời gian: ~20-40 giây
     """
     print(f"   ⚡ FAST MODE: Single-model pipeline")
+    pipeline_start = time.time()
 
     # Đảm bảo không có model nào đang load với context khổng lồ
     ensure_clean_context()
@@ -456,7 +504,10 @@ def single_model_pipeline(user_command):
 
     try:
         plan = json.loads(final_json_str)
-        print(f"   ✅ Fast Mode: Tạo thành công {len(plan)} bước")
+        pipeline_elapsed = time.time() - pipeline_start
+        print(
+            f"   ✅ Fast Mode: Tạo thành công {len(plan)} bước ({pipeline_elapsed:.1f}s total)"
+        )
         return plan
     except json.JSONDecodeError as e:
         print(f"   ❌ Fast Mode Parse Error: {e}")
@@ -481,9 +532,9 @@ def single_model_pipeline(user_command):
 def dual_model_pipeline(user_command):
     """
     Pipeline cẩn thận - Dùng 2 models (DeepSeek-R1:8b + Qwen2.5-Coder:14b)
-    Thời gian dự kiến: ~40-60 giây (M4 24GB)
     """
     print(f"   🧠 CAREFUL MODE: Dual-model pipeline")
+    pipeline_start = time.time()
 
     # CRITICAL: Force-unload models có context lớn để tránh swap (131K ctx = 25GB!)
     ensure_clean_context()
@@ -526,15 +577,26 @@ def dual_model_pipeline(user_command):
     json_output = call_ollama(
         MODEL_FORMATTING, formatting_prompt, careful_phase="formatting"
     )
-    # Unload formatting model sau khi xong
-    unload_model(MODEL_FORMATTING)
+    # ✅ KHÔNG unload Qwen sau Careful Mode: giữ model warm cho lần gọi tiếp theo
+    # Prompt prefix caching sẽ giảm prompt eval từ ~84s xuống ~1-5s cho lần gọi sau
+
+    if not json_output:
+        print("   ❌ Careful Mode: Qwen trả về rỗng (None). Sẽ fallback ở cấp trên.")
+        return []
+
+    # [DEBUG] Print raw Qwen output
+    print(f"\n   🔍 DEBUG - RAW QWEN OUTPUT (first 600 chars):")
+    print(f"   {json_output[:600]}...")
 
     # Làm sạch và Parse JSON
     final_json_str = clean_json_string(json_output)
 
     try:
         plan = json.loads(final_json_str)
-        print(f"   ✅ Careful Mode: Đã tạo thành công {len(plan)} bước hành động.")
+        pipeline_elapsed = time.time() - pipeline_start
+        print(
+            f"   ✅ Careful Mode: Đã tạo thành công {len(plan)} bước hành động ({pipeline_elapsed:.1f}s total)"
+        )
 
         # Auto-fix: Thêm bước Upload nếu thiếu
         if (
@@ -602,6 +664,14 @@ def parse_command_to_json(user_command, use_fast_mode=True, context_plan=None):
     else:
         last_actual_mode = "careful"
         plan = dual_model_pipeline(user_command)
+
+        # Auto-fallback: Nếu Careful Mode thất bại, thử lại bằng Fast Mode
+        if not plan or len(plan) == 0:
+            print(
+                "   ⚠️  Careful Mode failed (returned empty plan)! Auto-fallback to Fast Mode..."
+            )
+            last_actual_mode = "fast"
+            plan = single_model_pipeline(user_command)
 
     # BƯỚC 3: Auto-fix nếu cần
     if (

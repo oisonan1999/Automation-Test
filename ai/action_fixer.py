@@ -110,6 +110,7 @@ NAVIGATION_PATH_MAP = {
     "offer section": ["Live Events", "Offer", "Offer Section"],
     "shop tier": ["Live Events", "Offer", "Shop Tier"],
     "store preview": ["Live Events", "Offer", "Store Preview"],
+    "drip offer": ["Live Events", "Offer", "Drip Offer"],
     # Versus
     "tournament": ["Live Events", "Versus", "Tournament"],
     "versus tournament": ["Live Events", "Versus", "Tournament"],
@@ -1214,6 +1215,26 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                         backward_count += 1
                         continue
 
+                # 🆕 Also handle click("Versus Tournament") → deployment option
+                # AI sometimes generates click instead of checkbox for deployment items
+                if prev_action == "click":
+                    click_target = str(prev_step.get("target", "")).strip()
+                    click_target_lower = click_target.lower()
+                    is_deployment_click = any(
+                        keyword in click_target_lower for keyword in deployment_keywords
+                    )
+                    if is_deployment_click:
+                        opt_key = click_target
+                        if opt_key and opt_key not in options:
+                            options.insert(0, opt_key)
+                            print(
+                                f"   🔧 MERGE (backward): click('{click_target}') → process_deployment options"
+                            )
+                            items_to_remove.append(k)
+                        k -= 1
+                        backward_count += 1
+                        continue
+
                 # Stop if we hit a navigation or other major action
                 if prev_action in [
                     "navigate",
@@ -1315,19 +1336,35 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                             f"   ⚠️  Skipping table checkbox (target='{target}', value='{value}')"
                         )
                         break
-                elif next_action == "click" and next_step.get("target", "").lower() in (
-                    "process",
-                    "deploy",
-                    "bấm process",
-                    "nút process",
-                    "process button",
-                    "button process",
-                ):
-                    # click(Process) → absorbed by process_deployment
-                    print(
-                        f"   🔧 MERGE: click('Process') → absorbed by process_deployment"
-                    )
-                    j += 1
+                elif next_action == "click":
+                    click_fwd_target = next_step.get("target", "")
+                    click_fwd_lower = click_fwd_target.lower().strip()
+                    # Case A: click("Process"/"Deploy"/etc.) → absorbed button
+                    if click_fwd_lower in (
+                        "process",
+                        "deploy",
+                        "bấm process",
+                        "nút process",
+                        "process button",
+                        "button process",
+                    ):
+                        print(
+                            f"   🔧 MERGE: click('Process') → absorbed by process_deployment"
+                        )
+                        j += 1
+                    # Case B: click("Versus Tournament"/"Offers"/etc.) → deployment option
+                    elif any(
+                        keyword in click_fwd_lower for keyword in deployment_keywords
+                    ):
+                        opt = click_fwd_target
+                        if opt and opt not in options:
+                            options.append(opt)
+                        print(
+                            f"   🔧 MERGE (forward): click('{opt}') → process_deployment options"
+                        )
+                        j += 1
+                    else:
+                        break
                 else:
                     break
 
