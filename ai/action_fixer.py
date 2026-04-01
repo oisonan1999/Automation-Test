@@ -107,6 +107,7 @@ NAVIGATION_PATH_MAP = {
     # Gacha
     "gacha event": ["Live Events", "Gacha Event", "Gacha Event"],
     # Offer
+    "offer": ["Live Events", "Offer", "Offer"],
     "offer section": ["Live Events", "Offer", "Offer Section"],
     "shop tier": ["Live Events", "Offer", "Shop Tier"],
     "store preview": ["Live Events", "Offer", "Store Preview"],
@@ -162,21 +163,22 @@ NAVIGATION_PATH_MAP = {
     "token": ["Data Configs", "Token", "Token"],
     "strap and medal": ["Data Configs", "Strap and Medal", "Strap and Medal"],
     "stat change": ["Data Configs", "Stat Change", "Stat Change"],
-    "feature setting": ["Data Configs", "Feature Setting", "Feature Setting"],
+    "feature setting": ["Settings", "Feature Setting", "Feature Setting"],
     "feature gate setting": [
-        "Data Configs",
+        "Settings",
         "Feature Gate Setting",
         "Feature Gate Setting",
     ],
-    "league config": ["Data Configs", "League Config", "League Config"],
+    "league config": ["Live Events", "League", "League Config"],
     "champion rewards": ["Data Configs", "Champion Rewards", "Champion Rewards"],
-    "player league": ["Data Configs", "Player League", "Player League"],
+    "player league": ["Live Events", "League", "Player League"],
     "notification": ["Data Configs", "Notification", "Notification"],
     "chat channels": ["Data Configs", "Chat Channels", "Chat Channels"],
     "effect cap setting": ["Data Configs", "Effect Cap Setting", "Effect Cap Setting"],
     "merch store": ["Data Configs", "Merch Store", "Merch Store"],
     "versus shop": ["Data Configs", "Versus Shop", "Versus Shop"],
     "battle shop": ["Data Configs", "Battle Shop", "Battle Shop"],
+    "rarity release gate": ["Settings", "Rarity Release Gate"],
 }
 
 
