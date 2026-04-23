@@ -1,0 +1,3 @@
+Gate,SlotID,Tier,Slots,SlotRequirement,Gender,BonusItems,OptionalBonusItem,OptionalBonusStartDate,OptionalBonusEndDate,OptionalBonusRequirement
+mar2026_wknd4,SlotID_1776669421,2,3,"Body_ISky:Rarity_6:Tier_Gold,Color_Red:Rarity_6",Female,FightCard_ExtraMP_1;FightCard_Gem_Dmg_Perc_Bleed_100;FightCard_FF_Score_25,,,,
+mar2026_wknd4,SlotID_1776669422,3,4,"Brand_NXT:Rarity_5,Color_Green,Color_Yellow",Female,FightCard_ExtraMP_Purple_1;FightCard_Damage_Green_25;FightCard_FF_Score_15,,,,

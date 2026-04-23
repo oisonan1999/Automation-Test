@@ -119,6 +119,7 @@ NAVIGATION_PATH_MAP = {
     "mission": ["Live Events", "Mission", "Mission"],
     # Fight Card
     "fight card": ["Live Events", "Fight Card", "Fight Card"],
+    "fight card slot": ["Live Events", "Fight Card", "Fight Card Slot"],
     # Cash Contract
     "cash contract": ["Live Events", "Cash Contract", "Cash Contract"],
     # RBE
@@ -149,7 +150,10 @@ NAVIGATION_PATH_MAP = {
     # Moment Poster
     "moment poster": ["Live Events", "Moment Poster", "Moment Poster"],
     # PVE
-    "pve": ["Live Events", "PVE", "PVE"],
+    "pve": ["Live Events", "PVE", "Classic PVE"],
+    "chapter": ["Live Events", "PVE", "Chapter"],
+    "book": ["Live Events", "PVE", "Book"],
+    "book pool": ["Live Events", "PVE", "Book Pool"],
     # Hyper Blueprint
     "hyper blueprint": ["Live Events", "Hyper Blueprint", "Hyper Blueprint"],
     # === Data Configs ===

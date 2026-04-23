@@ -1344,6 +1344,8 @@ class SmartTesterMixin:
                         prefix = "Objective_"
                     elif "sectionid" in col_lower:
                         prefix = "Section_"
+                    elif "slotid" in col_lower:
+                        prefix = "SlotID_"
                     elif "eventid" in col_lower or "event" in col_lower:
                         prefix = "Event_"
                     else:
