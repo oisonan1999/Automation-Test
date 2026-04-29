@@ -10,7 +10,12 @@ node_modules/
 chrome_profile/
 chrome-user-data/
 chrome-data/
-
+.obsididan/
 # ===== OS =====
 .DS_Store
 Thumbs.db
+
+
+
+# Ignore Smart Environment folder
+.smart-env

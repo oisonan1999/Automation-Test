@@ -17,7 +17,7 @@ load_dotenv()
 last_actual_mode = "fast"
 
 # === CONFIGURATION ===
-MODEL_REASONING = "deepseek-r1:8b"  # 8B: 19.7 tok/s vs 14B: 11.4 tok/s trên M4. Output chỉ là analysis text → 8B đủ chất lượng
+MODEL_REASONING = "deepseek-r1:14b-qwen-distill-q4_K_M"  # 8B: 19.7 tok/s vs 14B: 11.4 tok/s trên M4. Output chỉ là analysis text → 8B đủ chất lượng
 MODEL_FORMATTING = "qwen2.5-coder:14b"  # Giữ 14B cho formatting vì cần JSON chính xác
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = os.path.join(

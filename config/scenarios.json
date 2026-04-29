@@ -159,5 +159,39 @@
         "action": "save_form"
       }
     ]
+  },
+  "WHIP-58235": {
+    "command": "Vào Versus -> Tournament -> Sửa ID: \"VS_Tournament_Apr2026_Wk4_Hieu_5\" -> Sửa Active Phase Start Date Time: 04/29/2026, 03:55, Active Phase End Date Time: 04/29/2026, 04:15 -> Save & Continue -> Bấm vào logo The Brick -> Chọn Checkbox Versus Tournament -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Versus",
+          "Tournament"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "VS_Tournament_Apr2026_Wk4_Hieu_5"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Active Phase Start Date Time": "04/29/2026, 03:55",
+          "Active Phase End Date Time": "04/29/2026, 04:15"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Versus Tournament"
+        ]
+      }
+    ]
   }
 }
