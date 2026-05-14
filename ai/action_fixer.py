@@ -161,18 +161,18 @@ NAVIGATION_PATH_MAP = {
     "boost": ["Data Configs", "Boost", "Boost"],
     "superstar": ["Data Configs", "Superstar", "Superstar"],
     "superstars": ["Data Configs", "Superstar", "Superstar"],
-    "currency": ["Data Configs", "Currency", "Currency"],
-    "consumable": ["Data Configs", "Consumables", "Consumables"],
-    "consumables": ["Data Configs", "Consumables", "Consumables"],
-    "token": ["Data Configs", "Token", "Token"],
+    "currency": ["Data Configs", "Inventory", "Currency"],
+    "token group configuration": [
+        "Data Configs",
+        "Inventory",
+        "Token Group Configuration",
+    ],
+    "consumables": ["Data Configs", "Inventory", "Consumables Object"],
+    "token": ["Data Configs", "Inventory", "Token"],
     "strap and medal": ["Data Configs", "Strap and Medal", "Strap and Medal"],
     "stat change": ["Data Configs", "Stat Change", "Stat Change"],
-    "feature setting": ["Settings", "Feature Setting", "Feature Setting"],
-    "feature gate setting": [
-        "Settings",
-        "Feature Gate Setting",
-        "Feature Gate Setting",
-    ],
+    "feature setting": ["Settings", "Feature Setting"],
+    "feature gate setting": ["Settings", "Feature Gate Setting"],
     "league config": ["Live Events", "League", "League Config"],
     "champion rewards": ["Data Configs", "Champion Rewards", "Champion Rewards"],
     "player league": ["Live Events", "League", "Player League"],
@@ -183,6 +183,7 @@ NAVIGATION_PATH_MAP = {
     "versus shop": ["Data Configs", "Versus Shop", "Versus Shop"],
     "battle shop": ["Data Configs", "Battle Shop", "Battle Shop"],
     "rarity release gate": ["Settings", "Rarity Release Gate"],
+    "playgami reward config": ["Settings", "Playgami Reward Config"],
 }
 
 

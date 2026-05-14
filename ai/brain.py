@@ -550,9 +550,7 @@ def dual_model_pipeline(user_command):
     raw_analysis = call_ollama(
         MODEL_REASONING, reasoning_prompt, careful_phase="reasoning"
     )
-    # Unload reasoning model ngay sau khi xong để nhường VRAM cho formatting model
-    # R1:8b (5.2GB) + Qwen:14b (9GB) = 14.2GB + KV caches có thể gây memory pressure
-    unload_model(MODEL_REASONING)
+    # ✅ Keep reasoning model warm: Prompt prefix caching giảm prompt eval từ ~84s → 1-5s
 
     if not raw_analysis:
         return []

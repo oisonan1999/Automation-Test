@@ -193,5 +193,371 @@
         ]
       }
     ]
+  },
+  "Test Auto Clear Cache Gacha": {
+    "command": "Vào Gacha Event -> Clone ID:\"EventGacha_Mar2026_ML_Finale\" -> New Event ID:\"HieuNM_Test_2904_1\", Gate: r80, Use another currency,  Currency: GachaShard_Mar2026_Wknd4_Feud -> Clone -> Đợi trang load -> Sửa Schedule in UTC: 2026-03-26 00:00:00 , 2026-04-29 10:40:00 -> Save & Continue -> Bấm vào logo The Brick -> Chọn checkbox Gacha Events -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "EventGacha_Mar2026_ML_Finale"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "New Event ID": "HieuNM_Test_2904",
+          "Gate": "r80",
+          "Use another currency radio": "true",
+          "Currency": "GachaShard_Mar2026_Wknd4_Feud"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "PreEvent Phase Start Date Time(UTC)": "2026-03-26 00:00:00",
+          "Active Phase End Date Time (UTC)": "2026-04-29 09:00:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Gacha Events"
+        ]
+      }
+    ]
+  },
+  "Test Auto Clear Cache Gacha 1": {
+    "command": "Vào Gacha Event -> Clone ID: EventGacha_HieuNM_Test_2904_2 -> New Event ID: HieuNM_Test_0405, Gate: r80, radio: Use another currency, Currency: GachaShard_Feb2026_Wknd1_Main -> Đợi trang load -> Sửa Schedule in UTC: 2026-04-01 00:00:00, 2026-05-04 07:15:00 -> Save & continue -> Bấm vào logo The Brick -> Chọn checkbox Gacha Events -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "EventGacha_HieuNM_Test_2904_2"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "New Event ID": "HieuNM_Test_0405",
+          "Gate": "r80",
+          "Use another currency": "select",
+          "Currency": "GachaShard_Feb2026_Wknd1_Main"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Schedule in UTC": "2026-04-01 00:00:00, 2026-05-04 07:15:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Gacha Events"
+        ]
+      }
+    ]
+  },
+  "Deploy All No Excel": {
+    "command": "Chọn Checkbox Toogle All -> Bỏ chọn checkbox Excel -> Process",
+    "plan": [
+      {
+        "action": "process_deployment",
+        "options": [
+          "Toogle All",
+          "-Excel",
+          "-Excel"
+        ]
+      }
+    ]
+  },
+  "Test Token Group Configuration": {
+    "command": "Vào Token Group Configuration -> Bấm vào Add New -> Group Texture: token_task_any_silver_7, Token Group: EvoToken_7SS_Main_Any -> Save -> Bấm vào logo The Brick -> Chọn checkbox Token -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Data Configs",
+          "Inventory",
+          "Token Group Configuration"
+        ]
+      },
+      {
+        "action": "click",
+        "target": "Add New"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Group Texture": "token_task_any_silver_7",
+          "Token Group": "EvoToken_7SS_Main_Any"
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Token"
+        ]
+      }
+    ]
+  },
+  "Test Attribute and Tag Team should always match ": {
+    "command": "Vào Superstar -> Chọn SS_hieunm_test_lo_2 -> Chọn Era: Reality -> Save & Continue",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Versus",
+          "Tournament"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "VS_Tournament_Apr2026_Wk4_Hieu_5"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Active Phase Start Date Time": "04/29/2026, 03:55",
+          "Active Phase End Date Time": "04/29/2026, 04:15"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Versus Tournament"
+        ]
+      }
+    ]
+  },
+  "Edit Offer And Deploy": {
+    "command": "Vào Offer -> Sửa hieunm_offer_test290326 -> Chọn Offer Type: Standard, Offer Section: HieuNM_Section_LO_Test, Combination Type: Banner, Price: NoCashOffer299 -> Bấm vào Show More Option -> Save & Continue -> Sửa Schedule in UTC: 03/24/2026, 07:50, 05/12/2026, 11:00 -> Save & Continue -> Chọn Layout Type: BGAndItemsCentered, Background Image: UI/StoreV2/OfferBGs/BG_Banner_Default_Blue -> Save -> Bấm vào logo The Brick -> Chọn checkbox Offers -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "hieunm_offer_test290326"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Offer Type": "Standard",
+          "Offer Section": "HieuNM_Section_LO_Test",
+          "Combination Type": "Banner",
+          "Price": "NoCashOffer299"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Show More Option"
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Schedule in UTC": "03/24/2026, 07:50, 05/12/2026, 11:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Layout Type": "BGAndItemsCentered",
+          "Background Image": "UI/StoreV2/OfferBGs/BG_Banner_Default_Blue"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Offers"
+        ]
+      }
+    ]
+  },
+  "Playgami Reward Configuration add item": {
+    "command": "Vào Playgami Reward Config -> Search and Add Reward: Poster_MachoMan_King_6Star_Bronze -> Add -> Save",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Settings",
+          "Playgami Reward Config"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Search": "Poster_MachoMan_King_5Star_Gold"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Add"
+      },
+      {
+        "action": "save_form"
+      }
+    ]
+  },
+  "Clone Offer Easy": {
+    "command": "Vào Offer -> Clone: hieunm_offer_test290326 -> New Offer ID: hieunm_offer_test130526, New Gate: r80 -> Bấm vào tab Detail Info -> Sửa Schedule in UTC: 03/24/2026, 07:50, 05/13/2026, 03:15 -> Save & Continue -> Bấm vào logo The Brick -> Chọn checkbox Offers -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "hieunm_offer_test290326"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "New Offer ID": "hieunm_offer_test130526",
+          "New Gate": "r80"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Detail Info"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Schedule in UTC": "03/24/2026, 07:50, 05/13/2026, 03:15"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Offers"
+        ]
+      }
+    ]
+  },
+  "Clone Gacha Basic": {
+    "command": "Vào Gacha Event -> Clone: EventGacha_May2026_wk2_debut_RRipley_Eradicator -> New Event ID: HieuNM_1305_1, Gate: r80, radio: Use another currency, Currency: GachaShard_May2026_Wk3_Elite -> Sửa Schedule in UTC: 2026-05-11 19:00:00, 2026-05-12 19:00:00 -> Save & Continue -> Bấm vào logo The Brick -> Chọn checkbox: Gacha Events, Localization -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "EventGacha_May2026_wk2_debut_RRipley_Eradicator"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "New Event ID": "HieuNM_1305_1",
+          "Gate": "r80",
+          "Use another currency": "select",
+          "Currency": "GachaShard_May2026_Wk3_Elite"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Schedule in UTC": "2026-05-11 19:00:00, 2026-05-12 19:00:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Gacha Events",
+          "Localization"
+        ]
+      }
+    ]
   }
 }

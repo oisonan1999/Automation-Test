@@ -395,12 +395,10 @@ class SmartTesterMixin:
                         print("      ⏳ Popup detected, waiting 10s...")
                         time.sleep(10.0)  # Chờ thêm 10s để chắc chắn popup đã ổn định
                         # Tìm nút OK (.swal2-confirm) và click luôn
-                        page.evaluate(
-                            """
+                        page.evaluate("""
                             const btn = document.querySelector('button.swal2-confirm');
                             if (btn) btn.click();
-                        """
-                        )
+                        """)
                         time.sleep(1.0)  # Chờ popup biến mất
 
                         # Phân loại kết quả
@@ -503,35 +501,61 @@ class SmartTesterMixin:
                 return False, "Button not found", cached_selector
 
             # 1.5. Setup popup capture BEFORE uploading file (CRITICAL for fast popups)
-            print("   🎬 Injecting JS popup capture script...")
+            # [FIX] Clear any stale result from previous upload BEFORE injecting new listener.
+            # Root cause of false-FAIL: a previous upload's __popupResult stays in DOM memory
+            # and gets read at ~232ms before the new popup even renders.
             try:
                 page.evaluate(
-                    """
+                    "window.__popupResult = null; window.__popupHistory = [];"
+                )
+            except:
+                pass
+
+            print("   🎬 Injecting JS popup capture script...")
+            try:
+                page.evaluate("""
                 window.__popupResult = null;
-                window.__popupHistory = [];  // Keep history of all popups seen
-                
+                window.__popupHistory = [];
+
+                // [FIX] SUCCESS-FIRST classification.
+                // Old code used isError=true/false with no success check, so
+                // "Import CSV successfully!" → isError=false → PASS was actually correct,
+                // BUT the stale result from a prior upload was FAIL and got read first.
+                // New code: explicit success keywords checked before error keywords.
+                const __SUCCESS_KW = [
+                    'success', 'successfully', 'hoàn thành', 'imported',
+                    'updated', 'saved', 'completed', 'done', 'thành công'
+                ];
+                const __ERROR_KW = [
+                    'error', 'fail', 'invalid', 'duplicate', 'missing',
+                    'required', 'not number', 'format', 'does not match',
+                    'không hợp lệ', 'lỗi', 'exception', 'cannot', 'unable'
+                ];
+
+                function __classifyText(text) {
+                    const lower = text.toLowerCase();
+                    // SUCCESS must be checked FIRST — "successfully" contains no error kw
+                    if (__SUCCESS_KW.some(k => lower.includes(k))) return 'PASS';
+                    if (__ERROR_KW.some(k => lower.includes(k))) return 'FAIL';
+                    return null;  // ambiguous — skip, wait for better signal
+                }
+
                 // Function to check and capture modal content (reads even hidden modals)
                 function captureModalContent() {
                     // Check ALL modals (including hidden ones)
                     const modals = document.querySelectorAll('.modal');
                     for (const modal of modals) {
                         const body = modal.querySelector('.modal-body');
-                        // NEW: Read text even if modal is hidden (don't check offsetParent)
+                        // Read text even if modal is hidden (don't check offsetParent)
                         if (body && body.innerText && body.innerText.trim()) {
                             const text = body.innerText.trim();
-                            const isError = text.toLowerCase().includes('error') || 
-                                           text.toLowerCase().includes('fail') || 
-                                           text.toLowerCase().includes('invalid') ||
-                                           text.toLowerCase().includes('không hợp lệ') ||
-                                           text.toLowerCase().includes('lỗi') ||
-                                           modal.classList.contains('error') ||
-                                           modal.classList.contains('danger');
+                            const classified = __classifyText(text);
+                            if (!classified) continue;  // skip ambiguous/loading text
                             const result = {
-                                type: isError ? 'FAIL' : 'PASS',
+                                type: classified,
                                 text: text,
                                 timestamp: Date.now()
                             };
-                            
                             // Store if not already captured
                             if (!window.__popupResult) {
                                 window.__popupResult = result;
@@ -542,16 +566,19 @@ class SmartTesterMixin:
                             return true;
                         }
                     }
-                    
+
                     // Check for SweetAlert
                     const swalContainers = document.querySelectorAll('.swal2-container');
                     for (const container of swalContainers) {
                         const content = container.querySelector('.swal2-html-container, .swal2-title');
                         if (content && content.innerText && content.innerText.trim()) {
                             const text = content.innerText.trim();
-                            const isError = container.querySelector('.swal2-error, .swal2-icon-error');
+                            // Use SweetAlert icon for reliable error detection first
+                            const hasErrorIcon = !!container.querySelector('.swal2-error, .swal2-icon-error');
+                            const classified = hasErrorIcon ? 'FAIL' : __classifyText(text);
+                            if (!classified) continue;
                             const result = {
-                                type: isError ? 'FAIL' : 'PASS',
+                                type: classified,
                                 text: text,
                                 timestamp: Date.now()
                             };
@@ -565,34 +592,33 @@ class SmartTesterMixin:
                     }
                     return false;
                 }
-                
+
                 // IMMEDIATE check (run once before interval starts)
                 captureModalContent();
-                
+
                 // Check every 20ms for super fast capture
                 const checkInterval = setInterval(() => {
                     captureModalContent();
                 }, 20);
-                
+
                 // MutationObserver for instant capture when DOM changes
                 const observer = new MutationObserver(() => {
                     captureModalContent();
                 });
-                
+
                 observer.observe(document.body, {
                     childList: true,
                     subtree: true,
                     attributes: true,
                     attributeFilter: ['class', 'style']
                 });
-                
+
                 // Cleanup after 10 seconds
                 setTimeout(() => {
                     observer.disconnect();
                     clearInterval(checkInterval);
                 }, 10000);
-            """
-                )
+            """)
                 time.sleep(0.1)  # Let script initialize
             except Exception as e:
                 print(f"   ⚠️ JS injection failed: {e}")
@@ -613,28 +639,33 @@ class SmartTesterMixin:
 
                 # IMMEDIATE SYNCHRONOUS CHECK - Read DOM directly (catches already-hidden modals)
                 try:
-                    immediate_result = page.evaluate(
-                        """
+                    immediate_result = page.evaluate("""
                         () => {
                             // Force capture again (in case modal appeared and closed during upload)
+                            // [FIX] Use success-first classification, same as main captureModalContent
+                            const SUCCESS_KW = ['success', 'successfully', 'hoàn thành', 'imported', 'thành công'];
+                            const ERROR_KW   = ['error', 'fail', 'invalid', 'lỗi', 'duplicate', 'missing'];
+                            function classify(text) {
+                                const lower = text.toLowerCase();
+                                if (SUCCESS_KW.some(k => lower.includes(k))) return 'PASS';
+                                if (ERROR_KW.some(k => lower.includes(k))) return 'FAIL';
+                                return null;
+                            }
                             const modals = document.querySelectorAll('.modal');
                             for (const modal of modals) {
                                 const body = modal.querySelector('.modal-body');
                                 // Read innerText even if modal is display:none
                                 if (body && body.innerText && body.innerText.trim()) {
                                     const text = body.innerText.trim();
-                                    const isError = text.toLowerCase().includes('error') || 
-                                                   text.toLowerCase().includes('fail') || 
-                                                   text.toLowerCase().includes('invalid') ||
-                                                   text.toLowerCase().includes('lỗi');
-                                    return { type: isError ? 'FAIL' : 'PASS', text: text };
+                                    const type = classify(text);
+                                    if (!type) continue;
+                                    return { type: type, text: text };
                                 }
                             }
                             // Check if already captured by observer
                             return window.__popupResult;
                         }
-                    """
-                    )
+                    """)
 
                     if immediate_result:
                         print(
@@ -707,8 +738,7 @@ class SmartTesterMixin:
 
                             # NEW: Use evaluate to read DOM directly (can read hidden elements)
                             try:
-                                fallback_result = page.evaluate(
-                                    """
+                                fallback_result = page.evaluate("""
                                     () => {
                                         const modals = document.querySelectorAll('.modal');
                                         const results = [];
@@ -734,8 +764,7 @@ class SmartTesterMixin:
                                         
                                         return results.length > 0 ? results[0] : null;
                                     }
-                                """
-                                )
+                                """)
 
                                 if fallback_result:
                                     text = fallback_result.get("text", "")
@@ -892,8 +921,7 @@ class SmartTesterMixin:
             # NEW: Check generic modal body content and classify by keywords
             # First try: Use evaluate() to read DOM directly (can read hidden modals)
             try:
-                dom_result = page.evaluate(
-                    """
+                dom_result = page.evaluate("""
                     () => {
                         const modals = document.querySelectorAll('.modal .modal-body');
                         const results = [];
@@ -915,8 +943,7 @@ class SmartTesterMixin:
                         
                         return results.length > 0 ? results[0] : null;
                     }
-                """
-                )
+                """)
 
                 if dom_result:
                     text = dom_result.get("text", "")
@@ -1019,8 +1046,7 @@ class SmartTesterMixin:
         try:
             # Dùng JS tìm và click nút OK/Close/Confirm
             # Cách này mạnh hơn .click() của Playwright vì nó bỏ qua check visibility/overlay
-            page.evaluate(
-                """
+            page.evaluate("""
                 // Try SweetAlert buttons
                 const confirmBtn = document.querySelector('button.swal2-confirm');
                 const closeBtn = document.querySelector('button.swal2-close');
@@ -1047,16 +1073,14 @@ class SmartTesterMixin:
                 } else if (genericClose && genericClose.offsetParent !== null) {
                     genericClose.click();
                 }
-            """
-            )
+            """)
             time.sleep(0.4)  # Tăng thời gian chờ để đảm bảo animation hoàn tất
         except:
             pass
 
         # Biện pháp cuối: Xóa DOM nếu nó bị kẹt
         try:
-            page.evaluate(
-                """
+            page.evaluate("""
                 // Remove all overlay containers
                 const overlays = document.querySelectorAll('.swal2-container, .modal-backdrop, .modal.show');
                 overlays.forEach(el => el.remove());
@@ -1067,8 +1091,7 @@ class SmartTesterMixin:
                 // Restore scroll
                 document.body.style.overflow = 'auto';
                 document.body.style.paddingRight = '';
-            """
-            )
+            """)
         except:
             pass
         time.sleep(0.2)
@@ -1102,9 +1125,15 @@ class SmartTesterMixin:
             mutations = fuzzer.generate_generic_all_cases()
 
             # CRITICAL: Setup popup capture ONCE before all uploads
+            # [FIX] Clear stale state first so fuzz loop doesn't inherit a prior result
             try:
                 page.evaluate(
-                    """
+                    "window.__popupResult = null; window.__lastCheckedText = ''; window.__popupHistory = [];"
+                )
+            except:
+                pass
+            try:
+                page.evaluate("""
                     window.__popupResult = null;
                     window.__lastCheckedText = '';
                     
@@ -1112,65 +1141,78 @@ class SmartTesterMixin:
                     function captureModalContent() {
                         if (window.__popupResult) return true; // Already captured
                         
-                        // Check ALL modals - EVEN IF HIDDEN (class 'hide')
-                        const modals = document.querySelectorAll('.modal');
-                        for (const modal of modals) {
-                            // Read ALL text from modal (header + body combined)
-                            const fullText = modal.innerText.trim();
-                            if (!fullText) continue;
-                            
-                            // SKIP loading indicators (exact match OR short text with loading words)
-                            const lower = fullText.toLowerCase();
-                            const loadingWords = ['importing...', 'uploading...', 'loading...', 'processing...', 'please wait'];
-                            if (loadingWords.some(w => lower === w || (lower.includes(w) && fullText.length < 50))) continue;
-                            
-                            // Skip if we already checked this exact text
-                            if (fullText === window.__lastCheckedText) continue;
-                            window.__lastCheckedText = fullText;
-                            
-                            // Check for error keywords in FULL modal text
-                            const isError = lower.includes('error') || 
-                                           lower.includes('fail') || 
-                                           lower.includes('invalid') ||
-                                           lower.includes('already exist') ||
-                                           lower.includes('duplicate') ||
-                                           lower.includes('clone') ||
-                                           lower.includes('không hợp lệ') ||
-                                           lower.includes('lỗi');
+                    // [FIX] SUCCESS-FIRST classification for global monitor.
+                    // Old code had lower.includes('clone') which could cause false positives,
+                    // and had no success keyword check — any non-error text defaulted to PASS
+                    // only by absence, which is fragile. New code: explicit success-first.
+                    const __MON_SUCCESS_KW = [
+                        'success', 'successfully', 'hoàn thành', 'imported',
+                        'updated', 'saved', 'completed', 'done', 'thành công'
+                    ];
+                    const __MON_ERROR_KW = [
+                        'error', 'fail', 'invalid', 'already exist', 'duplicate',
+                        'missing', 'required', 'không hợp lệ', 'lỗi', 'exception'
+                    ];
+
+                    function __monClassify(text) {
+                        const lower = text.toLowerCase();
+                        if (__MON_SUCCESS_KW.some(k => lower.includes(k))) return 'PASS';
+                        if (__MON_ERROR_KW.some(k => lower.includes(k))) return 'FAIL';
+                        return null;
+                    }
+
+                    // Check ALL modals - EVEN IF HIDDEN (class 'hide')
+                    const modals = document.querySelectorAll('.modal');
+                    for (const modal of modals) {
+                        // Read ALL text from modal (header + body combined)
+                        const fullText = modal.innerText.trim();
+                        if (!fullText) continue;
+
+                        // SKIP loading indicators (exact match OR short text with loading words)
+                        const lower = fullText.toLowerCase();
+                        const loadingWords = ['importing...', 'uploading...', 'loading...', 'processing...', 'please wait'];
+                        if (loadingWords.some(w => lower === w || (lower.includes(w) && fullText.length < 50))) continue;
+
+                        // Skip if we already checked this exact text
+                        if (fullText === window.__lastCheckedText) continue;
+                        window.__lastCheckedText = fullText;
+
+                        const type = __monClassify(fullText);
+                        if (!type) continue;  // skip ambiguous
+                        window.__popupResult = {
+                            type: type,
+                            text: fullText.substring(0, 200),
+                            timestamp: Date.now()
+                        };
+                        console.log('✅ Modal captured:', window.__popupResult);
+                        return true;
+                    }
+
+                    // Check for SweetAlert - EVEN IF HIDDEN
+                    const swalContainers = document.querySelectorAll('.swal2-container');
+                    for (const container of swalContainers) {
+                        const content = container.querySelector('.swal2-html-container, .swal2-title, .swal2-popup');
+                        if (content && content.innerText.trim()) {
+                            const text = content.innerText.trim();
+                            const lower = text.toLowerCase();
+                            if (lower === 'importing...' || lower === 'uploading...') continue;
+                            if (text === window.__lastCheckedText) continue;
+                            window.__lastCheckedText = text;
+
+                            const hasErrorIcon = !!container.querySelector('.swal2-error, .swal2-icon-error');
+                            const type = hasErrorIcon ? 'FAIL' : __monClassify(text);
+                            if (!type) continue;
                             window.__popupResult = {
-                                type: isError ? 'FAIL' : 'PASS',
-                                text: fullText.substring(0, 200),
+                                type: type,
+                                text: text.substring(0, 200),
                                 timestamp: Date.now()
                             };
-                            console.log('✅ Modal captured:', window.__popupResult);
+                            console.log('✅ Swal captured:', window.__popupResult);
                             return true;
                         }
-                        
-                        // Check for SweetAlert - EVEN IF HIDDEN
-                        const swalContainers = document.querySelectorAll('.swal2-container');
-                        for (const container of swalContainers) {
-                            const content = container.querySelector('.swal2-html-container, .swal2-title, .swal2-popup');
-                            if (content && content.innerText.trim()) {
-                                const text = content.innerText.trim();
-                                const lower = text.toLowerCase();
-                                if (lower === 'importing...' || lower === 'uploading...') continue;
-                                if (text === window.__lastCheckedText) continue;
-                                window.__lastCheckedText = text;
-                                
-                                const isError = container.querySelector('.swal2-error, .swal2-icon-error') ||
-                                               lower.includes('error') || lower.includes('fail') ||
-                                               lower.includes('already exist') || lower.includes('duplicate');
-                                window.__popupResult = {
-                                    type: isError ? 'FAIL' : 'PASS',
-                                    text: text.substring(0, 200),
-                                    timestamp: Date.now()
-                                };
-                                console.log('✅ Swal captured:', window.__popupResult);
-                                return true;
-                            }
-                        }
-                        return false;
                     }
+                    return false;
+                }
                     
                     // ULTRA-FAST polling - 10ms intervals
                     const checkInterval = setInterval(() => {
@@ -1191,8 +1233,7 @@ class SmartTesterMixin:
                     
                     // Keep running for entire fuzzing session
                     console.log('🔍 Global popup monitor started');
-                """
-                )
+                """)
                 print("   🔍 Global popup monitor initialized")
             except Exception as e:
                 print(f"   ⚠️ Failed to init popup monitor: {e}")
@@ -1238,8 +1279,7 @@ class SmartTesterMixin:
 
                 # Cleanup AFTER reading result - MUST close modal for next case
                 try:
-                    page.evaluate(
-                        """
+                    page.evaluate("""
                         // Click any dismiss/close/cancel buttons
                         const btns = document.querySelectorAll(
                             '.modal button[data-dismiss="modal"], .modal .close, .modal .btn-secondary, ' +
@@ -1256,8 +1296,7 @@ class SmartTesterMixin:
                         });
                         document.body.classList.remove('modal-open', 'swal2-shown');
                         document.body.style.overflow = 'auto';
-                    """
-                    )
+                    """)
                 except:
                     pass
                 time.sleep(0.3)  # Brief wait for cleanup
@@ -1540,6 +1579,16 @@ class SmartTesterMixin:
 
             print(f"   📤 Uploading: {real_file_name}")
             self._ensure_popup_closed(page)
+
+            # [FIX] Clear any stale JS popup result left over from a previous upload.
+            # Without this, _upload_fuzz_fast reads the old result at ~232ms and reports
+            # the PREVIOUS upload's outcome instead of the current one.
+            try:
+                page.evaluate(
+                    "window.__popupResult = null; window.__popupHistory = [];"
+                )
+            except:
+                pass
 
             # [FIX] Dùng _upload_single_attempt (đội JS popup capture mạnh hơn _perform_upload_action)
             max_fix_retries = 2
