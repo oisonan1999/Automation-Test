@@ -446,6 +446,58 @@ class SmartTesterMixin:
         self._ensure_popup_closed(page)  # Đảm bảo popup đã đóng sau tất cả retry
         return False, "Max retries exceeded"
 
+    def _classify_popup_message(self, text):
+        """PASS/FAIL/None from popup text. Success keywords always beat error heuristics."""
+        if not text or not str(text).strip():
+            return None
+        lower = str(text).lower()
+        if any(
+            k in lower
+            for k in (
+                "success",
+                "successfully",
+                "hoàn thành",
+                "imported",
+                "thành công",
+                "completed",
+                "done",
+            )
+        ):
+            return "PASS"
+        if re.search(r"\bfail(ed|ure)?\b", lower) or any(
+            k in lower
+            for k in (
+                "error",
+                "invalid",
+                "duplicate",
+                "missing",
+                "required",
+                "lỗi",
+                "không hợp lệ",
+                "exception",
+                "cannot",
+                "unable",
+            )
+        ):
+            return "FAIL"
+        return None
+
+    def _resolve_upload_popup_outcome(self, popup_data):
+        """Re-classify in Python so 'Import CSV successfully!' is never reported as FAIL."""
+        if not popup_data:
+            return False, ""
+        text = str(popup_data.get("text") or "")
+        py_type = self._classify_popup_message(text)
+        if py_type:
+            is_pass = py_type == "PASS"
+            if py_type == "PASS" and popup_data.get("type") == "FAIL":
+                print(
+                    f"   🔧 Popup reclassified PASS (was JS FAIL): {text[:80]}"
+                )
+            return is_pass, text[:100]
+        js_type = popup_data.get("type")
+        return js_type == "PASS", text[:100]
+
     def _upload_fuzz_fast(self, page, target_text, file_name, cached_selector=None):
         """Optimized upload for fuzzing: 15s timeout, cached selector. Returns (success, msg, selector)"""
         full_path = os.path.join(DOWNLOAD_DIR, file_name)
@@ -534,10 +586,31 @@ class SmartTesterMixin:
 
                 function __classifyText(text) {
                     const lower = text.toLowerCase();
-                    // SUCCESS must be checked FIRST — "successfully" contains no error kw
                     if (__SUCCESS_KW.some(k => lower.includes(k))) return 'PASS';
-                    if (__ERROR_KW.some(k => lower.includes(k))) return 'FAIL';
-                    return null;  // ambiguous — skip, wait for better signal
+                    // 'fail' must not match inside 'successfully'
+                    if (/\\bfail(ed|ure)?\\b/.test(lower)) return 'FAIL';
+                    if (__ERROR_KW.filter(k => k !== 'fail').some(k => lower.includes(k))) return 'FAIL';
+                    return null;
+                }
+
+                function __storePopupResult(result) {
+                    if (!result || !result.type) return;
+                    const prev = window.__popupResult;
+                    if (!prev || result.type === 'PASS') {
+                        window.__popupResult = result;
+                    } else if (prev.type !== 'PASS') {
+                        window.__popupResult = result;
+                    }
+                }
+
+                function __classifySwal(container, text) {
+                    let classified = __classifyText(text);
+                    if (classified) return classified;
+                    const hasSuccess = !!container.querySelector('.swal2-success, .swal2-icon-success');
+                    const hasError = !!container.querySelector('.swal2-error, .swal2-icon-error');
+                    if (hasSuccess) return 'PASS';
+                    if (hasError) return 'FAIL';
+                    return null;
                 }
 
                 // Function to check and capture modal content (reads even hidden modals)
@@ -545,8 +618,9 @@ class SmartTesterMixin:
                     // Check ALL modals (including hidden ones)
                     const modals = document.querySelectorAll('.modal');
                     for (const modal of modals) {
+                        // [FIX] Skip hidden Bootstrap modals (stale .modal-body text caused false FAIL)
+                        if (!modal.classList.contains('show') && modal.offsetParent === null) continue;
                         const body = modal.querySelector('.modal-body');
-                        // Read text even if modal is hidden (don't check offsetParent)
                         if (body && body.innerText && body.innerText.trim()) {
                             const text = body.innerText.trim();
                             const classified = __classifyText(text);
@@ -556,12 +630,7 @@ class SmartTesterMixin:
                                 text: text,
                                 timestamp: Date.now()
                             };
-                            // Store if not already captured
-                            if (!window.__popupResult) {
-                                window.__popupResult = result;
-                                console.log('✅ Modal captured:', result);
-                            }
-                            // Always add to history
+                            __storePopupResult(result);
                             window.__popupHistory.push(result);
                             return true;
                         }
@@ -573,19 +642,16 @@ class SmartTesterMixin:
                         const content = container.querySelector('.swal2-html-container, .swal2-title');
                         if (content && content.innerText && content.innerText.trim()) {
                             const text = content.innerText.trim();
-                            // Use SweetAlert icon for reliable error detection first
-                            const hasErrorIcon = !!container.querySelector('.swal2-error, .swal2-icon-error');
-                            const classified = hasErrorIcon ? 'FAIL' : __classifyText(text);
+                            // Pre-import overwrite confirmation — not a pass/fail result yet
+                            if (/are you sure|wish to proceed|overrides implemented data|importing data via csv/i.test(text)) continue;
+                            const classified = __classifySwal(container, text);
                             if (!classified) continue;
                             const result = {
                                 type: classified,
                                 text: text,
                                 timestamp: Date.now()
                             };
-                            if (!window.__popupResult) {
-                                window.__popupResult = result;
-                                console.log('✅ Swal captured:', result);
-                            }
+                            __storePopupResult(result);
                             window.__popupHistory.push(result);
                             return true;
                         }
@@ -633,6 +699,9 @@ class SmartTesterMixin:
                     fc_info.value.set_files(full_path)
                 time.sleep(0.3)  # Reduced from 0.5s
 
+                # SweetAlert "Are you sure? / Yes, do it!" must be confirmed before result toasts
+                self._confirm_csv_overwrite_prompt_if_present(page)
+
                 # CRITICAL: Check for popup IMMEDIATELY after file upload
                 print("   🔍 Checking popup after file upload...")
                 start_check = time.time()
@@ -644,17 +713,17 @@ class SmartTesterMixin:
                             // Force capture again (in case modal appeared and closed during upload)
                             // [FIX] Use success-first classification, same as main captureModalContent
                             const SUCCESS_KW = ['success', 'successfully', 'hoàn thành', 'imported', 'thành công'];
-                            const ERROR_KW   = ['error', 'fail', 'invalid', 'lỗi', 'duplicate', 'missing'];
                             function classify(text) {
                                 const lower = text.toLowerCase();
                                 if (SUCCESS_KW.some(k => lower.includes(k))) return 'PASS';
-                                if (ERROR_KW.some(k => lower.includes(k))) return 'FAIL';
+                                if (/\\bfail(ed|ure)?\\b/.test(lower)) return 'FAIL';
+                                if (['error','invalid','lỗi','duplicate','missing'].some(k => lower.includes(k))) return 'FAIL';
                                 return null;
                             }
                             const modals = document.querySelectorAll('.modal');
                             for (const modal of modals) {
+                                if (!modal.classList.contains('show') && modal.offsetParent === null) continue;
                                 const body = modal.querySelector('.modal-body');
-                                // Read innerText even if modal is display:none
                                 if (body && body.innerText && body.innerText.trim()) {
                                     const text = body.innerText.trim();
                                     const type = classify(text);
@@ -668,16 +737,15 @@ class SmartTesterMixin:
                     """)
 
                     if immediate_result:
+                        is_pass, msg = self._resolve_upload_popup_outcome(
+                            immediate_result
+                        )
                         print(
-                            f"   🎯 IMMEDIATE capture at {int((time.time()-start_check)*1000)}ms: {immediate_result['type']}"
+                            f"   🎯 IMMEDIATE capture at {int((time.time()-start_check)*1000)}ms: {'PASS' if is_pass else 'FAIL'}"
                         )
                         page.evaluate("window.__popupResult = null")
                         self._ensure_popup_closed(page)
-                        return (
-                            (immediate_result["type"] == "PASS"),
-                            str(immediate_result["text"])[:100],
-                            cached_selector,
-                        )
+                        return (is_pass, msg, cached_selector)
                 except Exception as e:
                     print(f"   🔍 Immediate check failed: {e}")
 
@@ -685,16 +753,15 @@ class SmartTesterMixin:
                 for i in range(15):  # Check 15 times × 50ms = 750ms
                     popup_data = page.evaluate("window.__popupResult")
                     if popup_data:
+                        is_pass, msg = self._resolve_upload_popup_outcome(
+                            popup_data
+                        )
                         print(
-                            f"   🎯 JS caught popup at {int((time.time()-start_check)*1000)}ms: {popup_data['type']}"
+                            f"   🎯 JS caught popup at {int((time.time()-start_check)*1000)}ms: {'PASS' if is_pass else 'FAIL'}"
                         )
                         page.evaluate("window.__popupResult = null")
                         self._ensure_popup_closed(page)
-                        return (
-                            (popup_data["type"] == "PASS"),
-                            str(popup_data["text"])[:100],
-                            cached_selector,
-                        )
+                        return (is_pass, msg, cached_selector)
                     time.sleep(0.05)  # 50ms intervals for faster detection
 
             except Exception as upload_err:
@@ -722,15 +789,14 @@ class SmartTesterMixin:
                                 # Check for 2s total (100 × 0.02s = 2s)
                                 popup_data = page.evaluate("window.__popupResult")
                                 if popup_data:
+                                    is_pass, msg = self._resolve_upload_popup_outcome(
+                                        popup_data
+                                    )
                                     print(
-                                        f"   🎯 JS captured popup at {i*20}ms: {popup_data['type']}"
+                                        f"   🎯 JS captured popup at {i*20}ms: {'PASS' if is_pass else 'FAIL'}"
                                     )
                                     self._ensure_popup_closed(page)
-                                    return (
-                                        (popup_data["type"] == "PASS"),
-                                        str(popup_data["text"])[:100],
-                                        cached_selector,
-                                    )
+                                    return (is_pass, msg, cached_selector)
                                 time.sleep(0.02)  # 20ms intervals = 50 checks/second!
 
                             # If JS failed, try direct Python check as fallback
@@ -767,32 +833,18 @@ class SmartTesterMixin:
                                 """)
 
                                 if fallback_result:
-                                    text = fallback_result.get("text", "")
-                                    if text:
-                                        error_keywords = [
-                                            "error",
-                                            "fail",
-                                            "invalid",
-                                            "lỗi",
-                                            "không hợp lệ",
-                                            "không thành công",
-                                        ]
-                                        is_error = any(
-                                            kw in text.lower() for kw in error_keywords
-                                        )
-
+                                    is_pass, msg = self._resolve_upload_popup_outcome(
+                                        fallback_result
+                                    )
+                                    if msg:
                                         print(
-                                            f"   🔍 Python fallback (DOM read): {text[:80]}..."
+                                            f"   🔍 Python fallback (DOM read): {msg[:80]}..."
                                         )
                                         print(
-                                            f"   🎯 Classified: {'FAIL' if is_error else 'PASS'}"
+                                            f"   🎯 Classified: {'PASS' if is_pass else 'FAIL'}"
                                         )
                                         self._ensure_popup_closed(page)
-                                        return (
-                                            not is_error,
-                                            text[:100],
-                                            cached_selector,
-                                        )
+                                        return (is_pass, msg, cached_selector)
                             except Exception as e:
                                 print(f"   🔍 DEBUG: Direct DOM read failed: {e}")
 
@@ -807,32 +859,21 @@ class SmartTesterMixin:
                                         # Try to read text even if not visible
                                         text = modal.inner_text(timeout=500).strip()
                                         if text:
-                                            # Classify based on keywords
-                                            error_keywords = [
-                                                "error",
-                                                "fail",
-                                                "invalid",
-                                                "lỗi",
-                                                "không hợp lệ",
-                                                "không thành công",
-                                            ]
-                                            is_error = any(
-                                                kw in text.lower()
-                                                for kw in error_keywords
+                                            is_pass, msg = self._resolve_upload_popup_outcome(
+                                                {"type": None, "text": text}
                                             )
+                                            py_type = self._classify_popup_message(text)
+                                            if py_type:
+                                                is_pass = py_type == "PASS"
 
                                             print(
                                                 f"   🔍 DEBUG: Modal {idx+1} text: {text[:80]}..."
                                             )
                                             print(
-                                                f"   🎯 Playwright classified: {'FAIL' if is_error else 'PASS'}"
+                                                f"   🎯 Playwright classified: {'PASS' if is_pass else 'FAIL'}"
                                             )
                                             self._ensure_popup_closed(page)
-                                            return (
-                                                not is_error,
-                                                text[:100],
-                                                cached_selector,
-                                            )
+                                            return (is_pass, msg or text[:100], cached_selector)
                                     except Exception as e:
                                         print(
                                             f"   🔍 DEBUG: Modal {idx+1} read error: {e}"
@@ -882,6 +923,54 @@ class SmartTesterMixin:
         except Exception as e:
             self._ensure_popup_closed(page)
             return False, str(e), cached_selector
+
+    def _confirm_csv_overwrite_prompt_if_present(self, page, max_rounds=6):
+        """
+        Versus và một số tab hiển thị SweetAlert: 'Are you sure?' / 'Yes, do it!'
+        trước khi import CSV ghi đè. Phải bấm xác nhận trước khi đọc popup kết quả.
+        """
+        for _ in range(max_rounds):
+            try:
+                container = page.locator("div.swal2-container.swal2-shown").first
+                if not container.is_visible(timeout=300):
+                    container = page.locator(
+                        "div.swal2-container.swal2-backdrop-show"
+                    ).first
+                if not container.is_visible(timeout=200):
+                    container = (
+                        page.locator("div.swal2-container")
+                        .filter(has=page.locator("button.swal2-confirm"))
+                        .first
+                    )
+                if not container.is_visible(timeout=250):
+                    break
+                text = (container.inner_text(timeout=1000) or "").lower()
+                markers = (
+                    "are you sure",
+                    "wish to proceed",
+                    "overrides implemented data",
+                    "importing data via csv",
+                    "do you wish to proceed",
+                )
+                if not any(m in text for m in markers):
+                    break
+                btn = container.locator("button.swal2-confirm").first
+                if btn.is_visible(timeout=400):
+                    print(
+                        "   ✅ Import overwrite confirmation — clicking confirm (Yes, do it! / OK)..."
+                    )
+                    btn.click(timeout=8000)
+                    try:
+                        page.evaluate(
+                            "window.__popupResult = null; window.__popupHistory = [];"
+                        )
+                    except Exception:
+                        pass
+                    time.sleep(0.35)
+                    continue
+            except Exception:
+                pass
+            break
 
     def _upload_single_attempt(self, page, target_text, file_name):
         """Original upload for non-fuzz operations (keeps longer timeouts)"""
@@ -1597,6 +1686,13 @@ class SmartTesterMixin:
                 success, msg = self._upload_single_attempt(
                     page, target_btn_name or "Import CSV", real_file_name
                 )
+
+                # Safety net: message says success but classifier returned fail
+                if not success and self._classify_popup_message(msg) == "PASS":
+                    print(
+                        f"      🔧 Upload corrected to PASS from message: {msg[:80]}"
+                    )
+                    success = True
 
                 if success:
                     print(f"      ✅ Upload succeeded on attempt {fix_attempt + 1}")

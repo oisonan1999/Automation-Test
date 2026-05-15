@@ -30,6 +30,24 @@ class FormHandlerMixin:
             try:
                 value_lower = str(value).lower().strip()
 
+                # Boolean / toggle on main form (not sidebar nav links like #daily_reward)
+                if value_lower in (
+                    "true",
+                    "false",
+                    "1",
+                    "0",
+                    "on",
+                    "off",
+                    "yes",
+                    "no",
+                    "enable",
+                    "disable",
+                ):
+                    if self._try_set_form_toggle_by_label(page, label, value):
+                        print(f"         ✅ Toggle '{label}' set to '{value}'")
+                        time.sleep(1)
+                        continue
+
                 # ========================================
                 # SPECIAL CASE 1: RADIO BUTTON BY LABEL TEXT
                 # CHỈ khi value là signal của radio: "select", "true", "on", "1", "yes", "checked"
@@ -2506,8 +2524,103 @@ class FormHandlerMixin:
         # Fallback: không tìm thấy gì
         return None
 
+    def _main_form_scope(self, page):
+        """Main content area — excludes left sidebar nav."""
+        for sel in (
+            "#content",
+            ".content-wrapper",
+            ".main-content",
+            "#main-content",
+            ".tab-content",
+            "[role='main']",
+        ):
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible():
+                    return loc
+            except Exception:
+                pass
+        return page
+
+    def _try_set_form_toggle_by_label(self, page, label_text, value):
+        """
+        Bật/tắt toggle trên form chính (VD: Daily Reward switch trên Tournament Info).
+        Không dùng link sidebar a#daily_reward.
+        """
+        label_lower = label_text.lower().strip()
+        want_on = str(value).lower().strip() in (
+            "true",
+            "1",
+            "on",
+            "yes",
+            "enable",
+        )
+        scope = self._main_form_scope(page)
+        safe = re.compile(rf"^\s*{re.escape(label_text)}\s*$", re.IGNORECASE)
+
+        for label_el in scope.locator("label, span, strong, b, div").filter(
+            has_text=safe
+        ).all():
+            try:
+                if not label_el.is_visible():
+                    continue
+                if label_el.inner_text().strip().lower() != label_lower:
+                    continue
+                for xpath in (
+                    "xpath=ancestor::div[contains(@class,'form-group')][1]",
+                    "xpath=ancestor::div[contains(@class,'control-group')][1]",
+                    "xpath=ancestor::div[contains(@class,'row')][1]",
+                ):
+                    try:
+                        row = label_el.locator(xpath).first
+                        if row.count() == 0 or not row.is_visible():
+                            continue
+                        toggles = row.locator(
+                            "input[type='checkbox'], .toggle input, "
+                            ".bootstrap-switch input, [role='switch']"
+                        ).all()
+                        for tog in toggles:
+                            if not tog.is_visible():
+                                continue
+                            checked = tog.is_checked()
+                            if want_on and not checked:
+                                tog.click(force=True)
+                            elif not want_on and checked:
+                                tog.click(force=True)
+                            print(
+                                f"         🎚️ Toggle '{label_text}' → "
+                                f"{'ON' if want_on else 'OFF'} (checkbox/switch)"
+                            )
+                            return True
+                        # Bootstrap toggle: click label sibling .toggle-group
+                        toggle_ui = row.locator(
+                            ".toggle, .toggle-group, .bootstrap-switch, label.toggle"
+                        ).first
+                        if toggle_ui.count() > 0 and toggle_ui.is_visible():
+                            toggle_ui.click(force=True)
+                            print(
+                                f"         🎚️ Toggle '{label_text}' → clicked UI toggle"
+                            )
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        return False
+
     def _find_input_element(self, page, label_text):
         print(f"         🔍 Searching for field: '{label_text}'")
+
+        # Known field aliases (Versus Tournament Daily Reward tab)
+        _field_aliases = {
+            "time of reward utc": "start_time_send_daily_reward",
+        }
+        alias = _field_aliases.get(label_text.lower().strip())
+        if alias:
+            alias_el = page.locator(f"#{alias}, [name='{alias}']").first
+            if alias_el.count() > 0 and alias_el.is_visible():
+                print(f"         🎯 Field alias '{label_text}' → #{alias}")
+                return alias_el
 
         # ─── Auto-scope to modal if one is open ────────────────────────────────────────
         # Shadow ‘page’ → modal so mọi page.locator() bên dưới đều scoped đúng
@@ -2539,8 +2652,20 @@ class FormHandlerMixin:
                 f"#{label_id_format}, [name='{label_id_format}']"
             ).first
             if direct_by_id.count() > 0 and direct_by_id.is_visible():
-                print(f"         🎯 DIRECT MATCH by ID/name: '{label_id_format}'")
-                return direct_by_id
+                tag = (direct_by_id.evaluate("el => el.tagName") or "").lower()
+                href = direct_by_id.get_attribute("href") or ""
+                cls = direct_by_id.get_attribute("class") or ""
+                is_nav_link = tag == "a" and (
+                    "navigate" in cls or href.startswith("#")
+                )
+                if is_nav_link:
+                    print(
+                        f"         ⚠️ Skip nav link #{label_id_format} "
+                        f"(sidebar tab, not form toggle)"
+                    )
+                else:
+                    print(f"         🎯 DIRECT MATCH by ID/name: '{label_id_format}'")
+                    return direct_by_id
 
             # Try with hyphens too
             label_id_hyphen = label_lower.replace(" ", "-").replace("_", "-")
@@ -2548,10 +2673,17 @@ class FormHandlerMixin:
                 f"#{label_id_hyphen}, [name='{label_id_hyphen}']"
             ).first
             if direct_by_id_hyphen.count() > 0 and direct_by_id_hyphen.is_visible():
-                print(
-                    f"         🎯 DIRECT MATCH by ID/name (hyphen): '{label_id_hyphen}'"
+                tag = (direct_by_id_hyphen.evaluate("el => el.tagName") or "").lower()
+                href = direct_by_id_hyphen.get_attribute("href") or ""
+                cls = direct_by_id_hyphen.get_attribute("class") or ""
+                is_nav_link = tag == "a" and (
+                    "navigate" in cls or href.startswith("#")
                 )
-                return direct_by_id_hyphen
+                if not is_nav_link:
+                    print(
+                        f"         🎯 DIRECT MATCH by ID/name (hyphen): '{label_id_hyphen}'"
+                    )
+                    return direct_by_id_hyphen
 
         # ========================================
         # SECTION-AWARE SEARCH: Handle "Section Name Field Name" patterns

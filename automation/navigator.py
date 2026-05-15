@@ -611,12 +611,73 @@ class NavigatorMixin:
     # ==========================================================================
     # [MỚI] SMART CLICK: CHUYÊN TRỊ SIDEBAR / TABS
     # ==========================================================================
+    def _is_daily_reward_content_loaded(self, page):
+        try:
+            return (
+                page.locator(
+                    "#start_time_send_daily_reward, [name='start_time_send_daily_reward']"
+                ).count()
+                > 0
+            )
+        except Exception:
+            return False
+
+    def _click_sidebar_nav_by_id(self, page, nav_id, label):
+        """Click sidebar AJAX nav (e.g. a#daily_reward under Division Configuration)."""
+        selectors = [
+            f"aside a#{nav_id}",
+            f".sidebar a#{nav_id}",
+            f"#left-menu a#{nav_id}",
+            f"a.navigate-ajax#{nav_id}",
+            f"a[href='#{nav_id}']",
+        ]
+        for sel in selectors:
+            try:
+                link = page.locator(sel).first
+                if link.count() > 0 and link.is_visible():
+                    print(f"         ✅ Sidebar nav '{label}' via {sel}")
+                    link.scroll_into_view_if_needed()
+                    time.sleep(0.3)
+                    link.click()
+                    return True
+            except Exception:
+                continue
+        return False
+
     def smart_click(self, page, target_text):
         print(f"      🖱 Smart Click: '{target_text}'")
         target_clean = target_text.strip()
         clicked = False
 
+        # 0. Known sidebar sub-nav items (Versus Tournament)
+        _nav_map = {
+            "daily reward": "daily_reward",
+            "division configuration": "division_configuration",
+        }
+        nav_id = _nav_map.get(target_clean.lower())
+        if nav_id:
+            if self._click_sidebar_nav_by_id(page, nav_id, target_clean):
+                clicked = True
+                if nav_id == "daily_reward":
+                    try:
+                        page.wait_for_selector(
+                            "#start_time_send_daily_reward, [name='start_time_send_daily_reward']",
+                            state="visible",
+                            timeout=8000,
+                        )
+                        print("         ✅ Daily Reward tab content loaded")
+                    except Exception:
+                        print(
+                            "         ⚠️ Daily Reward fields not visible after nav click"
+                        )
+                else:
+                    time.sleep(0.8)
+
         # 1. SIDEBAR (Ưu tiên số 1)
+        if clicked:
+            self._wait_for_long_loading(page)
+            return clicked
+
         sidebar_selectors = [
             ".sidebar",
             "#sidebar",
@@ -742,6 +803,23 @@ class NavigatorMixin:
                     if item.is_visible():
                         item_text = item.inner_text().strip()
                         if target_clean.lower() in item_text.lower():
+                            # Daily Reward: nav có thể active nhưng panel vẫn là Division Config
+                            if target_clean.lower() == "daily reward":
+                                if self._is_daily_reward_content_loaded(page):
+                                    print(
+                                        f"         ℹ️ Element '{target_text}' is already active/selected"
+                                    )
+                                    clicked = True
+                                    break
+                                print(
+                                    f"         ⚠️ '{target_text}' nav active but content missing — re-clicking"
+                                )
+                                if self._click_sidebar_nav_by_id(
+                                    page, "daily_reward", target_clean
+                                ):
+                                    clicked = True
+                                    time.sleep(1)
+                                break
                             print(
                                 f"         ℹ️ Element '{target_text}' is already active/selected"
                             )

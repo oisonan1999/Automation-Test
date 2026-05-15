@@ -1,298 +1,4 @@
 {
-  "Test_Grabbag_Wrap": [
-    {
-      "action": "navigate",
-      "path": [
-        "Data Configs",
-        "Grab Bag V2"
-      ]
-    },
-    {
-      "action": "checkbox",
-      "target": "BagID",
-      "value": "random_2"
-    },
-    {
-      "action": "download",
-      "target": "Export CSV",
-      "value": "grab_bag_v2.csv"
-    },
-    {
-      "action": "smart_test_cycle",
-      "target": "Import CSV",
-      "value": "grab_bag_v2.csv"
-    }
-  ],
-  "Test_Perk_Wrap": [
-    {
-      "action": "navigate",
-      "path": [
-        "Data Configs",
-        "Perk",
-        "Perk"
-      ]
-    },
-    {
-      "action": "checkbox",
-      "target": "BagID",
-      "value": "random_2"
-    },
-    {
-      "action": "download",
-      "target": "Export CSV",
-      "value": "user_defined.csv"
-    },
-    {
-      "action": "smart_test_cycle",
-      "target": "Import CSV",
-      "value": "user_defined.csv"
-    }
-  ],
-  "Test Auto Clone Gacha": [
-    {
-      "action": "navigate",
-      "path": [
-        "Live Events",
-        "Gacha Event",
-        "Gacha Event"
-      ]
-    },
-    {
-      "action": "clone_row",
-      "target": "EventGacha_ninhpq"
-    },
-    {
-      "action": "update_form",
-      "data": {
-        "New Event ID": "hieunm_test_auto",
-        "gate": "LiveOpsTest",
-        "currency": "Use another",
-        "currency value": "GachaShard_Dec2025_12days_w2_Main"
-      }
-    },
-    {
-      "action": "save_form"
-    }
-  ],
-  "Test_Auto_Clone_Gacha": [
-    {
-      "action": "navigate",
-      "path": [
-        "Live Events",
-        "Gacha Event",
-        "Gacha Event"
-      ]
-    },
-    {
-      "action": "clone_row",
-      "target": "EventGacha_ninhpq"
-    },
-    {
-      "action": "update_form",
-      "data": {
-        "New Event ID": "hieunm_test_auto_1",
-        "gate": "LiveOpsTest",
-        "currency": "Use another",
-        "currency value": "GachaShard_Dec2025_12days_w2_Main"
-      }
-    },
-    {
-      "action": "save_form"
-    }
-  ],
-  "Test_Grabbag_1": {
-    "command": "Vào Data Configs -> Grab Bag V2 -> Chọn 3 BagID bất kỳ -> Export CSV -> Dùng smart cycle test file csv -> Import CSV file đó",
-    "plan": [
-      {
-        "action": "navigate",
-        "path": [
-          "Data Configs",
-          "Grab Bag V2"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "BagID",
-        "value": "random_3"
-      },
-      {
-        "action": "download",
-        "target": "Export CSV",
-        "value": "file.csv"
-      },
-      {
-        "action": "smart_test_cycle",
-        "target": "Import CSV",
-        "value": "file.csv"
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV",
-        "value": "file.csv"
-      }
-    ]
-  },
-  "Clone Gacha": {
-    "command": "Vào Data Configs -> Gacha Event -> Gacha Event -> Clone ID: \"EventGacha_HieuNM_Tesst -> Gate: LiveopsTest, ID: HieuNM_1, Use another currency, Currency: GachaShard_Feb2026_ML_Armory_Loot",
-    "plan": [
-      {
-        "action": "navigate",
-        "path": [
-          "Data Configs",
-          "Gacha Event",
-          "Gacha Event"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "EventGacha_HieuNM_Tesst"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate": "LiveopsTest",
-          "ID": "HieuNM_1",
-          "Currency": "GachaShard_Feb2026_ML_Armory_Loot"
-        }
-      },
-      {
-        "action": "save_form"
-      }
-    ]
-  },
-  "WHIP-58235": {
-    "command": "Vào Versus -> Tournament -> Sửa ID: \"VS_Tournament_Apr2026_Wk4_Hieu_5\" -> Sửa Active Phase Start Date Time: 04/29/2026, 03:55, Active Phase End Date Time: 04/29/2026, 04:15 -> Save & Continue -> Bấm vào logo The Brick -> Chọn Checkbox Versus Tournament -> Process",
-    "plan": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Versus",
-          "Tournament"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "VS_Tournament_Apr2026_Wk4_Hieu_5"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Active Phase Start Date Time": "04/29/2026, 03:55",
-          "Active Phase End Date Time": "04/29/2026, 04:15"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "continue"
-      },
-      {
-        "action": "process_deployment",
-        "options": [
-          "Versus Tournament"
-        ]
-      }
-    ]
-  },
-  "Test Auto Clear Cache Gacha": {
-    "command": "Vào Gacha Event -> Clone ID:\"EventGacha_Mar2026_ML_Finale\" -> New Event ID:\"HieuNM_Test_2904_1\", Gate: r80, Use another currency,  Currency: GachaShard_Mar2026_Wknd4_Feud -> Clone -> Đợi trang load -> Sửa Schedule in UTC: 2026-03-26 00:00:00 , 2026-04-29 10:40:00 -> Save & Continue -> Bấm vào logo The Brick -> Chọn checkbox Gacha Events -> Process",
-    "plan": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Gacha Event",
-          "Gacha Event"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "EventGacha_Mar2026_ML_Finale"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "New Event ID": "HieuNM_Test_2904",
-          "Gate": "r80",
-          "Use another currency radio": "true",
-          "Currency": "GachaShard_Mar2026_Wknd4_Feud"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "PreEvent Phase Start Date Time(UTC)": "2026-03-26 00:00:00",
-          "Active Phase End Date Time (UTC)": "2026-04-29 09:00:00"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "continue"
-      },
-      {
-        "action": "process_deployment",
-        "options": [
-          "Gacha Events"
-        ]
-      }
-    ]
-  },
-  "Test Auto Clear Cache Gacha 1": {
-    "command": "Vào Gacha Event -> Clone ID: EventGacha_HieuNM_Test_2904_2 -> New Event ID: HieuNM_Test_0405, Gate: r80, radio: Use another currency, Currency: GachaShard_Feb2026_Wknd1_Main -> Đợi trang load -> Sửa Schedule in UTC: 2026-04-01 00:00:00, 2026-05-04 07:15:00 -> Save & continue -> Bấm vào logo The Brick -> Chọn checkbox Gacha Events -> Process",
-    "plan": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Gacha Event",
-          "Gacha Event"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "EventGacha_HieuNM_Test_2904_2"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "New Event ID": "HieuNM_Test_0405",
-          "Gate": "r80",
-          "Use another currency": "select",
-          "Currency": "GachaShard_Feb2026_Wknd1_Main"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Schedule in UTC": "2026-04-01 00:00:00, 2026-05-04 07:15:00"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "continue"
-      },
-      {
-        "action": "process_deployment",
-        "options": [
-          "Gacha Events"
-        ]
-      }
-    ]
-  },
   "Deploy All No Excel": {
     "command": "Chọn Checkbox Toogle All -> Bỏ chọn checkbox Excel -> Process",
     "plan": [
@@ -556,6 +262,68 @@
         "options": [
           "Gacha Events",
           "Localization"
+        ]
+      }
+    ]
+  },
+  "Edit Tournament basic": {
+    "command": "Vào Versus Tournament -> Sửa ID: VS_Tournament_May2026_Wknd2 -> Bật toggle: Daily Reward -> Save -> Bấm vào tab Division Configuration -> Import CSV: League_Config_Detail.csv -> Save -> Bấm vào tab Daily Reward ->Sửa: Time Of Reward UTC: 00:00, Import CSV: Versus_daily_rewards.csv -> Save -> Bấm vào logo the brick -> Chọn checkbox Versus Tournament -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Versus",
+          "Tournament"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "VS_Tournament_May2026_Wknd2"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Daily Reward": true
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "click",
+        "target": "Division Configuration"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "League_Config_Detail.csv"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "click",
+        "target": "Daily Reward"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Time Of Reward UTC": "00:00"
+        }
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "Versus_daily_rewards.csv"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Versus Tournament"
         ]
       }
     ]

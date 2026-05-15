@@ -17,7 +17,7 @@ load_dotenv()
 last_actual_mode = "fast"
 
 # === CONFIGURATION ===
-MODEL_REASONING = "deepseek-r1:14b-qwen-distill-q4_K_M"  # 8B: 19.7 tok/s vs 14B: 11.4 tok/s trên M4. Output chỉ là analysis text → 8B đủ chất lượng
+MODEL_REASONING = "deepseek-r1:8b"  # 8B: 19.7 tok/s vs 14B: 11.4 tok/s trên M4. Output chỉ là analysis text → 8B đủ chất lượng
 MODEL_FORMATTING = "qwen2.5-coder:14b"  # Giữ 14B cho formatting vì cần JSON chính xác
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = os.path.join(
@@ -47,6 +47,24 @@ def save_scenario(name, plan, user_command=""):
     data[name] = {"command": user_command, "plan": plan}
     with open(SCENARIO_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    return True
+
+
+def delete_scenarios(names):
+    """Xóa một hoặc nhiều kịch bản khỏi scenarios.json. Trả về số kịch bản đã xóa."""
+    if not names:
+        return 0
+    data = load_scenarios()
+    deleted = 0
+    for name in names:
+        key = str(name).strip()
+        if key and key in data:
+            del data[key]
+            deleted += 1
+    if deleted:
+        with open(SCENARIO_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    return deleted
 
 
 def clean_json_string(text):

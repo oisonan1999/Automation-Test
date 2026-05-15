@@ -4,7 +4,12 @@ import json
 import os
 import sys
 import io
-from ai.brain import parse_command_to_json, save_scenario, load_scenarios
+from ai.brain import (
+    parse_command_to_json,
+    save_scenario,
+    load_scenarios,
+    delete_scenarios,
+)
 import ai.brain as brain_module
 from automation.core import BrickAutomation
 
@@ -56,8 +61,71 @@ if "use_fast_mode" not in st.session_state:
     st.session_state.use_fast_mode = True  # Mặc định Fast Mode
 if "last_mode_used" not in st.session_state:
     st.session_state.last_mode_used = None
+if "pending_save_dialog" not in st.session_state:
+    st.session_state.pending_save_dialog = None
+if "pending_delete_dialog" not in st.session_state:
+    st.session_state.pending_delete_dialog = None
+if "scenario_notice" not in st.session_state:
+    st.session_state.scenario_notice = None
 
 automation = st.session_state.automation
+
+
+@st.dialog("✅ Lưu kịch bản thành công")
+def _show_save_success_dialog(scenario_name):
+    st.success(f"Kịch bản **「{scenario_name}」** đã được lưu.")
+    st.caption("File: `config/scenarios.json` — có thể load lại từ danh sách bên phải.")
+    if st.button("Đóng", type="primary", use_container_width=True):
+        st.session_state.pending_save_dialog = None
+        st.rerun()
+
+
+@st.dialog("🗑 Xác nhận xóa kịch bản")
+def _show_delete_confirm_dialog(scenario_names):
+    st.warning(
+        f"Bạn sắp xóa **{len(scenario_names)}** kịch bản. Thao tác không thể hoàn tác."
+    )
+    for name in scenario_names:
+        st.markdown(f"- {name}")
+    col_ok, col_cancel = st.columns(2)
+    with col_ok:
+        if st.button("Xóa vĩnh viễn", type="primary", use_container_width=True):
+            removed = delete_scenarios(scenario_names)
+            st.session_state.pending_delete_dialog = None
+            remaining = load_scenarios()
+            sel = st.session_state.get("selected_file")
+            if not remaining:
+                if "selected_file" in st.session_state:
+                    del st.session_state["selected_file"]
+            elif sel in scenario_names or sel not in remaining:
+                st.session_state.selected_file = next(iter(remaining))
+            st.session_state.scenario_notice = (
+                "deleted",
+                removed,
+                list(scenario_names),
+            )
+            st.rerun()
+    with col_cancel:
+        if st.button("Hủy", use_container_width=True):
+            st.session_state.pending_delete_dialog = None
+            st.rerun()
+
+
+# Popup sau khi lưu / thông báo sau khi xóa
+if st.session_state.pending_save_dialog:
+    _show_save_success_dialog(st.session_state.pending_save_dialog)
+
+if st.session_state.pending_delete_dialog:
+    _show_delete_confirm_dialog(st.session_state.pending_delete_dialog)
+
+if st.session_state.scenario_notice:
+    kind, *rest = st.session_state.scenario_notice
+    if kind == "deleted":
+        count, names = rest[0], rest[1]
+        st.toast(f"Đã xóa {count} kịch bản.", icon="🗑")
+        if names:
+            st.info(f"Đã xóa: {', '.join(names)}")
+    st.session_state.scenario_notice = None
 
 
 # --- HÀM CALLBACK (LOAD KỊCH BẢN) ---
@@ -148,14 +216,32 @@ with col2:
     st.subheader("📂 Kịch bản đã lưu")
     saved_scenarios = load_scenarios()
     if saved_scenarios:
-        st.selectbox(
-            "Chọn kịch bản:", list(saved_scenarios.keys()), key="selected_file"
-        )
+        scenario_names = list(saved_scenarios.keys())
+        st.selectbox("Chọn kịch bản:", scenario_names, key="selected_file")
         st.button(
             "📂 Load Kịch Bản",
             use_container_width=True,
             on_click=load_scenario_callback,
         )
+
+        st.divider()
+        st.markdown("**🗑 Xóa kịch bản cũ**")
+        st.caption("Chọn các kịch bản không còn dùng rồi bấm xóa.")
+        scenarios_to_delete = st.multiselect(
+            "Kịch bản cần xóa:",
+            options=scenario_names,
+            placeholder="Chọn một hoặc nhiều kịch bản...",
+            key="scenarios_to_delete",
+            label_visibility="collapsed",
+        )
+        delete_btn = st.button(
+            "🗑 Xóa kịch bản đã chọn",
+            use_container_width=True,
+            disabled=not scenarios_to_delete,
+        )
+        if delete_btn and scenarios_to_delete:
+            st.session_state.pending_delete_dialog = list(scenarios_to_delete)
+            st.rerun()
     else:
         st.info("Chưa có kịch bản nào.")
 
@@ -345,10 +431,20 @@ if st.session_state.test_logs:
         st.write(report_logs)
 
 # --- XỬ LÝ SỰ KIỆN LƯU ---
-if save_btn and save_name and st.session_state.current_plan:
-    save_scenario(save_name, st.session_state.current_plan, user_input)
-    st.success(f"✅ Đã lưu kịch bản: {save_name}")
-    st.rerun()
+if save_btn:
+    if not save_name.strip():
+        st.toast("Vui lòng nhập tên kịch bản.", icon="⚠️")
+    elif not st.session_state.current_plan:
+        st.toast("Chưa có kế hoạch JSON để lưu. Hãy chạy AI trước.", icon="⚠️")
+    else:
+        save_scenario(
+            save_name.strip(),
+            st.session_state.current_plan,
+            user_input,
+        )
+        st.session_state.pending_save_dialog = save_name.strip()
+        st.toast(f"Đã lưu kịch bản 「{save_name.strip()}」", icon="💾")
+        st.rerun()
 
 # --- FOOTER ---
 st.divider()
