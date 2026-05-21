@@ -327,5 +327,332 @@
         ]
       }
     ]
+  },
+  "Clone RBE Basic": {
+    "command": "Vào RBE -> Clone ID: RBE_May2026_Wk4_Solo_Main -> Cloned Rules Based Tournament ID: RBE_HieuNM_Test_1905, Gate: LiveOpsTest -> Đợi trang load -> Sửa Schedule in UTC: 2026-05-19 08:30, 2026-05-19 11:00, Point Currency: PointCurrency_QuanVM_LiveopsTest_RBE_1 -> Save -> Bấm vào logo The Brick -> Chọn checkbox RBE -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE",
+          "RBE"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "RBE_May2026_Wk4_Solo_Main"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Cloned Rules Based Tournament ID": "RBE_HieuNM_Test_1905",
+          "Gate": "LiveOpsTest"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Schedule in UTC": "2026-05-19 08:30, 2026-05-19 11:00",
+          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "RBE"
+        ]
+      }
+    ]
+  },
+  "Clone PVE Basic": {
+    "command": "Vào PVE -> Clone ID: LTPVE_May2026_Wk3_Contest -> Đợi trang load -> Sửa Book Name: LTPVE_May2026_HieuNM_Test -> Create book and Open in V2",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "LTPVE_May2026_Wk3_Contest"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "New ID": "LTPVE_May2026_HieuNM_Test"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Book Name": "LTPVE_May2026_HieuNM_Test"
+        }
+      },
+      {
+        "action": "save_form"
+      }
+    ]
+  },
+  "Clone Fight Card": {
+    "command": "Vào Fight Card -> Clone ID: FightCard_May2026_Wk3_Champion -> FightCard ID: FightCard_May2026_HieuNM_1905, Gate: LiveOpsTest -> Đợi trang load -> Sửa Schedule in UTC: 2026-05-19 09:00:00, 2026-05-19 11:00:00, Ticket ID: FightCardGenericTicket, Ticket Cost: 10, Chapter ID: FightCard_hieunm_test_1, Tier ID 1: FQA_FF_Slot_Test_01, Tier ID 2: FQA_FF_Slot_Test_02, Tier ID 3: FQA_FF_Slot_Test_03 -> Update -> Bấm vào logo The Brick -> Chọn checkbox: Fight Card -> Process\n",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Fight Card",
+          "Fight Card"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "FightCard_May2026_Wk3_Champion"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "FightCard ID": "FightCard_May2026_HieuNM_1905",
+          "Gate": "LiveOpsTest"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Schedule in UTC": "2026-05-19 09:00:00, 2026-05-19 11:00:00",
+          "Ticket ID": "FightCardGenericTicket",
+          "Ticket Cost": "10",
+          "Chapter ID": "FightCard_hieunm_test_1",
+          "Tier ID 1": "FQA_FF_Slot_Test_01",
+          "Tier ID 2": "FQA_FF_Slot_Test_02",
+          "Tier ID 3": "FQA_FF_Slot_Test_03"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "update"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Fight Card"
+        ]
+      }
+    ]
+  },
+  "Clone Localizations": {
+    "command": "Vào Localization -> Clone ID: !!GRABBAG_MAY2026_WK4_CONTEST_DESC -> Loc ID: !!GRABBAG_MAY2026_WK4_CONTEST_DESC_HIEUNM_TEST, Gate: LiveOpsTest -> Bấm vào logo The Brick -> Chọn checkbox: Localization -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Data Configs",
+          "Localizations",
+          "Localizations"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "!!GRABBAG_MAY2026_WK4_CONTEST_DESC"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Loc ID": "!!GRABBAG_MAY2026_WK4_CONTEST_DESC_HIEUNM_TEST",
+          "Gate": "LiveOpsTest"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Localization"
+        ]
+      }
+    ]
+  },
+  "Clone Versus Tournament basic": {
+    "command": "Vào Versus Tournament -> Clone ID: VS_Tournament_May2026_Wk4 -> New Tournament ID: VS_Tournament_May2026_HieuNM_Test_1, Gate: LiveOpsTest -> Sửa PreEvent Phase Start Date Time(UTC): 05/19/2026, 08:00, PreEvent Phase End Date Time(UTC): 05/19/2026, 10:00, Active Phase Start Date Time (UTC): 05/19/2026, 10:00, End Date Time (UTC): 05/19/2026, 11:00 -> Sửa Post Event Duration: 10 rồi bấm Save -> Save & Continue -> Bấm vào logo the brick -> Chọn checkbox Versus Tournament -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Versus",
+          "Tournament"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "VS_Tournament_May2026_Wk4"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "New Tournament ID": "VS_Tournament_May2026_HieuNM_Test_1",
+          "Gate": "LiveOpsTest"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "PreEvent Phase Start Date Time(UTC)": "05/19/2026, 08:00",
+          "PreEvent Phase End Date Time(UTC)": "05/19/2026, 10:00",
+          "Active Phase Start Date Time (UTC)": "05/19/2026, 10:00",
+          "End Date Time (UTC)": "05/19/2026, 11:00",
+          "Post Event Duration": "10"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Versus Tournament"
+        ]
+      }
+    ]
+  },
+  "Clone Faction Feud Basic": {
+    "command": "Vào Faction Feud Event -> Clone ID: FF_May2026_Wknd3_FF3 -> New FF ID: FF_May2026_HieuNM_1905, Gate: LiveOpsTest -> Đợi trang load -> Sửa Leaderboard Type: Bracketed, Bracket Preset: Bracket_Standard_24HR, War Timer: 00:00:10, Max Members per War: 2, Consumable Limit: 99, Schedules In UTC: 05/19/2026 10:00 AM, 05/19/2026 11:00 AM, Tier ID 1: FQA_FF_Slot_Test_01, Tier ID 2: FQA_FF_Slot_Test_02, Tier ID 3: FQA_FF_Slot_Test_03 -> Save -> Bấm vào logo The Brick -> Chọn checkbox: Faction Feud -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Faction Feud",
+          "Faction Feud Event"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "FF_May2026_Wknd3_FF3"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "New FF ID": "FF_May2026_HieuNM_1905",
+          "Gate": "LiveOpsTest"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Leaderboard Type": "Bracketed",
+          "Bracket Preset": "Bracket_Standard_24HR",
+          "War Timer": "00:00:10",
+          "Max Members per War": "2",
+          "Consumable Limit": "99",
+          "Schedules In UTC": "05/19/2026 10:00 AM, 05/19/2026 11:00 AM",
+          "Tier ID 1": "FQA_FF_Slot_Test_01",
+          "Tier ID 2": "FQA_FF_Slot_Test_02",
+          "Tier ID 3": "FQA_FF_Slot_Test_03"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Faction Feud"
+        ]
+      }
+    ]
+  },
+  "Clone Superstar": {
+    "command": "Vào Superstar -> Clone ID: SS_ISky_Rhiyo -> New Superstar ID: SS_hieunm_test_1905, Gate: LiveOpsTest -> Đợi trang load -> Sửa Era: NewGen -> Save & Continue -> Bấm vào logo The Brick -> Chọn checkbox Superstars -> Process",
+    "plan": [
+      {
+        "action": "navigate",
+        "path": [
+          "Data Configs",
+          "Superstar",
+          "Superstar"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "SS_ISky_Rhiyo"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "New Superstar ID": "SS_hieunm_test_1905",
+          "Gate": "LiveOpsTest"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Era": "NewGen"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "continue"
+      },
+      {
+        "action": "process_deployment",
+        "options": [
+          "Superstars"
+        ]
+      }
+    ]
   }
 }

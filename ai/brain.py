@@ -5,10 +5,16 @@ import os
 import json
 import re
 import time
+from copy import deepcopy
 import requests
 from dotenv import load_dotenv
 
-from ai.prompts import get_fast_mode_prompt, get_reasoning_prompt, get_formatting_prompt
+from ai.prompts import (
+    get_fast_mode_prompt,
+    get_reasoning_prompt,
+    get_formatting_prompt,
+    get_patch_prompt,
+)
 from ai.action_fixer import fix_action_plan
 
 load_dotenv()
@@ -65,6 +71,10 @@ def delete_scenarios(names):
         with open(SCENARIO_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
     return deleted
+
+
+def _normalize_command_text(text):
+    return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
 def clean_json_string(text):
@@ -632,19 +642,58 @@ def dual_model_pipeline(user_command):
         return []
 
 
+def patch_model_pipeline(user_command, base_command, base_plan):
+    """
+    Pipeline patch cho scenario đã load sẵn.
+    Chỉ dùng 1 model để sửa plan hiện có thay vì chạy lại reasoning + formatting.
+    """
+    print(f"   🩹 PATCH MODE: Reusing loaded scenario plan")
+    pipeline_start = time.time()
+
+    ensure_clean_context()
+
+    patch_prompt = get_patch_prompt(user_command, base_command, base_plan)
+    json_output = call_ollama(MODEL_FORMATTING, patch_prompt, optimized=True)
+
+    if not json_output:
+        print("   ❌ Patch Mode failed: empty response.")
+        return []
+
+    print(f"\n   🔍 DEBUG - RAW PATCH OUTPUT (first 600 chars):")
+    print(f"   {json_output[:600]}...")
+
+    final_json_str = clean_json_string(json_output)
+
+    try:
+        plan = json.loads(final_json_str)
+        pipeline_elapsed = time.time() - pipeline_start
+        print(
+            f"   ✅ Patch Mode: Đã tạo thành công {len(plan)} bước hành động ({pipeline_elapsed:.1f}s total)"
+        )
+        return plan
+    except json.JSONDecodeError as e:
+        print(f"   ❌ Patch Mode Parse Error: {e}")
+        print(f"   Raw output: {json_output}")
+        print(f"   Cleaned output: {final_json_str[:800]}...")
+        return []
+
+
 # ============================================================================
 # MAIN ENTRY POINT - HYBRID PIPELINE
 # ============================================================================
 
 
-def parse_command_to_json(user_command, use_fast_mode=True, context_plan=None):
+def parse_command_to_json(
+    user_command, use_fast_mode=True, context_plan=None, base_command=None
+):
     """
     Main function - Chuyển đổi lệnh thành JSON Action Plan
 
     Args:
         user_command: Lệnh từ user (tiếng Việt hoặc English)
         use_fast_mode: True = Fast (1 model), False = Careful (2 models)
-        context_plan: Kế hoạch trước đó (không dùng hiện tại)
+        context_plan: Kế hoạch trước đó (nếu có)
+        base_command: Câu lệnh gốc của scenario đã load (nếu có)
 
     Returns:
         List[dict]: JSON Action Plan
@@ -656,38 +705,60 @@ def parse_command_to_json(user_command, use_fast_mode=True, context_plan=None):
         f"   📝 Command: {user_command[:80]}{'...' if len(user_command) > 80 else ''}"
     )
 
-    # BƯỚC 1: Auto-detect complexity (chỉ khi dùng Fast Mode)
-    if use_fast_mode:
-        is_complex = detect_complexity(user_command)
+    plan = []
+    base_plan = context_plan if isinstance(context_plan, list) else None
+    has_context = bool(base_plan and base_command)
 
-        # Nếu phát hiện phức tạp, tự động chuyển sang Careful Mode
-        if is_complex:
-            print(
-                "   ⚠️  Command phức tạp phát hiện! Tự động chuyển sang Careful Mode..."
-            )
-            use_fast_mode = False
+    if has_context:
+        base_norm = _normalize_command_text(base_command)
+        user_norm = _normalize_command_text(user_command)
 
-    # BƯỚC 2: Chọn pipeline
-    if use_fast_mode:
-        last_actual_mode = "fast"
-        plan = single_model_pipeline(user_command)
+        if user_norm == base_norm:
+            print("   ♻️  Loaded scenario unchanged → reuse existing plan without AI.")
+            plan = deepcopy(base_plan)
+            last_actual_mode = "context_reuse"
+        else:
+            print("   🩹 Loaded scenario modified → using patch pipeline.")
+            plan = patch_model_pipeline(user_command, base_command, base_plan)
+            last_actual_mode = "patch"
 
-        # Auto-fallback: Nếu Fast Mode thất bại, tự động chuyển sang Careful Mode
-        if not plan or len(plan) == 0:
-            print("   ⚠️  Fast Mode failed! Auto-switching to Careful Mode...")
-            last_actual_mode = "careful"
-            plan = dual_model_pipeline(user_command)
-    else:
-        last_actual_mode = "careful"
-        plan = dual_model_pipeline(user_command)
+            if not plan:
+                print("   ⚠️  Patch pipeline failed → fallback to normal AI pipeline.")
+                has_context = False
 
-        # Auto-fallback: Nếu Careful Mode thất bại, thử lại bằng Fast Mode
-        if not plan or len(plan) == 0:
-            print(
-                "   ⚠️  Careful Mode failed (returned empty plan)! Auto-fallback to Fast Mode..."
-            )
+    if not has_context:
+        # BƯỚC 1: Auto-detect complexity (chỉ khi dùng Fast Mode)
+        if use_fast_mode:
+            is_complex = detect_complexity(user_command)
+
+            # Nếu phát hiện phức tạp, tự động chuyển sang Careful Mode
+            if is_complex:
+                print(
+                    "   ⚠️  Command phức tạp phát hiện! Tự động chuyển sang Careful Mode..."
+                )
+                use_fast_mode = False
+
+        # BƯỚC 2: Chọn pipeline
+        if use_fast_mode:
             last_actual_mode = "fast"
             plan = single_model_pipeline(user_command)
+
+            # Auto-fallback: Nếu Fast Mode thất bại, tự động chuyển sang Careful Mode
+            if not plan or len(plan) == 0:
+                print("   ⚠️  Fast Mode failed! Auto-switching to Careful Mode...")
+                last_actual_mode = "careful"
+                plan = dual_model_pipeline(user_command)
+        else:
+            last_actual_mode = "careful"
+            plan = dual_model_pipeline(user_command)
+
+            # Auto-fallback: Nếu Careful Mode thất bại, thử lại bằng Fast Mode
+            if not plan or len(plan) == 0:
+                print(
+                    "   ⚠️  Careful Mode failed (returned empty plan)! Auto-fallback to Fast Mode..."
+                )
+                last_actual_mode = "fast"
+                plan = single_model_pipeline(user_command)
 
     # BƯỚC 3: Auto-fix nếu cần
     if (

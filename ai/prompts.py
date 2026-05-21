@@ -967,3 +967,51 @@ def get_formatting_prompt(user_command, analysis_clean):
     - No markdown formatting (no ```json).
     - No explanations.
     """
+
+
+def get_patch_prompt(user_command, base_command, base_plan):
+    """
+    Prompt cho chế độ patch context.
+    Dùng khi user đã load một scenario có sẵn và chỉ sửa vài data nhỏ.
+    Model sẽ ưu tiên tái sử dụng plan cũ, chỉ chỉnh các field/step bị thay đổi.
+    """
+    base_plan_json = base_plan
+    if not isinstance(base_plan_json, str):
+        import json as _json
+
+        base_plan_json = _json.dumps(base_plan_json, ensure_ascii=False, indent=2)
+
+    return f"""
+You are a strict JSON action-plan patcher.
+
+You will receive:
+1) BASE COMMAND: the previously loaded scenario command
+2) BASE JSON PLAN: the previously loaded plan
+3) NEW COMMAND: the edited command
+
+Your job:
+- Return the JSON plan for NEW COMMAND.
+- If NEW COMMAND is only a small edit of BASE COMMAND, preserve the existing step order and modify only the changed fields.
+- If the command changed more substantially, you may rewrite the plan, but still output only the final JSON array.
+- Do NOT explain anything.
+- Do NOT output markdown.
+- Do NOT wrap the result in code fences.
+
+Hard rules:
+- Keep valid action names only.
+- Keep navigation merged into one navigate action with path array.
+- Keep save_form modes exactly when required.
+- Preserve existing steps unless they must change.
+- If the command is identical, return the base plan unchanged.
+
+BASE COMMAND:
+{base_command}
+
+BASE JSON PLAN:
+{base_plan_json}
+
+NEW COMMAND:
+{user_command}
+
+OUTPUT ONLY JSON ARRAY:
+"""

@@ -109,6 +109,7 @@ NAVIGATION_PATH_MAP = {
     # Offer
     "offer": ["Live Events", "Offer", "Offer"],
     "offer section": ["Live Events", "Offer", "Offer Section"],
+    "offer popup manager": ["Live Events", "Offer", "Offer Popup Manager"],
     "shop tier": ["Live Events", "Offer", "Shop Tier"],
     "store preview": ["Live Events", "Offer", "Store Preview"],
     "drip offer": ["Live Events", "Offer", "Drip Offer"],
@@ -130,8 +131,8 @@ NAVIGATION_PATH_MAP = {
     "faction boss event": ["Live Events", "Faction Boss", "Faction Boss Event"],
     "faction boss": ["Live Events", "Faction Boss"],
     # Grab Bag
-    "grab bag": ["Live Events", "Grab Bag", "Grab Bag"],
-    "grabbag": ["Live Events", "Grab Bag", "Grab Bag"],
+    "grab bag": ["Data Configs", "Grab Bag V2"],
+    "grabbag": ["Data Configs", "Grab Bag V2"],
     # LiveOps Message
     "liveops message": ["Live Events", "LiveOps Message", "LiveOps Message"],
     "live ops message": ["Live Events", "LiveOps Message", "LiveOps Message"],
@@ -184,6 +185,7 @@ NAVIGATION_PATH_MAP = {
     "battle shop": ["Data Configs", "Battle Shop", "Battle Shop"],
     "rarity release gate": ["Settings", "Rarity Release Gate"],
     "playgami reward config": ["Settings", "Playgami Reward Config"],
+    "localization": ["Data Configs", "Localizations", "Localizations"],
 }
 
 

@@ -67,6 +67,10 @@ if "pending_delete_dialog" not in st.session_state:
     st.session_state.pending_delete_dialog = None
 if "scenario_notice" not in st.session_state:
     st.session_state.scenario_notice = None
+if "loaded_scenario_command" not in st.session_state:
+    st.session_state.loaded_scenario_command = None
+if "loaded_scenario_plan" not in st.session_state:
+    st.session_state.loaded_scenario_plan = None
 
 automation = st.session_state.automation
 
@@ -144,6 +148,8 @@ def load_scenario_callback():
 
         st.session_state.input_text = cmd_to_load
         st.session_state.current_plan = plan_to_load
+        st.session_state.loaded_scenario_command = cmd_to_load
+        st.session_state.loaded_scenario_plan = plan_to_load
         st.session_state.test_logs = []
 
 
@@ -312,7 +318,10 @@ if run_btn and user_input:
         # Gọi AI với streaming log
         with StreamingLogCapture(log_placeholder) as ai_log:
             action_plan = parse_command_to_json(
-                user_input, use_fast_mode=st.session_state.use_fast_mode
+                user_input,
+                use_fast_mode=st.session_state.use_fast_mode,
+                context_plan=st.session_state.loaded_scenario_plan,
+                base_command=st.session_state.loaded_scenario_command,
             )
 
         # Lưu kết quả
