@@ -94,109 +94,204 @@ class TableHandlerMixin:
                 selected_ids = []
                 used_indices = set()
 
-                attempts = 0
-                max_attempts = num_to_select * 3
+                # 🆕 Special handling:
+                # If caller is trying to pick a random row by ID (e.g. "Filter một ID bất kỳ"
+                # but action is mapped to checkbox random), we first pick a random ID text,
+                # then use the table Filter box with that ID to mimic the intended UX
+                # (filter/search) instead of pure random checkbox selection.
+                target_col_lower = str(target_col).lower().strip()
+                wants_id_filter = "id" in target_col_lower
 
-                while len(selected_ids) < num_to_select and attempts < max_attempts:
-                    attempts += 1
+                if num_to_select == 1 and wants_id_filter and total_rows > 0:
                     idx = random.randint(0, total_rows - 1)
-                    if idx in used_indices:
-                        continue
-                    used_indices.add(idx)
-
                     row = all_rows.nth(idx)
-                    chk = row.locator("input[type='checkbox']").first
 
-                    print(
-                        f"      🎯 Row {idx+1}: Checkbox visible={chk.is_visible() if chk.count() > 0 else 'N/A'}"
-                    )
+                    try:
+                        print(
+                            f"      🎯 [ID-Random] Pick row #{idx+1} then filter by its ID text..."
+                        )
+                        cell_text = ""
+                        all_cells = row.locator("td")
+                        cell_count = all_cells.count()
 
-                    check_result = self._safe_check(chk)
-                    print(f"      🔍 _safe_check returned: {check_result}")
-
-                    if check_result:
-                        try:
-                            print(f"      🔍 Attempting to get cell text...")
-                            # Lấy ID/Text để lưu vào Memory - Thử nhiều cột để tìm text không rỗng
-                            cell_text = ""
-                            all_cells = row.locator("td")
-                            cell_count = all_cells.count()
-                            print(f"      🔍 Row has {cell_count} cells")
-
-                            # Thử từ cột 1 đến hết (bỏ cột 0 vì đó là checkbox)
-                            for col_idx in range(
-                                1, min(cell_count, 5)
-                            ):  # Chỉ thử 4 cột đầu
-                                try:
-                                    text = (
-                                        all_cells.nth(col_idx)
-                                        .inner_text(timeout=500)
-                                        .strip()
-                                    )
-                                    print(f"      🔍 Cell {col_idx}: '{text}'")
-                                    if text and text not in ["", "-", "N/A"]:
-                                        cell_text = text
-                                        break
-                                except Exception as cell_err:
-                                    print(f"      ⚠️ Cell {col_idx} error: {cell_err}")
-                                    continue
-
-                            if not cell_text:
-                                # Fallback: Lấy toàn bộ text của row
-                                cell_text = f"Row_{idx+1}"
+                        for col_idx in range(1, min(cell_count, 5)):
+                            try:
+                                text = (
+                                    all_cells.nth(col_idx)
+                                    .inner_text(timeout=500)
+                                    .strip()
+                                )
+                                if text and text not in ["", "-", "N/A"]:
+                                    cell_text = text
+                                    break
+                            except Exception as cell_err:
                                 print(
-                                    f"      ⚠️ No cell text found, using fallback: {cell_text}"
+                                    f"      ⚠️ [ID-Random] Cell {col_idx} error: {cell_err}"
                                 )
 
-                            print(f"      🔍 Got cell_text: '{cell_text}'")
-                            self.memory["LAST_SELECTED"] = cell_text
-                            if "SELECTED_IDS" not in self.memory:
-                                self.memory["SELECTED_IDS"] = []
-                            self.memory["SELECTED_IDS"].append(cell_text)
-
-                            selected_ids.append(cell_text)
-                            print(f"   ✅ Đã tick dòng {idx+1}: {cell_text}")
-                        except Exception as e:
+                        if not cell_text:
+                            cell_text = f"Row_{idx+1}"
                             print(
-                                f"   ⚠️ Exception getting cell text for row {idx+1}: {type(e).__name__}: {e}"
+                                f"      ⚠️ [ID-Random] No cell text found, fallback: {cell_text}"
                             )
-                            import traceback
 
-                            traceback.print_exc()
-                            # CRITICAL FIX: Vẫn count là đã chọn thành công nếu checkbox đã được tick
+                        print(f"      🔍 [ID-Random] Using search_term='{cell_text}'")
+                        self.memory["LAST_SELECTED"] = cell_text
+                        if "SELECTED_IDS" not in self.memory:
+                            self.memory["SELECTED_IDS"] = []
+                        self.memory["SELECTED_IDS"].append(cell_text)
+
+                        # Filter table by the chosen ID text
+                        if self._perform_table_filter(page, target_col, cell_text):
+                            # Refresh rows after filter
+                            target_table = self._find_data_table(page)
+                            all_rows = target_table.locator("tbody tr").filter(
+                                has=page.locator("td")
+                            )
+
+                            # Tick the matching row
+                            if self._find_and_tick(all_rows, cell_text):
+                                selected_ids.append(cell_text)
+                                print(f"   ✅ [ID-Random] Filter+tick OK: {cell_text}")
+                        # If filter+tick fails, fallback to direct random checkbox tick
+                        if len(selected_ids) == 0:
+                            chk = row.locator("input[type='checkbox']").first
+                            if self._safe_check(chk):
+                                selected_ids.append(cell_text)
+                                print(
+                                    f"   ✅ [ID-Random] Fallback direct tick OK: {cell_text}"
+                                )
+                    except Exception as e:
+                        print(f"   ⚠️ [ID-Random] Failed: {type(e).__name__}: {e}")
+                        # absolute fallback: try direct random tick without filter
+                        chk = row.locator("input[type='checkbox']").first
+                        if self._safe_check(chk):
                             fallback_id = f"Row_{idx+1}_checked"
                             selected_ids.append(fallback_id)
-                            print(f"   ⚠️ Using fallback ID: {fallback_id}")
+
+                    if len(selected_ids) == 0:
+                        logs.append(
+                            {
+                                "step": "Checkbox",
+                                "status": "FAIL",
+                                "details": "ID-Random filter/tick failed",
+                            }
+                        )
                     else:
-                        print(f"   ⚠️ Lỗi tick dòng {idx+1}. Thử dòng khác...")
-                    time.sleep(0.2)
+                        logs.append(
+                            {
+                                "step": "Checkbox",
+                                "status": "PASS",
+                                "details": f"ID-Random: {selected_ids[0]}",
+                            }
+                        )
 
-                if len(selected_ids) < num_to_select:
-                    print(
-                        f"   ⚠️ Chỉ chọn được {len(selected_ids)}/{num_to_select} dòng."
-                    )
-
-                # [FIX] Nếu không chọn được dòng nào, trả về FAIL
-                if len(selected_ids) == 0:
-                    logs.append(
-                        {
-                            "step": "Checkbox",
-                            "status": "FAIL",
-                            "details": f"Không thể chọn bất kỳ dòng nào. Target: random {num_to_select}",
-                        }
-                    )
                 else:
-                    logs.append(
-                        {
-                            "step": "Checkbox",
-                            "status": (
-                                "PASS"
-                                if len(selected_ids) == num_to_select
-                                else "PARTIAL"
-                            ),
-                            "details": f"Random: {selected_ids} ({len(selected_ids)}/{num_to_select})",
-                        }
-                    )
+                    attempts = 0
+                    max_attempts = num_to_select * 3
+
+                    while len(selected_ids) < num_to_select and attempts < max_attempts:
+                        attempts += 1
+                        idx = random.randint(0, total_rows - 1)
+                        if idx in used_indices:
+                            continue
+                        used_indices.add(idx)
+
+                        row = all_rows.nth(idx)
+                        chk = row.locator("input[type='checkbox']").first
+
+                        print(
+                            f"      🎯 Row {idx+1}: Checkbox visible={chk.is_visible() if chk.count() > 0 else 'N/A'}"
+                        )
+
+                        check_result = self._safe_check(chk)
+                        print(f"      🔍 _safe_check returned: {check_result}")
+
+                        if check_result:
+                            try:
+                                print(f"      🔍 Attempting to get cell text...")
+                                # Lấy ID/Text để lưu vào Memory - Thử nhiều cột để tìm text không rỗng
+                                cell_text = ""
+                                all_cells = row.locator("td")
+                                cell_count = all_cells.count()
+                                print(f"      🔍 Row has {cell_count} cells")
+
+                                # Thử từ cột 1 đến hết (bỏ cột 0 vì đó là checkbox)
+                                for col_idx in range(
+                                    1, min(cell_count, 5)
+                                ):  # Chỉ thử 4 cột đầu
+                                    try:
+                                        text = (
+                                            all_cells.nth(col_idx)
+                                            .inner_text(timeout=500)
+                                            .strip()
+                                        )
+                                        print(f"      🔍 Cell {col_idx}: '{text}'")
+                                        if text and text not in ["", "-", "N/A"]:
+                                            cell_text = text
+                                            break
+                                    except Exception as cell_err:
+                                        print(
+                                            f"      ⚠️ Cell {col_idx} error: {cell_err}"
+                                        )
+                                        continue
+
+                                if not cell_text:
+                                    # Fallback: Lấy toàn bộ text của row
+                                    cell_text = f"Row_{idx+1}"
+                                    print(
+                                        f"      ⚠️ No cell text found, using fallback: {cell_text}"
+                                    )
+
+                                print(f"      🔍 Got cell_text: '{cell_text}'")
+                                self.memory["LAST_SELECTED"] = cell_text
+                                if "SELECTED_IDS" not in self.memory:
+                                    self.memory["SELECTED_IDS"] = []
+                                self.memory["SELECTED_IDS"].append(cell_text)
+
+                                selected_ids.append(cell_text)
+                                print(f"   ✅ Đã tick dòng {idx+1}: {cell_text}")
+                            except Exception as e:
+                                print(
+                                    f"   ⚠️ Exception getting cell text for row {idx+1}: {type(e).__name__}: {e}"
+                                )
+                                import traceback
+
+                                traceback.print_exc()
+                                # CRITICAL FIX: Vẫn count là đã chọn thành công nếu checkbox đã được tick
+                                fallback_id = f"Row_{idx+1}_checked"
+                                selected_ids.append(fallback_id)
+                                print(f"   ⚠️ Using fallback ID: {fallback_id}")
+                        else:
+                            print(f"   ⚠️ Lỗi tick dòng {idx+1}. Thử dòng khác...")
+                        time.sleep(0.2)
+
+                    if len(selected_ids) < num_to_select:
+                        print(
+                            f"   ⚠️ Chỉ chọn được {len(selected_ids)}/{num_to_select} dòng."
+                        )
+
+                    # [FIX] Nếu không chọn được dòng nào, trả về FAIL
+                    if len(selected_ids) == 0:
+                        logs.append(
+                            {
+                                "step": "Checkbox",
+                                "status": "FAIL",
+                                "details": f"Không thể chọn bất kỳ dòng nào. Target: random {num_to_select}",
+                            }
+                        )
+                    else:
+                        logs.append(
+                            {
+                                "step": "Checkbox",
+                                "status": (
+                                    "PASS"
+                                    if len(selected_ids) == num_to_select
+                                    else "PARTIAL"
+                                ),
+                                "details": f"Random: {selected_ids} ({len(selected_ids)}/{num_to_select})",
+                            }
+                        )
 
             # --- CASE 2: ALL ---
             elif "all" in val_lower:
@@ -313,12 +408,115 @@ class TableHandlerMixin:
                 if total == 0:
                     raise Exception("Bảng không có dòng nào để chọn ngẫu nhiên")
                 idx = random.randint(0, total - 1)
+                # Wait/retry: sometimes table rows render a bit later (ajax).
+                # Don’t hard-fail when total==0 on first check.
+                total = all_rows.count()
+                if total == 0:
+                    for _attempt in range(12):
+                        try:
+                            if hasattr(self, "wait_for_table_data"):
+                                ok = self.wait_for_table_data(page, timeout=2)
+                            else:
+                                ok = page.locator("tbody tr").count() > 0
+                        except:
+                            ok = False
+
+                        if ok:
+                            all_rows = page.locator("tbody tr").filter(
+                                has=page.locator("td")
+                            )
+                            total = all_rows.count()
+                            if total > 0:
+                                break
+                        time.sleep(0.5)
+
+                if total == 0:
+                    raise Exception(
+                        "Bảng không có dòng nào để chọn ngẫu nhiên (after wait/retry)"
+                    )
+
+                idx = random.randint(0, total - 1)
                 chosen_row = all_rows.nth(idx)
-                # Get the ID text from second cell (index 1) as identifier
+                # Choose "best ID-like" cell text (not a fixed column like td[nth(1)]),
+                # because tables often place Gate in td[1] and ID in another column.
                 try:
-                    target_text = chosen_row.locator("td").nth(1).inner_text().strip()
-                except:
-                    target_text = chosen_row.locator("td").first.inner_text().strip()
+                    cells = chosen_row.locator("td").all()
+                    candidates: list[str] = []
+                    for i_cell, c in enumerate(cells):
+                        try:
+                            t = c.inner_text(timeout=300).strip()
+                        except:
+                            t = ""
+                        if not t:
+                            continue
+                        # Skip pure short labels
+                        if len(t) < 3:
+                            continue
+                        candidates.append(t)
+
+                    def _score_id_like(t: str) -> float:
+                        tl = (t or "").strip()
+                        tl_low = tl.lower()
+                        score = 0.0
+                        # Strong hints
+                        if "hieunm_test" in tl_low:
+                            score += 50
+                        if re.search(r"\b(id|event|event id)\b", tl_low):
+                            score += 20
+                        # RBE_/PVE_/Gacha_/LOC_/Offer_...
+                        if any(
+                            p in tl_low
+                            for p in [
+                                "rbe_",
+                                "pve_",
+                                "gacha_",
+                                "loc_",
+                                "offer_",
+                                "boost_",
+                                "feeder",
+                                "superstar",
+                                "slot",
+                            ]
+                        ):
+                            score += 10
+                        # Contains separators typically used in IDs
+                        if "_" in tl or "-" in tl:
+                            score += 15
+                        # Prefer longer token as ID (Event IDs are usually long)
+                        score += min(len(tl), 80) / 2.5
+                        return score
+
+                    best = None
+                    best_score = float("-inf")
+                    for t in candidates:
+                        s = _score_id_like(t)
+                        if s > best_score:
+                            best_score = s
+                            best = t
+
+                    if best:
+                        target_text = best
+                    else:
+                        # Fallback to td[1] then td[0]
+                        try:
+                            target_text = (
+                                chosen_row.locator("td").nth(1).inner_text().strip()
+                            )
+                        except:
+                            target_text = (
+                                chosen_row.locator("td").first.inner_text().strip()
+                            )
+                except Exception:
+                    # Absolute fallback
+                    try:
+                        target_text = (
+                            chosen_row.locator("td").nth(1).inner_text().strip()
+                        )
+                    except:
+                        target_text = (
+                            chosen_row.locator("td").first.inner_text().strip()
+                        )
+
                 print(f"   🎲 Chọn ngẫu nhiên dòng #{idx + 1}: '{target_text}'")
                 self.memory["LAST_SELECTED"] = target_text
             except Exception as e:

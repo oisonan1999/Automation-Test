@@ -3,6 +3,9 @@ AutoGameOps/
 venv/
 .venv/
 __pycache__/
+.sixth/
+.cursor/
+.continue/
 *.pyc
 # ===== NodeJS =====
 node_modules/

@@ -25,6 +25,91 @@ class FormHandlerMixin:
         except:
             pass
 
+        # ============================
+        # SPECIAL: Clamp "Defining Schedules" Start/End Time to RBE restriction
+        # ============================
+        # If the "Defining Schedules" modal is open, the UI may reject CSS schedule
+        # outside the parent RBE schedule range.
+        defining_modal = None
+        defining_modal_visible = False
+        try:
+            defining_modal = (
+                page.locator(".modal.show, .modal.in, .swal2-popup:visible")
+                .filter(has_text=re.compile(r"Defining\s+Schedules", re.IGNORECASE))
+                .last
+            )
+            defining_modal_visible = (
+                defining_modal.count() > 0 and defining_modal.is_visible()
+            )
+        except:
+            defining_modal_visible = False
+
+        if defining_modal_visible and isinstance(data, dict):
+            try:
+                # Find Start/End keys in update_form data
+                start_key = None
+                end_key = None
+                for k in data.keys():
+                    kl = str(k).lower().strip()
+                    if start_key is None and "start time" in kl:
+                        start_key = k
+                    if end_key is None and "end time" in kl:
+                        end_key = k
+
+                if start_key is not None and end_key is not None:
+                    modal_text = defining_modal.inner_text().strip()
+
+                    # Example:
+                    # "CSS schedule is restricted to be within RBE schedule: 2026-04-24 19:00 - 2026-04-27 19:00"
+                    m = re.search(
+                        r"restricted to be within RBE schedule:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{1,2}:[0-9]{2})\s*-\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{1,2}:[0-9]{2})",
+                        modal_text,
+                        re.IGNORECASE,
+                    )
+                    if m:
+                        from datetime import datetime as _dt
+
+                        def _parse_ymd_hm(v):
+                            sv = re.sub(r"[\[\]'\"]", "", str(v)).strip()
+                            return _dt.strptime(sv, "%Y-%m-%d %H:%M")
+
+                        allowed_start = _parse_ymd_hm(m.group(1))
+                        allowed_end = _parse_ymd_hm(m.group(2))
+
+                        provided_start = _parse_ymd_hm(data[start_key])
+                        provided_end = _parse_ymd_hm(data[end_key])
+
+                        # Clamp
+                        clamped_start = provided_start
+                        clamped_end = provided_end
+
+                        if clamped_start < allowed_start:
+                            clamped_start = allowed_start
+                        if clamped_start > allowed_end:
+                            clamped_start = allowed_end
+
+                        if clamped_end < allowed_start:
+                            clamped_end = allowed_start
+                        if clamped_end > allowed_end:
+                            clamped_end = allowed_end
+
+                        if clamped_start > clamped_end:
+                            clamped_end = clamped_start
+
+                        new_start = clamped_start.strftime("%Y-%m-%d %H:%M")
+                        new_end = clamped_end.strftime("%Y-%m-%d %H:%M")
+
+                        if new_start != str(data[start_key]) or new_end != str(
+                            data[end_key]
+                        ):
+                            print(
+                                f"         🔧 [DefiningSchedules] Clamping {start_key}/{end_key} to allowed range: {new_start} - {new_end}"
+                            )
+                        data[start_key] = new_start
+                        data[end_key] = new_end
+            except Exception as _clamp_e:
+                print(f"         ⚠️ [DefiningSchedules] Clamp skipped: {_clamp_e}")
+
         for label, value in data.items():
             print(f"         ↳ Processing '{label}' -> '{value}'")
             try:
@@ -106,7 +191,8 @@ class FormHandlerMixin:
                     datetime_values = None  # will be parsed below
 
                 is_schedule_field = any(
-                    keyword in label.lower() for keyword in ["schedule"]
+                    keyword in label.lower()
+                    for keyword in ["schedule", "start time", "end time"]
                 )
                 is_datetime_value = bool(
                     re.match(r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}", value_str.strip())
@@ -394,7 +480,8 @@ class FormHandlerMixin:
                             inp_id = inp.get_attribute("id") or ""
                             inp_name = inp.get_attribute("name") or ""
 
-                            # Skip nếu là readonly VÀ không phải datepicker
+                            # Skip readonly input nếu không có dấu hiệu datetime picker...
+                            # ...nhưng KHÔNG skip nếu input có vẻ là Start/End của schedule
                             if is_readonly and not any(
                                 kw in inp_class.lower()
                                 for kw in [
@@ -404,10 +491,21 @@ class FormHandlerMixin:
                                     "timepicker",
                                 ]
                             ):
-                                print(
-                                    f"            ⏭️ Skip readonly input: id='{inp_id}', name='{inp_name}'"
+                                combined = (
+                                    inp_id.lower()
+                                    + " "
+                                    + inp_name.lower()
+                                    + " "
+                                    + inp_placeholder.lower()
                                 )
-                                continue
+                                looks_start_end = any(
+                                    x in combined for x in ["start", "end"]
+                                )
+                                if not looks_start_end:
+                                    print(
+                                        f"            ⏭️ Skip readonly input: id='{inp_id}', name='{inp_name}'"
+                                    )
+                                    continue
 
                             # Skip nếu ID/name rõ ràng không phải datetime
                             skip_ids = [
@@ -688,8 +786,9 @@ class FormHandlerMixin:
                         "input.datepicker, input.timepicker"
                     ).all()
                     for inp in fp_inputs:
-                        if inp.is_visible():
-                            datetime_inputs.append(inp)
+                        # Không ép visible: schedule start/end trong modal có thể hidden/readonly
+                        # nhưng vẫn set được qua JS trong _fill_single_datetime_input.
+                        datetime_inputs.append(inp)
 
                     # Priority 2: inputs with datetime-related attributes
                     if not datetime_inputs:
@@ -751,7 +850,7 @@ class FormHandlerMixin:
                     "         🔍 [ScheduleSmart] Strategy 2: Global flatpickr search..."
                 )
                 all_fp = page.locator(
-                    "input.flatpickr-input:visible, input.datetimepicker:visible, input.datepicker:visible"
+                    "input.flatpickr-input, input.datetimepicker, input.datepicker"
                 ).all()
                 for inp in all_fp:
                     inp_id = (inp.get_attribute("id") or "").lower()
@@ -790,6 +889,19 @@ class FormHandlerMixin:
             print(
                 f"         📍 [ScheduleSmart] Found {len(datetime_inputs)} datetime inputs total"
             )
+
+            # 🆕 FIX: Nếu có nhiều values (Start, End) mà chỉ tìm được <2 inputs
+            # (thực tế hay xảy ra với "Schedule in UTC" vì End input có thể nằm
+            # ngoài container label hiện tại hoặc bị hidden/readonly theo timing),
+            # thì fallback sang handler điền multiple datetime fields.
+            if len(values) > 1 and len(datetime_inputs) < len(values):
+                print(
+                    f"         ⚠️ [ScheduleSmart] Not enough datetime inputs "
+                    f"({len(datetime_inputs)}) for {len(values)} values; falling back to "
+                    f"_fill_multiple_datetime_fields('{label_text}')"
+                )
+                if self._fill_multiple_datetime_fields(page, label_text, values):
+                    return True
 
             return self._fill_schedule_datetime_values(page, datetime_inputs, values)
 
@@ -1658,8 +1770,7 @@ class FormHandlerMixin:
                 # Instead, inject JS to monkey-patch XMLHttpRequest & fetch
                 # to capture POST/PUT/PATCH responses directly in the browser.
                 try:
-                    page.evaluate(
-                        """() => {
+                    page.evaluate("""() => {
                         window.__save_network_errors = [];
                         window.__save_network_all = [];
 
@@ -1742,11 +1853,12 @@ class FormHandlerMixin:
                                 return response;
                             });
                         };
-                    }"""
-                    )
+                    }""")
                     print("      🔌 Network interceptor injected (JS-level)")
                 except Exception as inject_err:
-                    print(f"      ⚠️ Failed to inject network interceptor: {inject_err}")
+                    print(
+                        f"      ⚠️ Failed to inject network interceptor: {inject_err}"
+                    )
 
                 target_btn.click(force=True)
                 print("      ✅ Clicked successfully.")
@@ -1790,12 +1902,10 @@ class FormHandlerMixin:
 
                 # Cleanup interceptor
                 try:
-                    page.evaluate(
-                        """() => {
+                    page.evaluate("""() => {
                         delete window.__save_network_errors;
                         delete window.__save_network_all;
-                    }"""
-                    )
+                    }""")
                 except:
                     pass
 
@@ -1914,12 +2024,10 @@ class FormHandlerMixin:
                         time.sleep(0.5)
                 except:
                     try:
-                        page.evaluate(
-                            """
+                        page.evaluate("""
                             const btn = document.querySelector('button.swal2-confirm');
                             if (btn) btn.click();
-                        """
-                        )
+                        """)
                         time.sleep(0.5)
                     except:
                         pass
@@ -2558,9 +2666,9 @@ class FormHandlerMixin:
         scope = self._main_form_scope(page)
         safe = re.compile(rf"^\s*{re.escape(label_text)}\s*$", re.IGNORECASE)
 
-        for label_el in scope.locator("label, span, strong, b, div").filter(
-            has_text=safe
-        ).all():
+        for label_el in (
+            scope.locator("label, span, strong, b, div").filter(has_text=safe).all()
+        ):
             try:
                 if not label_el.is_visible():
                     continue
@@ -2612,10 +2720,32 @@ class FormHandlerMixin:
         print(f"         🔍 Searching for field: '{label_text}'")
 
         # Known field aliases (Versus Tournament Daily Reward tab)
+        # NOTE: IMPORTANT - "Event ID" must NOT map to "EventName".
+        # This was causing the automation to type Event Name when the testcase requests Event ID.
         _field_aliases = {
             "time of reward utc": "start_time_send_daily_reward",
+            "eventname": "EventName",
+            "event name": "EventName",
         }
-        alias = _field_aliases.get(label_text.lower().strip())
+
+        label_key = label_text.lower().strip()
+        # Special handling: Event ID (avoid wrong aliasing)
+        if label_key in ("event id", "eventid"):
+            # Try common casing/underscore variants
+            for cand in [
+                "EventID",
+                "EventId",
+                "eventID",
+                "eventId",
+                "event_id",
+                "eventid",
+            ]:
+                alias_el = page.locator(f"#{cand}, [name='{cand}']").first
+                if alias_el.count() > 0 and alias_el.is_visible():
+                    print(f"         🎯 Field alias '{label_text}' → #{cand}")
+                    return alias_el
+
+        alias = _field_aliases.get(label_key)
         if alias:
             alias_el = page.locator(f"#{alias}, [name='{alias}']").first
             if alias_el.count() > 0 and alias_el.is_visible():
@@ -2655,9 +2785,7 @@ class FormHandlerMixin:
                 tag = (direct_by_id.evaluate("el => el.tagName") or "").lower()
                 href = direct_by_id.get_attribute("href") or ""
                 cls = direct_by_id.get_attribute("class") or ""
-                is_nav_link = tag == "a" and (
-                    "navigate" in cls or href.startswith("#")
-                )
+                is_nav_link = tag == "a" and ("navigate" in cls or href.startswith("#"))
                 if is_nav_link:
                     print(
                         f"         ⚠️ Skip nav link #{label_id_format} "
@@ -2676,9 +2804,7 @@ class FormHandlerMixin:
                 tag = (direct_by_id_hyphen.evaluate("el => el.tagName") or "").lower()
                 href = direct_by_id_hyphen.get_attribute("href") or ""
                 cls = direct_by_id_hyphen.get_attribute("class") or ""
-                is_nav_link = tag == "a" and (
-                    "navigate" in cls or href.startswith("#")
-                )
+                is_nav_link = tag == "a" and ("navigate" in cls or href.startswith("#"))
                 if not is_nav_link:
                     print(
                         f"         🎯 DIRECT MATCH by ID/name (hyphen): '{label_id_hyphen}'"
@@ -4167,8 +4293,7 @@ class FormHandlerMixin:
 
                 # Strategy 1: Dùng flatpickr JS API (el._flatpickr.setDate + dateFormat từ config)
                 try:
-                    result = element.evaluate(
-                        f"""
+                    result = element.evaluate(f"""
                         el => {{
                             if (!el._flatpickr) return 'no_flatpickr';
                             const cfg = el._flatpickr.config;
@@ -4184,8 +4309,7 @@ class FormHandlerMixin:
                             }}
                             return 'flatpickr_api:' + (fmt || 'unknown');
                         }}
-                        """
-                    )
+                        """)
                     if result and result.startswith("flatpickr_api"):
                         time.sleep(0.4)
                         element.evaluate(
@@ -4548,36 +4672,30 @@ class FormHandlerMixin:
                 try:
                     if lib_type == "chosen":
                         # Single JS call: check open state + count options
-                        info = container.evaluate(
-                            """el => {
+                        info = container.evaluate("""el => {
                             const cls = el.className || '';
                             const isOpen = cls.includes('chosen-with-drop');
                             const drop = el.querySelector('.chosen-drop');
                             const count = drop ? drop.querySelectorAll('li.active-result').length : 0;
                             return {isOpen: isOpen, count: count};
-                        }"""
-                        )
+                        }""")
                         if not info.get("isOpen"):
                             print(f"         🔄 Dropdown not open yet, waiting...")
                         visible_count = info.get("count", 0)
                     elif lib_type == "multiselect":
-                        visible_count = page.evaluate(
-                            """() => {
+                        visible_count = page.evaluate("""() => {
                             const opts = document.querySelectorAll('.multiselect__element, .multiselect__option');
                             let c = 0;
                             for (const o of opts) { if (o.offsetParent !== null) c++; }
                             return c;
-                        }"""
-                        )
+                        }""")
                     else:
-                        visible_count = page.evaluate(
-                            """() => {
+                        visible_count = page.evaluate("""() => {
                             const opts = document.querySelectorAll('.select2-results__option');
                             let c = 0;
                             for (const o of opts) { if (o.offsetParent !== null) c++; }
                             return c;
-                        }"""
-                        )
+                        }""")
 
                     if visible_count > 0:
                         print(
@@ -4598,8 +4716,7 @@ class FormHandlerMixin:
                 if lib_type == "select2":
                     try:
                         print(f"         🔧 Trying jQuery select2('open') API...")
-                        page.evaluate(
-                            """
+                        page.evaluate("""
                             () => {
                                 if (typeof jQuery === 'undefined') return;
                                 jQuery('.modal.in select, .modal.show select').each(function() {
@@ -4615,18 +4732,15 @@ class FormHandlerMixin:
                                     }
                                 });
                             }
-                        """
-                        )
+                        """)
                         time.sleep(0.8)
                         # Re-check with JS evaluate
-                        visible_count = page.evaluate(
-                            """() => {
+                        visible_count = page.evaluate("""() => {
                             const opts = document.querySelectorAll('.select2-results__option');
                             let c = 0;
                             for (const o of opts) { if (o.offsetParent !== null) c++; }
                             return c;
-                        }"""
-                        )
+                        }""")
                         if visible_count > 0:
                             options_loaded = True
                             print(
@@ -4776,8 +4890,7 @@ class FormHandlerMixin:
                         select_id = container.get_attribute("id") or ""
                         if select_id and "_chosen" in select_id:
                             original_id = select_id.replace("_chosen", "")
-                            page.evaluate(
-                                f"""() => {{
+                            page.evaluate(f"""() => {{
                                     const sel = document.getElementById('{original_id}');
                                     if (sel) {{
                                         sel.dispatchEvent(new Event('change', {{bubbles: true}}));
@@ -4785,8 +4898,7 @@ class FormHandlerMixin:
                                             jQuery(sel).trigger('change');
                                         }}
                                     }}
-                                }}"""
-                            )
+                                }}""")
                 except Exception as e:
                     print(f"         ⚠️ Change event trigger warning: {e}")
                 page.keyboard.press("Tab")

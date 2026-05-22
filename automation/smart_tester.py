@@ -491,9 +491,7 @@ class SmartTesterMixin:
         if py_type:
             is_pass = py_type == "PASS"
             if py_type == "PASS" and popup_data.get("type") == "FAIL":
-                print(
-                    f"   🔧 Popup reclassified PASS (was JS FAIL): {text[:80]}"
-                )
+                print(f"   🔧 Popup reclassified PASS (was JS FAIL): {text[:80]}")
             return is_pass, text[:100]
         js_type = popup_data.get("type")
         return js_type == "PASS", text[:100]
@@ -753,9 +751,7 @@ class SmartTesterMixin:
                 for i in range(15):  # Check 15 times × 50ms = 750ms
                     popup_data = page.evaluate("window.__popupResult")
                     if popup_data:
-                        is_pass, msg = self._resolve_upload_popup_outcome(
-                            popup_data
-                        )
+                        is_pass, msg = self._resolve_upload_popup_outcome(popup_data)
                         print(
                             f"   🎯 JS caught popup at {int((time.time()-start_check)*1000)}ms: {'PASS' if is_pass else 'FAIL'}"
                         )
@@ -859,8 +855,10 @@ class SmartTesterMixin:
                                         # Try to read text even if not visible
                                         text = modal.inner_text(timeout=500).strip()
                                         if text:
-                                            is_pass, msg = self._resolve_upload_popup_outcome(
-                                                {"type": None, "text": text}
+                                            is_pass, msg = (
+                                                self._resolve_upload_popup_outcome(
+                                                    {"type": None, "text": text}
+                                                )
                                             )
                                             py_type = self._classify_popup_message(text)
                                             if py_type:
@@ -873,7 +871,11 @@ class SmartTesterMixin:
                                                 f"   🎯 Playwright classified: {'PASS' if is_pass else 'FAIL'}"
                                             )
                                             self._ensure_popup_closed(page)
-                                            return (is_pass, msg or text[:100], cached_selector)
+                                            return (
+                                                is_pass,
+                                                msg or text[:100],
+                                                cached_selector,
+                                            )
                                     except Exception as e:
                                         print(
                                             f"   🔍 DEBUG: Modal {idx+1} read error: {e}"
@@ -1136,18 +1138,69 @@ class SmartTesterMixin:
             # Dùng JS tìm và click nút OK/Close/Confirm
             # Cách này mạnh hơn .click() của Playwright vì nó bỏ qua check visibility/overlay
             page.evaluate("""
-                // Try SweetAlert buttons
+                // =============================
+                // 0) Special case: DNU Warning
+                // =============================
+                // Popup ví dụ trong ảnh:
+                // - Title: "DNU Warning"
+                // - Body: "... is currently in the DNU list"
+                // - Button: "OK"
+                try {
+                    const dialogs = Array.from(
+                        document.querySelectorAll(
+                            '.modal.show, .modal.in, [role="dialog"], .swal2-container'
+                        )
+                    );
+                    const dnu = dialogs.find(el => {
+                        const t = (el && el.innerText) ? el.innerText : '';
+                        return /dnu\\s*warning/i.test(t) || /dnu\\s*list/i.test(t);
+                    });
+
+                    if (dnu) {
+                        const okBtn = Array.from(dnu.querySelectorAll('button, a'))
+                            .find(b => {
+                                const txt = (b && b.textContent) ? b.textContent.trim() : '';
+                                return b.offsetParent !== null && /^ok$/i.test(txt);
+                            });
+
+                        if (okBtn) {
+                            okBtn.click();
+                            return;
+                        }
+                        // Fallback: nếu không match đúng text "OK", bấm nút primary gần đó
+                        const fallbackOk = Array.from(dnu.querySelectorAll('button, a'))
+                            .find(b => {
+                                const cls = (b.getAttribute('class') || '').toLowerCase();
+                                const txt = (b && b.textContent) ? b.textContent.trim() : '';
+                                return b.offsetParent !== null && (cls.includes('btn-primary') || /^ok$/i.test(txt));
+                            });
+                        if (fallbackOk) {
+                            fallbackOk.click();
+                            return;
+                        }
+                    }
+                } catch(e) {}
+
+                // =============================
+                // 1) SweetAlert buttons
+                // =============================
                 const confirmBtn = document.querySelector('button.swal2-confirm');
                 const closeBtn = document.querySelector('button.swal2-close');
-                
-                // Try Bootstrap modal buttons
+
+                // =============================
+                // 2) Bootstrap modal buttons
+                // =============================
                 const modalBtn = document.querySelector('.modal.show button[data-dismiss="modal"]');
                 const modalClose = document.querySelector('.modal.show .close');
                 const modalConfirm = document.querySelector('.modal.show button.btn-primary');
-                
-                // Try generic close buttons
-                const genericClose = document.querySelector('.popup button[class*="close"], .dialog button[class*="close"]');
-                
+
+                // =============================
+                // 3) Generic close buttons
+                // =============================
+                const genericClose = document.querySelector(
+                    '.popup button[class*="close"], .dialog button[class*="close"]'
+                );
+
                 // Click first available button (use .offsetParent to check if truly visible)
                 if (confirmBtn && confirmBtn.offsetParent !== null) {
                     confirmBtn.click();
@@ -1689,9 +1742,7 @@ class SmartTesterMixin:
 
                 # Safety net: message says success but classifier returned fail
                 if not success and self._classify_popup_message(msg) == "PASS":
-                    print(
-                        f"      🔧 Upload corrected to PASS from message: {msg[:80]}"
-                    )
+                    print(f"      🔧 Upload corrected to PASS from message: {msg[:80]}")
                     success = True
 
                 if success:

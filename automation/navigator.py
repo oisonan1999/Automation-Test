@@ -164,31 +164,33 @@ class NavigatorMixin:
                 raise Exception(f"Không tìm thấy Menu '{item_name}'")
 
             # --- THAO TÁC ---
-            target_element.scroll_into_view_if_needed()
+            try:
+                target_element.scroll_into_view_if_needed()
+            except Exception as e:
+                # DOM can detach during animations / re-renders; don't fail the whole navigation.
+                print(
+                    f"         ⚠️ scroll_into_view_if_needed failed (detached DOM): {e}"
+                )
             if not is_first_step:
-                time.sleep(0.1)  # Giảm từ 0.5s xuống 0.1s
-
+                time.sleep(0.1)
             target_element.hover(force=True)
-            time.sleep(0.05)  # Giảm từ 0.2s xuống 0.05s
+            time.sleep(0.05)
 
             if not is_last_step:
                 next_item = path_list[i + 1]
 
-                # LOGIC CHÍNH XÁC: Kiểm tra trùng tên TRƯỚC (Highest Priority)
-                # Nếu menu con trùng tên menu cha (Perk -> Perk), LUÔN CLICK để toggle
+                # LOGIC CHÍNH XÁC: Kiểm tra trùng tên TRƯỚC
                 if item_name.lower() == str(next_item).strip().lower():
                     print(
                         f"   🔄 Same-name submenu detected: '{item_name}' -> '{next_item}'. FORCE CLICK."
                     )
                     target_element.click()
-                    time.sleep(0.3)  # Giảm từ 1.0s xuống 0.3s
+                    time.sleep(0.3)
 
-                    # Chờ cho đến khi submenu xuất hiện (tối đa 2s)
                     wait_start = time.time()
                     submenu_found = False
-                    while time.time() - wait_start < 2:  # Giảm từ 3s xuống 2s
+                    while time.time() - wait_start < 2:
                         try:
-                            # Đếm số element visible - phải có ít nhất 2 (cha + con)
                             next_regex = self._safe_compile(next_item)
                             all_matches = page.get_by_text(next_regex, exact=True).all()
                             visible_count = sum(
@@ -202,22 +204,19 @@ class NavigatorMixin:
                                 break
                         except:
                             pass
-                        time.sleep(0.1)  # Giảm từ 0.2s xuống 0.1s
+                        time.sleep(0.1)
 
                     if not submenu_found:
                         print(
                             f"   ⚠️ Warning: Submenu '{next_item}' may not be visible yet."
                         )
                 else:
-                    # Nếu KHÔNG trùng tên, kiểm tra xem menu con đã hiện chưa
                     should_click = True
                     try:
                         next_regex = self._safe_compile(next_item)
-                        # Tìm menu con KHỚP CHÍNH XÁC
                         next_cand = page.get_by_text(next_regex, exact=True).all()
                         for n in next_cand:
                             if n.is_visible():
-                                # Menu con đã mở rồi, không cần click
                                 should_click = False
                                 print(
                                     f"   ℹ️ Submenu '{next_item}' already visible. Skip click."
@@ -228,9 +227,8 @@ class NavigatorMixin:
 
                     if should_click:
                         target_element.click()
-                        time.sleep(0.2)  # Giảm từ 0.5s xuống 0.2s
+                        time.sleep(0.2)
             else:
-                # Bước cuối
                 print(f"   🎯 Click: {item_name}")
                 if target_element.is_visible():
                     target_element.click()
@@ -243,35 +241,20 @@ class NavigatorMixin:
             pass
 
     def _handle_locked_item_popup(self, page):
-        """
-        Xử lý popup Locked Item.
-        Target chính xác vào class .btn-acquire-lock dựa trên HTML.
-        Returns True if popup was handled, False otherwise.
-        """
         try:
             print("      🔍 Checking for Locked Item popup...")
-
-            # Chờ một chút để popup render
             time.sleep(0.5)
 
-            # --- STRATEGY 1: SELECTOR CHÍNH XÁC (Dựa trên ảnh HTML) ---
-            # Tìm nút có class .btn-acquire-lock (thường là thẻ <a>)
             lock_btn = page.locator(".btn-acquire-lock, a.btn-acquire-lock").first
 
-            # Chờ nút xuất hiện với timeout dài hơn (5s)
             try:
                 lock_btn.wait_for(state="visible", timeout=5000)
                 print("      🔒 Detected Locked Item popup (Class match).")
                 print("      🔓 Clicking 'Acquire Lock' button...")
 
-                # Force click để đảm bảo bấm được dù có overlay
                 lock_btn.click(force=True)
 
-                print("      ⏳ Waiting for lock acquisition...")
-
-                # Chờ loading sau khi acquire (thường trang sẽ reload hoặc popup đóng)
                 try:
-                    # Strategy A: Chờ popup biến mất
                     page.locator(".btn-acquire-lock").first.wait_for(
                         state="hidden", timeout=5000
                     )
@@ -280,23 +263,17 @@ class NavigatorMixin:
                     pass
 
                 try:
-                    # Strategy B: Chờ page load
                     page.wait_for_load_state("domcontentloaded", timeout=5000)
                 except:
                     pass
 
-                # Additional buffer để form load xong
                 time.sleep(1.5)
                 print("      ✅ Lock acquired successfully!")
                 return True
             except:
-                # Nút không xuất hiện trong 5s
                 pass
 
-            # --- STRATEGY 2: TÌM POPUP QUA TEXT (Fallback cho các modal kiểu khác) ---
             print("      🔍 Checking for lock popup by text...")
-
-            # Tìm modal/popup chứa text "locked"
             popup_selectors = [
                 ".modal-content",
                 ".modal.show",
@@ -328,7 +305,6 @@ class NavigatorMixin:
                     continue
 
             if popup_found:
-                # Tìm nút bấm chứa text Acquire hoặc Unlock hoặc Kick
                 btn_patterns = [
                     "Acquire Lock",
                     "Acquire",
@@ -360,7 +336,6 @@ class NavigatorMixin:
                     print("      🔓 Clicking lock button...")
                     btn.click(force=True)
 
-                    # Chờ popup đóng
                     try:
                         popup_found.wait_for(state="hidden", timeout=5000)
                         print("      ✅ Lock popup closed")
@@ -378,7 +353,6 @@ class NavigatorMixin:
                 else:
                     print("      ⚠️ Lock popup found but no action button detected")
 
-            # --- STRATEGY 3: Global scan for any visible acquire lock button ---
             print("      🔍 Global scan for acquire lock button...")
             try:
                 global_lock_btn = (
@@ -413,8 +387,7 @@ class NavigatorMixin:
                 pass
 
             print("      ℹ️ No lock popup detected (item is unlocked)")
-            return False  # No popup detected
-
+            return False
         except Exception as e:
             print(f"      ⚠️ Error checking lock popup: {e}")
             return False
@@ -422,20 +395,18 @@ class NavigatorMixin:
     def process_deployment(self, page, options=[]):
         print(f"   🚀 Deploy: {options}")
         try:
-            # Kiểm tra xem đã ở trang Home (Process Blueprints) chưa
             already_home = False
             try:
                 if page.locator("text=Process Blueprints").first.is_visible(
                     timeout=1000
                 ):
                     already_home = True
-                    print(f"      ✅ Already on Home page")
+                    print("      ✅ Already on Home page")
             except:
                 pass
 
-            # Nếu chưa ở Home -> Click logo The Brick để về
             if not already_home:
-                print(f"      🏠 Navigating to Home page...")
+                print("      🏠 Navigating to Home page...")
                 logo = page.locator(".brand-link, .logo, a.navbar-brand").first
                 if not logo.is_visible():
                     logo = page.locator("a").filter(has_text="The Brick").first
@@ -446,27 +417,23 @@ class NavigatorMixin:
 
                 if logo.is_visible():
                     logo.click()
-                    print(f"      ⏳ Waiting for Home page to load (5-10s)...")
-                    time.sleep(7)  # Đợi 7s để trang load hoàn toàn
+                    print("      ⏳ Waiting for Home page to load (5-10s)...")
+                    time.sleep(7)
                     page.wait_for_selector("text=Process Blueprints", timeout=10000)
-                    print(f"      ✅ Navigated to Home page")
+                    print("      ✅ Navigated to Home page")
                 else:
                     raise Exception("Cannot find The Brick logo to navigate home")
 
             time.sleep(0.5)
 
-            # Tick các checkbox options
             for opt in options:
-                # Detect uncheck prefix: "-Excel" means uncheck Excel
                 is_uncheck = opt.startswith("-")
                 opt_name = opt.lstrip("-").strip() if is_uncheck else opt.strip()
                 opt_lower = opt_name.lower()
 
-                # Handle "Toggle All" / "Toogle All" / "Select All" / "Check All"
                 if opt_lower in ("toggle all", "toogle all", "select all", "check all"):
-                    print(f"      🔲 Clicking Toggle All checkbox...")
+                    print("      🔲 Clicking Toggle All checkbox...")
                     try:
-                        # Strategy 1: Find by label text
                         toggle_label = (
                             page.locator("label")
                             .filter(
@@ -489,22 +456,20 @@ class NavigatorMixin:
                                 if is_uncheck:
                                     if toggle_chk.is_checked():
                                         toggle_chk.uncheck()
-                                        print(f"         ✅ Unchecked Toggle All")
+                                        print("         ✅ Unchecked Toggle All")
                                     else:
                                         print(
-                                            f"         ✅ Already unchecked: Toggle All"
+                                            "         ✅ Already unchecked: Toggle All"
                                         )
                                 else:
                                     if not toggle_chk.is_checked():
                                         toggle_chk.check()
-                                        print(f"         ✅ Checked Toggle All")
+                                        print("         ✅ Checked Toggle All")
                                     else:
-                                        print(
-                                            f"         ✅ Already checked: Toggle All"
-                                        )
-                                time.sleep(1)  # Wait for all checkboxes to toggle
+                                        print("         ✅ Already checked: Toggle All")
+                                time.sleep(1)
                                 continue
-                        # Strategy 2: Find any "Toggle All" button/link
+
                         toggle_btn = (
                             page.locator("button, a, span")
                             .filter(
@@ -516,10 +481,10 @@ class NavigatorMixin:
                         )
                         if toggle_btn.is_visible():
                             toggle_btn.click()
-                            print(f"         ✅ Clicked Toggle All button")
+                            print("         ✅ Clicked Toggle All button")
                             time.sleep(1)
                             continue
-                        print(f"         ⚠️ Toggle All not found")
+                        print("         ⚠️ Toggle All not found")
                     except Exception as e:
                         print(f"         ⚠️ Toggle All error: {e}")
                     continue
@@ -529,7 +494,6 @@ class NavigatorMixin:
                 else:
                     print(f"      🔲 Ticking option: '{opt_name}'")
 
-                # Strategy 1: Tìm label chứa text và tick/untick checkbox gần nhất
                 lbl = (
                     page.locator("label")
                     .filter(has_text=re.compile(re.escape(opt_name), re.IGNORECASE))
@@ -557,7 +521,6 @@ class NavigatorMixin:
                     else:
                         print(f"         ⚠️ Checkbox not visible for: '{opt_name}'")
                 else:
-                    # Strategy 2: Tìm text trực tiếp rồi click checkbox bên cạnh
                     try:
                         text_el = page.locator(f"text='{opt_name}'").first
                         if text_el.is_visible():
@@ -583,7 +546,7 @@ class NavigatorMixin:
                                         )
                                     else:
                                         print(
-                                            f"         ✅ Already ticked: '{opt_name}'"
+                                            f"         ✅ Already checked: '{opt_name}'"
                                         )
                             else:
                                 print(
@@ -594,12 +557,11 @@ class NavigatorMixin:
                     except Exception as e:
                         print(f"         ⚠️ Strategy 2 failed for '{opt_name}': {e}")
 
-            # Click nút Process
-            print(f"      🖱 Clicking Process button...")
+            print("      🖱 Clicking Process button...")
             btn = page.locator("button:has-text('Process')").first
             if btn.is_visible():
                 btn.click()
-                print(f"      ✅ Clicked Process button")
+                print("      ✅ Clicked Process button")
                 time.sleep(2)
             else:
                 raise Exception("Process button not found or not visible")
@@ -608,9 +570,6 @@ class NavigatorMixin:
             print(f"   ❌ Process Deployment Error: {e}")
             raise e
 
-    # ==========================================================================
-    # [MỚI] SMART CLICK: CHUYÊN TRỊ SIDEBAR / TABS
-    # ==========================================================================
     def _is_daily_reward_content_loaded(self, page):
         try:
             return (
@@ -623,7 +582,6 @@ class NavigatorMixin:
             return False
 
     def _click_sidebar_nav_by_id(self, page, nav_id, label):
-        """Click sidebar AJAX nav (e.g. a#daily_reward under Division Configuration)."""
         selectors = [
             f"aside a#{nav_id}",
             f".sidebar a#{nav_id}",
@@ -649,7 +607,398 @@ class NavigatorMixin:
         target_clean = target_text.strip()
         clicked = False
 
-        # 0. Known sidebar sub-nav items (Versus Tournament)
+        # Special reliable retry for "Add Event" (often appears after selecting a tab)
+        try:
+            if "add event" in target_clean.lower():
+                # Primary + fallback patterns (UI may render "Add" and "Event" with extra spacing/newlines)
+                add_event_re = re.compile(r"Add\s*Event", re.IGNORECASE)
+                add_event_re_fallback = re.compile(
+                    r"(Add.*Event|Event.*Add)", re.IGNORECASE
+                )
+
+                # Search in likely active contexts first, then global.
+                add_event_containers = [
+                    ".modal.show",
+                    ".modal.in",
+                    "[role='dialog']:visible",
+                    ".swal2-popup:visible",
+                    ".tab-pane.active",
+                    ".tab-content .active",
+                    "main",
+                    "body",
+                ]
+
+                # Retry loop (UI may render after animation / load)
+                for _ in range(16):
+                    try:
+                        # 1) Context-aware candidates
+                        for csel in add_event_containers:
+                            container = page.locator(csel).first
+                            if container.count() == 0 or not container.is_visible():
+                                continue
+
+                            candidates = container.locator(
+                                "button, a, div[role='button'], span[role='button'], li"
+                            ).filter(has_text=add_event_re)
+
+                            if candidates.count() > 0:
+                                for i in range(min(candidates.count(), 8)):
+                                    cand = candidates.nth(i)
+                                    if cand.is_visible():
+                                        print(
+                                            "         🔁 Retry-click 'Add Event' (active container candidates)"
+                                        )
+                                        cand.scroll_into_view_if_needed()
+                                        time.sleep(0.2)
+                                        cand.click(force=True)
+                                        self._wait_for_long_loading(page)
+                                        return True
+
+                        # 2) Global candidates fallback (text + aria/title heuristics)
+                        # Some UIs render "Add Event" as icon-only button with aria-label/title,
+                        # so we also try a JS-based click by (add && event) tokens.
+                        try:
+                            js_clicked = page.evaluate("""
+() => {
+  const els = Array.from(
+    document.querySelectorAll("button, a, [role='button'], li")
+  );
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const tokenOk = (text) => {
+    const t = (text || "").toLowerCase();
+    return t.includes("add") && t.includes("event");
+  };
+
+  for (const el of els) {
+    try {
+      const t =
+        (el.innerText || "") +
+        " " +
+        (el.getAttribute("aria-label") || "") +
+        " " +
+        (el.getAttribute("title") || "");
+      if (tokenOk(t) && visible(el)) {
+        el.click();
+        return true;
+      }
+    } catch (e) {}
+  }
+  return false;
+}
+""")
+                            if js_clicked:
+                                print(
+                                    "         🔁 Retry-click 'Add Event' (JS add+event heuristic)"
+                                )
+                                self._wait_for_long_loading(page)
+                                return True
+                        except:
+                            pass
+
+                        global_candidates = page.locator(
+                            "button, a, div[role='button'], span[role='button'], li"
+                        ).filter(has_text=add_event_re)
+                        if global_candidates.count() > 0:
+                            for i in range(min(global_candidates.count(), 6)):
+                                cand = global_candidates.nth(i)
+                                if cand.is_visible():
+                                    print(
+                                        "         🔁 Retry-click 'Add Event' (global fallback)"
+                                    )
+                                    cand.scroll_into_view_if_needed()
+                                    time.sleep(0.2)
+                                    cand.click(force=True)
+                                    self._wait_for_long_loading(page)
+                                    return True
+                    except:
+                        pass
+
+                    # 3) Final JS sweep (whole page, split text / icon-only / aria-label cases)
+                    # Click the first visible element whose normalized text/aria/title contains BOTH "add" and "event".
+                    try:
+                        js_clicked2 = page.evaluate("""
+() => {
+  const tokens = ["add", "event"];
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const normalize = (s) => (s || "").toString().toLowerCase().replace(/\\s+/g," ").trim();
+
+  const els = Array.from(document.querySelectorAll("*"));
+  for (const el of els) {
+    try {
+      if (!visible(el)) continue;
+      const txt =
+        normalize(el.innerText) + " " +
+        normalize(el.getAttribute("aria-label")) + " " +
+        normalize(el.getAttribute("title"));
+      const ok = tokens.every(t => txt.includes(t));
+      if (ok) {
+        el.click();
+        return true;
+      }
+    } catch (e) {}
+  }
+  return false;
+}
+""")
+                        if js_clicked2:
+                            print("         🔁 Retry-click 'Add Event' (final JS sweep add+event)")
+                            self._wait_for_long_loading(page)
+                            return True
+                    except Exception:
+                        pass
+
+                    time.sleep(0.4)
+        except:
+            pass
+
+        # RBE UI: "Contest Superstars" thường nằm trong accordion "Wrapper".
+        # Nếu accordion đang collapsed thì phần tử bị ẩn và smart_click không tìm thấy.
+        # Try-expand một lần để đảm bảo target có thể visible trước khi click.
+        try:
+            t = target_clean.lower()
+            if t in ("contest superstars", "feeder event") or "contest superstars" in t:
+                wrapper_candidates = page.locator(
+                    "aside a, #sidebar a, .sidebar a, #left-menu a, "
+                    "aside div, #sidebar div, .sidebar div, #left-menu div, "
+                    "aside span, #sidebar span, .sidebar span, #left-menu span, "
+                    "#left-menu, .sidebar"
+                ).filter(has_text=re.compile(r"\bWrapper\b", re.IGNORECASE))
+
+                # Prefer the most "clickable" candidate first
+                wrapper_toggle = wrapper_candidates.first
+                if wrapper_toggle.count() > 0 and wrapper_toggle.is_visible():
+                    print("         🔽 Pre-expand: 'Wrapper' accordion")
+                    wrapper_toggle.click(force=True)
+                    time.sleep(1.2)
+
+                # Secondary fallback: explicitly click any visible "Wrapper" text node
+                if not wrapper_toggle.is_visible():
+                    wrapper_text = page.locator("text=Wrapper").first
+                    if wrapper_text.count() > 0 and wrapper_text.is_visible():
+                        print("         🔽 Pre-expand fallback: click 'Wrapper' text")
+                        wrapper_text.click(force=True)
+                        time.sleep(1.2)
+
+                # Targeted DOM search inside Wrapper/sidebar region (more reliable than generic sidebar scan)
+                clicked_inside = False
+                try:
+                    # Be flexible: UI text can include line breaks/spaces, so don't anchor to full-string match.
+                    contest_re = re.compile(r"Contest\s*Superstars", re.IGNORECASE)
+                    targeted = (
+                        page.locator(".sidebar, #left-menu, aside")
+                        .locator(
+                            "a, button, li, span, div[role='button'], div.menu-item"
+                        )
+                        .filter(has_text=contest_re)
+                    )
+
+                    if targeted.count() > 0:
+                        # Click first visible match
+                        for i in range(min(targeted.count(), 5)):
+                            cand = targeted.nth(i)
+                            if cand.is_visible():
+                                print(
+                                    "         🎯 Targeted click: 'Contest Superstars' (inside Wrapper/sidebar)"
+                                )
+                                cand.scroll_into_view_if_needed()
+                                time.sleep(0.2)
+                                cand.click(force=True)
+                                self._wait_for_long_loading(page)
+                                return True
+                    clicked_inside = targeted.count() > 0
+                except Exception as _tgt_e:
+                    print(
+                        f"         ⚠️ Targeted 'Contest Superstars' click failed: {_tgt_e}"
+                    )
+
+                # Text-based fallback across the whole page (handles cases outside sidebar selectors).
+                try:
+                    text_candidates = page.get_by_text(contest_re).all()
+                    visible_text_candidates = [
+                        c for c in text_candidates if c.is_visible()
+                    ]
+                    if visible_text_candidates:
+                        for i in range(min(len(visible_text_candidates), 6)):
+                            cand = visible_text_candidates[i]
+                            print(
+                                "         🎯 Text-global fallback click: 'Contest Superstars'"
+                            )
+                            cand.scroll_into_view_if_needed()
+                            time.sleep(0.2)
+                            cand.click(force=True)
+                            self._wait_for_long_loading(page)
+                            return True
+                except Exception:
+                    pass
+
+                # Extra fallback: sometimes it’s rendered outside sidebar (still as a button/link).
+                # Search globally for visible elements containing "Contest Superstars".
+                try:
+                    contest_re = re.compile(r"Contest\s*Superstars", re.IGNORECASE)
+                    global_candidates = (
+                        page.locator(
+                            "main, section, [role='main'], .container, aside, body"
+                        )
+                        .locator(
+                            "a, button, li, span, div[role='button'], div.menu-item"
+                        )
+                        .filter(has_text=contest_re)
+                    )
+
+                    if global_candidates.count() > 0:
+                        for i in range(min(global_candidates.count(), 8)):
+                            cand = global_candidates.nth(i)
+                            if cand.is_visible():
+                                print(
+                                    "         🎯 Global fallback click: 'Contest Superstars'"
+                                )
+                                cand.scroll_into_view_if_needed()
+                                time.sleep(0.2)
+                                cand.click(force=True)
+                                self._wait_for_long_loading(page)
+                                return True
+                except Exception as _g_e:
+                    if not clicked_inside:
+                        print(
+                            f"         ⚠️ Global fallback for 'Contest Superstars' failed: {_g_e}"
+                        )
+
+                # JS-based heuristic fallback (handles aria-label/title-only / split text nodes)
+                try:
+                    js_clicked = page.evaluate("""
+() => {
+  const tokens = ["contest", "superstars"];
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+
+  const els = Array.from(
+    document.querySelectorAll("a, button, [role='button'], li, span, div")
+  );
+
+  const normalize = (s) => (s || "").toString().toLowerCase().replace(/\\s+/g," ").trim();
+
+  for (const el of els) {
+    try {
+      if (!visible(el)) continue;
+      const txt =
+        normalize(el.innerText) + " " +
+        normalize(el.getAttribute("aria-label")) + " " +
+        normalize(el.getAttribute("title"));
+      const ok = tokens.every(t => txt.includes(t));
+      if (ok) {
+        el.click();
+        return true;
+      }
+    } catch (e) {}
+  }
+  return false;
+}
+""")
+                    if js_clicked:
+                        print("         🔁 JS heuristic click: 'Contest Superstars'")
+                        self._wait_for_long_loading(page)
+                        return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Dropdown option click (select2/chosen/bootstrap/listbox/etc.)
+        # Important: PVP/Classic/Fightcard... thường là option nằm trong overlay dropdown,
+        # không nằm ở sidebar/tab nên phải ưu tiên tìm trong các container dropdown đang visible.
+        try:
+            dropdown_option_selectors = [
+                ".select2-results__option",
+                ".select2-results__option[role='option']",
+                ".chosen-results li",
+                ".dropdown-menu.show a",
+                ".dropdown-menu.show li",
+                ".dropdown-menu.show button",
+                "[role='listbox'] [role='option']",
+                "[role='listbox'] li",
+                "[role='listbox'] div",
+                "ul[role='listbox'] li",
+                ".ui-autocomplete .ui-menu-item-wrapper",
+                ".mat-select-panel .mat-option",
+                ".rc-virtual-list .rc-virtual-list-holder-inner div",
+            ]
+
+            opt_text = target_clean.strip()
+            if opt_text:
+                opt_regex = re.compile(
+                    r"^\s*" + re.escape(opt_text) + r"\s*$", re.IGNORECASE
+                )
+
+                for sel in dropdown_option_selectors:
+                    candidates = page.locator(sel).filter(has_text=opt_regex).all()
+                    # Only click visible ones
+                    visible_candidates = [c for c in candidates if c.is_visible()]
+                    if visible_candidates:
+                        for cand in visible_candidates[:10]:
+                            try:
+                                print(
+                                    f"         🎯 Dropdown option click: '{target_clean}'"
+                                )
+                                cand.scroll_into_view_if_needed()
+                                time.sleep(0.2)
+                                cand.click(force=True)
+                                self._wait_for_long_loading(page)
+                                return True
+                            except Exception:
+                                continue
+        except Exception:
+            pass
+
+        # Special deeper search for "Add Event" which often appears in the active panel/modal
+        try:
+            if "add event" in target_clean.lower():
+                containers = [
+                    ".modal.show",
+                    ".modal.in",
+                    "[role='dialog']:visible",
+                    ".swal2-popup:visible",
+                    ".tab-pane.active",
+                    ".tab-content .active",
+                    "section:has(.active)",
+                    "main",
+                    "body",
+                ]
+
+                opt_regex = re.compile(r"^\s*Add\s*Event\s*$", re.IGNORECASE)
+                for csel in containers:
+                    container = page.locator(csel).first
+                    if container.count() == 0:
+                        continue
+                    if not container.is_visible():
+                        continue
+
+                    cand = (
+                        container.locator(
+                            "button, a, div[role='button'], span[role='button'], li"
+                        )
+                        .filter(has_text=opt_regex)
+                        .first
+                    )
+                    if cand.count() > 0 and cand.is_visible():
+                        print(
+                            "         🎯 Special 'Add Event' click (active modal/panel)"
+                        )
+                        cand.scroll_into_view_if_needed()
+                        time.sleep(0.2)
+                        cand.click(force=True)
+                        self._wait_for_long_loading(page)
+                        return True
+        except Exception:
+            pass
+
         _nav_map = {
             "daily reward": "daily_reward",
             "division configuration": "division_configuration",
@@ -673,7 +1022,6 @@ class NavigatorMixin:
                 else:
                     time.sleep(0.8)
 
-        # 1. SIDEBAR (Ưu tiên số 1)
         if clicked:
             self._wait_for_long_loading(page)
             return clicked
@@ -701,11 +1049,9 @@ class NavigatorMixin:
                         .filter(
                             has_text=re.compile(re.escape(target_clean), re.IGNORECASE)
                         )
-                        .first  # smallest/first match instead of last to avoid wide containers
+                        .first
                     )
                     if item.count() > 0 and item.is_visible():
-                        # Make sure we're clicking a leaf-level element, not a giant container
-                        # If bounding box is very tall (>120px), likely a container — skip
                         try:
                             bbox = item.bounding_box()
                             if bbox and bbox["height"] > 120:
@@ -721,7 +1067,6 @@ class NavigatorMixin:
             except:
                 continue
 
-        # 2. TABS
         if not clicked:
             try:
                 tab = (
@@ -740,22 +1085,16 @@ class NavigatorMixin:
             except:
                 pass
 
-        # 2.5: CONTENT PANEL / SORTABLE LIST ITEMS
-        # Handles items in Store Preview sections, offer lists, etc.
-        # e.g. "Section_Drip_Offers (2147483647)" matched by target "Section_Drip_Offers"
         if not clicked:
             panel_selectors = [
-                # Most specific first — app-specific store sidebar buttons
                 "button[class*='store-sidebar']",
                 "button[class*='sidebar-item']",
                 "button[class*='panel-item']",
-                # Generic sortable/draggable lists
                 ".list-group-item",
                 "li[class*='item']",
                 "li[class*='section']",
                 ".row-item",
                 ".section-item",
-                # Broad fallbacks — skip if bounding box is a giant container
                 "div[class*='sort']",
                 "div[class*='item']",
                 "div[class*='draggable']",
@@ -770,7 +1109,6 @@ class NavigatorMixin:
                         .first
                     )
                     if item.count() > 0 and item.is_visible():
-                        # Skip containers that are too tall (likely wrapping many items)
                         try:
                             bbox = item.bounding_box()
                             if bbox and bbox["height"] > 120:
@@ -789,8 +1127,6 @@ class NavigatorMixin:
                 except:
                     continue
 
-        # 3. CHECK IF ALREADY ACTIVE
-        # Element có thể đã được click rồi (class active/selected)
         if not clicked:
             try:
                 active_items = (
@@ -803,7 +1139,6 @@ class NavigatorMixin:
                     if item.is_visible():
                         item_text = item.inner_text().strip()
                         if target_clean.lower() in item_text.lower():
-                            # Daily Reward: nav có thể active nhưng panel vẫn là Division Config
                             if target_clean.lower() == "daily reward":
                                 if self._is_daily_reward_content_loaded(page):
                                     print(
@@ -828,17 +1163,71 @@ class NavigatorMixin:
             except:
                 pass
 
-        # 4. GENERIC TEXT (Multiple strategies)
         if not clicked:
-            print(f"         ⚠️ Sidebar/Tab not found. Trying generic text match...")
+            # Dialog/modal thường chứa nút "Add Event" sau khi chọn tab/menu
+            try:
+                dialog_selectors = [
+                    ".modal.show",
+                    ".modal.in",
+                    ".swal2-popup:visible",
+                    "[role='dialog']:visible",
+                    ".ui-dialog:visible",
+                ]
+                for ds in dialog_selectors:
+                    dialogs = page.locator(ds)
+                    if dialogs.count() > 0:
+                        btn_dialog = dialogs.first.locator(
+                            "button, a, div[role='button'], span[role='button'], li"
+                        ).filter(
+                            has_text=re.compile(
+                                rf"^\s*{re.escape(target_clean)}\s*$",
+                                re.IGNORECASE,
+                            )
+                        )
+                        if btn_dialog.count() > 0:
+                            for i in range(min(btn_dialog.count(), 5)):
+                                cand = btn_dialog.nth(i)
+                                if cand.is_visible():
+                                    print(f"         🎯 Dialog click: '{target_text}'")
+                                    cand.scroll_into_view_if_needed()
+                                    time.sleep(0.2)
+                                    cand.click(force=True)
+                                    self._wait_for_long_loading(page)
+                                    return True
 
-            # Strategy A: Exact match with buttons/links
+                        # Partial match (e.g. "Add Event" text wraps)
+                        btn_dialog2 = dialogs.first.locator(
+                            "button, a, div[role='button'], span[role='button'], li"
+                        ).filter(
+                            has_text=re.compile(
+                                re.escape(target_clean),
+                                re.IGNORECASE,
+                            )
+                        )
+                        if btn_dialog2.count() > 0:
+                            for i in range(min(btn_dialog2.count(), 5)):
+                                cand = btn_dialog2.nth(i)
+                                if cand.is_visible():
+                                    print(
+                                        f"         🎯 Dialog partial click: '{target_text}'"
+                                    )
+                                    cand.scroll_into_view_if_needed()
+                                    time.sleep(0.2)
+                                    cand.click(force=True)
+                                    self._wait_for_long_loading(page)
+                                    return True
+            except:
+                pass
+
+            print("         ⚠️ Sidebar/Tab not found. Trying generic text match...")
+
             try:
                 element = (
-                    page.locator(f"button, a, div[role='button'], span[role='button']")
+                    page.locator("button, a, div[role='button'], span[role='button']")
                     .filter(
                         has_text=re.compile(
-                            f"^\\s*{re.escape(target_clean)}\\s*$", re.IGNORECASE
+                            re.escape(target_clean).replace(r"\ ", r"\s+"),
+                            re.IGNORECASE,
                         )
                     )
                     .first
@@ -851,12 +1240,11 @@ class NavigatorMixin:
             except:
                 pass
 
-            # Strategy B: Contains match (broader)
             if not clicked:
                 try:
                     element = (
                         page.locator(
-                            f"button, a, div[role='button'], span[role='button'], li, div.menu-item"
+                            "button, a, div[role='button'], span[role='button'], li, div.menu-item"
                         )
                         .filter(
                             has_text=re.compile(re.escape(target_clean), re.IGNORECASE)
@@ -871,7 +1259,6 @@ class NavigatorMixin:
                 except:
                     pass
 
-            # Strategy C: Playwright's text= selector (most lenient)
             if not clicked:
                 try:
                     element = page.locator(f"text={target_clean}").first
@@ -883,8 +1270,6 @@ class NavigatorMixin:
                 except:
                     pass
 
-            # Strategy D: Broad div/li/span partial match (last resort for exotic panels)
-            # Catches elements like "Section_Drip_Offers (2147483647)" when target is "Section_Drip_Offers"
             if not clicked:
                 try:
                     candidates = (
@@ -896,7 +1281,6 @@ class NavigatorMixin:
                     )
                     visible = [el for el in candidates if el.is_visible()]
                     if visible:
-                        # Pick the element whose text is shortest (most specific / closest match)
                         best = min(visible, key=lambda el: len(el.inner_text().strip()))
                         text_preview = best.inner_text().strip()[:80]
                         if target_clean.lower() in text_preview.lower():
@@ -911,88 +1295,36 @@ class NavigatorMixin:
                     pass
 
         if clicked:
-            # Gọi hàm chờ loading được update bên dưới
             self._wait_for_long_loading(page)
             return True
 
-        # [FIX] KHÔNG CRASH - Log error và return False
         print(f"         ❌ FAILED: Cannot find clickable element '{target_text}'")
-        print(f"         💡 Possible reasons:")
-        print(
-            f"            - Element not loaded yet (try adding wait/delay before this step)"
-        )
-        print(f"            - Element text might be different (check page source)")
-        print(f"            - Element might be in iframe/shadow DOM")
-
-        # Debug: In ra các elements có text tương tự
-        try:
-            print(f"         🔍 Looking for similar elements...")
-            similar = (
-                page.locator("a, button, div[role='button'], li, span")
-                .filter(
-                    has_text=re.compile(
-                        (
-                            target_clean.split()[0]
-                            if target_clean.split()
-                            else target_clean
-                        ),
-                        re.IGNORECASE,
-                    )
-                )
-                .all()[:5]
-            )
-
-            if similar:
-                print(f"         📋 Found {len(similar)} similar elements:")
-                for el in similar:
-                    if el.is_visible():
-                        try:
-                            text = el.inner_text().strip()[:60]
-                            print(f"            - '{text}'")
-                        except:
-                            pass
-        except:
-            pass
-
         return False
 
     def _wait_for_long_loading(self, page):
-        """
-        Đợi bánh răng xoay (Gear/Spinner) hoặc cursor: progress trên body.
-        Chiến thuật: Chủ động đợi selector xuất hiện (Wait for attached/visible).
-        """
         print("         ⏳ Checking for Loaders/Spinners...")
 
-        # Danh sách selector loading
         spinner_selectors = [
-            # Body cursor: progress (set bởi app khi đang load - thấy trong DevTools)
             "body[style*='cursor: progress']",
             "body[style*='cursor:progress']",
-            # Font Awesome spin icons
             "i.fa.fa-cog.fa-spin",
             "i.fa-cog.fa-spin",
             ".fa-spin",
-            # Bootstrap spinners
             ".spinner-border",
             ".spinner-grow",
-            # React / generic spinners
             "[role='status']",
             "[class*='loading']",
             "[class*='spinner']",
             "[class*='loader']",
-            # Các class thường gặp
             ".loading",
             ".spinner",
             ".loader",
-            # SweetAlert / BlockUI
             ".swal2-loading",
             ".blockUI",
-            # Text Loading
             "div:has-text('Loading')",
         ]
 
         def _any_spinner_visible():
-            """Check nhanh nếu có bất kỳ spinner nào đang visible."""
             for sel in spinner_selectors:
                 try:
                     if page.locator(sel).first.is_visible(timeout=150):
@@ -1003,45 +1335,53 @@ class NavigatorMixin:
 
         active_spinner = None
 
-        # GIAI ĐOẠN 1: PHỤC KÍCH (Ambush)
-        # Poll nhiều lần trong 4s để bắt spinner khi nó render ra
-        for attempt in range(8):
+        for _ in range(8):
             active_spinner = _any_spinner_visible()
             if active_spinner:
                 break
             time.sleep(0.5)
 
-        # GIAI ĐOẠN 2: CHỜ BIẾN MẤT (Wait for Hidden)
         if active_spinner:
             print(
                 f"         🔄 Spinner DETECTED: '{active_spinner}'. Waiting for it to finish..."
             )
             try:
-                # Chờ tối đa 30s để spinner biến mất
+                # Spinner heuristics: avoid hard-stalling on generic loader overlays
+                # (e.g. pages that keep an always-on .loader / [class*='loader'] element).
+                spinner_str = str(active_spinner)
+                if "has-text('Loading')" in spinner_str:
+                    wait_timeout = 7000
+                elif (
+                    "class*='loader'" in spinner_str
+                    or "'.loader'" in spinner_str
+                    or ".loader" in spinner_str
+                ):
+                    # Generic loader: treat as likely false positive
+                    wait_timeout = 1500
+                else:
+                    wait_timeout = 5000
+
                 page.locator(active_spinner).first.wait_for(
-                    state="hidden", timeout=30000
+                    state="hidden", timeout=wait_timeout
                 )
                 print("         ✅ Spinner finished (Main content loaded).")
             except Exception:
                 print(
-                    "         ⚠️ Spinner wait timed out (It might be stuck or hidden differently)."
+                    "         ℹ️ Spinner wait timed out (possible false positive). Continuing execution."
                 )
         else:
             print(
                 "         ℹ️ No spinner detected immediately. Waiting for network idle just in case."
             )
 
-        # GIAI ĐOẠN 3: NETWORK IDLE (Chốt chặn)
         try:
             page.wait_for_load_state("networkidle", timeout=5000)
         except Exception:
             pass
 
-        # Nghỉ thêm 1s an toàn
         time.sleep(1.0)
 
     def _is_sidebar_item(self, page, text):
-        """Helper check sidebar"""
         try:
             sidebar_selectors = [
                 ".sidebar",

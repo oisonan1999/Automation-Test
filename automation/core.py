@@ -29,6 +29,35 @@ class BrickAutomation(
             os.makedirs(DOWNLOAD_DIR)
         self.memory = {}  # Trí nhớ ngắn hạn cho robot
 
+    def close_popup(self, page):
+        """
+        Override popup closer so Smoke path (core.py) also auto-dismisses
+        blocking modals like "DNU Warning".
+        Uses SmartTesterMixin._ensure_popup_closed when available.
+        """
+        try:
+            ensure_fn = getattr(self, "_ensure_popup_closed", None)
+            if callable(ensure_fn):
+                ensure_fn(page)
+                return
+        except Exception:
+            pass
+
+        # Fallback minimal close
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+
+        try:
+            btn = page.locator(
+                "button:has-text('OK'), button:has-text('Close'), button:has-text('Confirm')"
+            ).first
+            if btn.is_visible():
+                btn.click(force=True)
+        except Exception:
+            pass
+
     def get_existing_page(self, p):
         try:
             # Kết nối vào trình duyệt Chrome đang mở sẵn qua cổng Debug
@@ -226,7 +255,25 @@ class BrickAutomation(
                                 nav_data = ast.literal_eval(nav_data)
                             except:
                                 pass
-                        self.smart_navigate(page, nav_data)
+                        try:
+                            self.smart_navigate(page, nav_data)
+                            report_logs.append(
+                                {
+                                    "step": "Navigate",
+                                    "status": "UNKNOWN",
+                                    "details": str(nav_data)[:200],
+                                }
+                            )
+                        except Exception as e:
+                            report_logs.append(
+                                {
+                                    "step": "Navigate",
+                                    "status": "FAIL",
+                                    "details": f"{str(e)[:200]}",
+                                }
+                            )
+                            # Stop this case so smoke classification is accurate
+                            break
                     elif act == "checkbox":
                         val_lower = val.lower().strip()
 
@@ -337,7 +384,7 @@ class BrickAutomation(
                             }
                         )
                     elif act == "save_form":
-                        mode = step.get("mode", "continue")
+                        mode = step.get("mode", "save")
                         save_result = self._save_form(page, mode=mode)
                         if isinstance(save_result, str) and save_result.startswith(
                             "Error:"
@@ -387,14 +434,40 @@ class BrickAutomation(
                                         btn.click()
                                     else:
                                         btn.evaluate("el=>el.click()")
-                                dl.value.save_as(os.path.join(DOWNLOAD_DIR, val))
-                                report_logs.append(
-                                    {
-                                        "step": "Download",
-                                        "status": "PASS",
-                                        "details": val,
-                                    }
-                                )
+                                # IMPORTANT: Some UI actions (esp. Import CSV) may trigger temp downloads
+                                # like "*_imported.csv" and "*_report_*.csv". We must NOT persist them
+                                # into DOWNLOAD_DIR, otherwise user sees "imported/report" artifacts.
+                                filename_lower = str(val or "").lower()
+                                tgt_lower = str(tgt or "").lower()
+
+                                is_temp_artifact = any(
+                                    kw in filename_lower
+                                    for kw in [
+                                        "_imported",
+                                        "imported",
+                                        "_report",
+                                        "report_",
+                                    ]
+                                ) or any(kw in tgt_lower for kw in ["import", "report"])
+
+                                if is_temp_artifact:
+                                    report_logs.append(
+                                        {
+                                            "step": "Download",
+                                            "status": "SKIP",
+                                            "details": f"Discarded temp download: {val}",
+                                        }
+                                    )
+                                    # Do not save_as into DOWNLOAD_DIR
+                                else:
+                                    dl.value.save_as(os.path.join(DOWNLOAD_DIR, val))
+                                    report_logs.append(
+                                        {
+                                            "step": "Download",
+                                            "status": "PASS",
+                                            "details": val,
+                                        }
+                                    )
                             else:
                                 report_logs.append(
                                     {

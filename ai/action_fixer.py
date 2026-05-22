@@ -124,7 +124,7 @@ NAVIGATION_PATH_MAP = {
     # Cash Contract
     "cash contract": ["Live Events", "Cash Contract", "Cash Contract"],
     # RBE
-    "rbe": ["Live Events", "RBE", "RBE"],
+    "rbe": ["Live Events", "RBE"],
     # Faction Lockbox
     "faction lockbox": ["Live Events", "Faction Lockbox", "Faction Lockbox"],
     # Faction Boss
