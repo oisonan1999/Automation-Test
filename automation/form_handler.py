@@ -9,6 +9,30 @@ from playwright.sync_api import Page
 class FormHandlerMixin:
     """Chứa logic tương tác với Form: điền form, dropdown, radio, datetime, save"""
 
+    def _safe_press_escape(self, page):
+        """
+        Press Escape để đóng picker/modal nhỏ.
+        Nhưng KHÔNG bấm Escape nếu modal "Defining Schedules" đang mở,
+        vì nút "Close" trong modal đó chính là Save/confirm sau khi điền End time.
+        """
+        try:
+            modal = (
+                page.locator(".modal.show, .modal.in, .swal2-popup:visible")
+                .filter(has_text=re.compile(r"Defining\s+Schedules", re.IGNORECASE))
+                .last
+            )
+            if modal.count() > 0 and modal.is_visible():
+                print("         ⏭️ Defining Schedules modal is open; skipping Escape.")
+                return False
+        except Exception:
+            pass
+
+        try:
+            page.keyboard.press("Escape")
+            return True
+        except Exception:
+            return False
+
     # ============================
     # SMART FORM FILLER (FULL FEATURES)
     # ============================
@@ -113,6 +137,7 @@ class FormHandlerMixin:
         for label, value in data.items():
             print(f"         ↳ Processing '{label}' -> '{value}'")
             try:
+                label_lower = str(label).lower().strip()
                 value_lower = str(value).lower().strip()
 
                 # Boolean / toggle on main form (not sidebar nav links like #daily_reward)
@@ -258,7 +283,30 @@ class FormHandlerMixin:
                         continue
 
                 # ========================================
-                # SPECIAL CASE 3: EARLY INLINE EDIT DETECTION
+                # SPECIAL CASE 3: "Enter Superstars or Groups" (Select2 multiselect)
+                # Bắt buộc phải handle theo placeholder vì label/input thường không có
+                # <label> visible để _find_input_element() map đúng.
+                # ========================================
+                if (
+                    "superstars or groups" in label_lower
+                    or label_lower.strip() == "superstars or groups"
+                ):
+                    try:
+                        if self._try_set_select2_multiselect_by_placeholder(
+                            page,
+                            placeholder="Enter Superstars or Groups",
+                            value=str(value),
+                        ):
+                            print(
+                                f"         ✅ Set 'Superstars or Groups' via select2 multiselect"
+                            )
+                            time.sleep(2)
+                            continue
+                    except Exception as _sel2_e:
+                        print(f"         ⚠️ Select2 multiselect set failed: {_sel2_e}")
+
+                # ========================================
+                # SPECIAL CASE 4: EARLY INLINE EDIT DETECTION
                 # Trước khi tìm element thông thường, kiểm tra xem field có phải dạng
                 # inline-edit (có nút Edit) không. VD: Lock Time Offset, Buffer Time,
                 # Post Event Duration, Player-Base Gathering Time
@@ -617,7 +665,7 @@ class FormHandlerMixin:
                                 pass
                             # Click elsewhere to close picker
                             try:
-                                page.keyboard.press("Escape")
+                                self._safe_press_escape(page)
                             except:
                                 pass
                             time.sleep(0.2)
@@ -1532,7 +1580,18 @@ class FormHandlerMixin:
             except:
                 pass
             try:
-                page.keyboard.press("Escape")
+                _def_modal = (
+                    page.locator(".modal.show, .modal.in, .swal2-popup:visible")
+                    .filter(has_text=re.compile(r"Defining\s+Schedules", re.IGNORECASE))
+                    .last
+                )
+                _is_def_open = _def_modal.count() > 0 and _def_modal.is_visible()
+                if not _is_def_open:
+                    self._safe_press_escape(page)
+                else:
+                    print(
+                        "         ⏭️ Defining Schedules modal is open; skipping Escape to keep it for End Time entry."
+                    )
             except:
                 pass
             time.sleep(0.2)
@@ -2187,9 +2246,87 @@ class FormHandlerMixin:
 
         return None
 
+    def _dismiss_are_you_sure_confirmations(self, page):
+        """
+        Auto-dismiss blocking confirmation dialogs like:
+          - "Are you sure?"
+          - "This event schedule is outside of the RBE's schedule"
+        Usually shows OK (blue) / Cancel (grey).
+        """
+        try:
+            import re as _re
+
+            dialog_candidates = page.locator(
+                ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible"
+            )
+
+            # Filter to only dialogs containing our keywords
+            confirm_re = _re.compile(
+                r"(are you sure|outside of the rbe.*schedule|outside.*rbe|wish to proceed|proceed.*anyway)",
+                _re.IGNORECASE,
+            )
+
+            dismissed_any = False
+
+            # We iterate by index to avoid locator re-evaluation issues after click
+            count = dialog_candidates.count()
+            for i in range(count):
+                try:
+                    d = dialog_candidates.nth(i)
+                    if not d.is_visible():
+                        continue
+                    # NOTE: Do NOT auto-dismiss Bootstrap modal "Defining Schedules".
+                    # In your case, its Close button is the actual "Save/confirm" for schedules.
+                    # Clicking it early prevents filling End Time.
+                    d_text = d.inner_text().strip()
+                    if not d_text:
+                        continue
+                    if "defining schedules" in d_text.lower():
+                        continue
+                    if not confirm_re.search(d_text):
+                        continue
+
+                    # Prefer OK / Confirm / Yes. NEVER click "Close" or fallback "primary".
+                    ok_btn = d.locator(
+                        "button:has-text('OK'), button:has-text('Ok'), button:has-text('Confirm'), "
+                        "button:has-text('Yes'), button:has-text('Proceed'), button:has-text('Continue')"
+                    ).first
+
+                    if ok_btn.count() > 0 and ok_btn.is_visible():
+                        print(
+                            f"      ✅ Auto-dismiss confirmation modal (OK): {d_text[:120]}..."
+                        )
+                        ok_btn.click(force=True)
+                        dismissed_any = True
+                    else:
+                        # If no explicit OK/Confirm-like button exists, do not touch the modal.
+                        # (Avoids cases where the only button is "Close" which is a real Save/submit.)
+                        continue
+
+                    # Wait briefly for modal to disappear/backdrop to hide
+                    try:
+                        d.wait_for(state="hidden", timeout=3000)
+                    except:
+                        pass
+                    try:
+                        page.locator(".modal-backdrop").first.wait_for(
+                            state="hidden", timeout=2000
+                        )
+                    except:
+                        pass
+
+                    # After dismissing one, re-check remaining dialogs quickly
+                    time.sleep(0.3)
+                except Exception:
+                    continue
+
+            return dismissed_any
+        except Exception:
+            return False
+
     def close_popup(self, page):
         try:
-            page.keyboard.press("Escape")
+            self._safe_press_escape(page)
             btn = page.locator("button:has-text('Close')").first
             if btn.is_visible():
                 btn.click()
@@ -2767,6 +2904,73 @@ class FormHandlerMixin:
         label_lower = label_text.lower().strip()
         # Tạo version không space/underscore để fuzzy match
         label_normalized = re.sub(r"[\s_-]+", "", label_lower)
+
+        # ─── SPECIAL CASE: Condition <select> (Win / Win against any rarity) ─────
+        # Tránh việc chọn nhầm select khác trong cùng row/container (VD: event_id/background).
+        # HTML thực tế thường là: <select class="condition" ...>
+        if label_lower == "condition" or label_normalized == "condition":
+            try:
+                cond_sel = page.locator("select.condition").first
+                if cond_sel.count() > 0:
+                    return cond_sel
+
+                # Fallback: name contains "condition"
+                cond_sel2 = page.locator("select[name*='condition' i]").first
+                if cond_sel2.count() > 0:
+                    return cond_sel2
+            except Exception:
+                pass
+
+        # ─── Keyword fallback for fields that may not have a visible <label> ─────
+        # Example: "Superstars or Groups" can be rendered only as a custom select2/multiselect
+        # without a direct label element, so label-based lookup fails.
+        # We fallback by searching select[name/id] for "superstars"/"groups" keywords.
+        if (
+            any(k in label_lower for k in ["superstars", "groups", "group"])
+            and label_normalized
+        ):
+            try:
+                keyword_words = []
+                if "superstars" in label_lower:
+                    keyword_words.append("superstars")
+                if "groups" in label_lower or "group" in label_lower:
+                    keyword_words.append("groups")
+
+                keyword_words = [w for w in keyword_words if w]
+                if keyword_words:
+                    selects = page.locator("select").all()
+                    for sel in selects:
+                        try:
+                            sel_id = (sel.get_attribute("id") or "").lower()
+                            sel_name = (sel.get_attribute("name") or "").lower()
+                            sel_class = (sel.get_attribute("class") or "").lower()
+
+                            if any(
+                                w in sel_id or w in sel_name or w in sel_class
+                                for w in keyword_words
+                            ):
+                                # Prefer wrapper if hidden/custom dropdown (select2/chosen)
+                                if not sel.is_visible():
+                                    wrapper = self._find_custom_dropdown_wrapper(sel)
+                                    if wrapper:
+                                        print(
+                                            f"         ✅ Keyword fallback: wrapper for hidden '{label_text}' via select id/name containing {keyword_words}"
+                                        )
+                                        return wrapper
+                                if sel.is_visible():
+                                    print(
+                                        f"         ✅ Keyword fallback: found select for '{label_text}' via id/name containing {keyword_words}"
+                                    )
+                                    return sel
+                                # If hidden and no wrapper found, still return select (JS fill may work)
+                                print(
+                                    f"         ⚠️ Keyword fallback: returning hidden select for '{label_text}' (no wrapper found)"
+                                )
+                                return sel
+                        except:
+                            continue
+            except Exception:
+                pass
 
         # ========================================
         # PRIORITY 0: Direct ID/Name Match (Highest Priority)
@@ -4031,7 +4235,7 @@ class FormHandlerMixin:
                     )
                     # Đóng popup nếu có
                     try:
-                        page.keyboard.press("Escape")
+                        self._safe_press_escape(page)
                     except:
                         pass
                     continue
@@ -4493,8 +4697,55 @@ class FormHandlerMixin:
 
             # --- 4. INPUT THƯỜNG ---
             if not is_visible:
-                print(f"         ❌ Element {tag_name} ẩn. Không thể điền.")
-                return False
+                # Không visible thì trước đây bị return False → làm fail các field required
+                # (vd: Conditional inputs đang hidden nhưng vẫn validate).
+                print(f"         ⚠️ Element {tag_name} ẩn. Thử điền bằng JS...")
+
+                try:
+                    value_str = "" if value is None else str(value)
+
+                    # Set value/checked + dispatch events để trigger validation/UI updates
+                    element.evaluate(
+                        """(el, v) => {
+                          try {
+                            const tag = (el.tagName || '').toUpperCase();
+                            const type = (el.getAttribute('type') || '').toLowerCase();
+
+                            if (tag === 'SELECT') {
+                              const target = (v ?? '').toString().trim();
+
+                              // 1) Try match option by value
+                              let opt = Array.from(el.options || []).find(o => (o.value || '').trim() === target);
+
+                              // 2) Try match option by visible text (handles "Win against any rarity" -> value "win:none")
+                              if (!opt) {
+                                const norm = s => (s || '').toString().trim().replace(/\\s+/g,' ').toLowerCase();
+                                const targetNorm = norm(target);
+                                opt = Array.from(el.options || []).find(o => norm(o.textContent) === targetNorm);
+                              }
+
+                              if (opt) {
+                                el.value = opt.value;
+                              } else {
+                                // fallback
+                                el.value = target;
+                              }
+                            } else if (type === 'checkbox' || type === 'radio') {
+                              el.checked = (v === 'true' || v === '1' || v === 'on' || v === 'yes' || v === 'checked');
+                            } else {
+                              el.value = (v ?? '').toString();
+                            }
+
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('blur', { bubbles: true }));
+                          } catch (e) {}
+                        }""",
+                        value_str,
+                    )
+                    return True
+                except Exception:
+                    return False
 
             element.scroll_into_view_if_needed()
 
@@ -4631,6 +4882,64 @@ class FormHandlerMixin:
 
         except Exception as e:
             print(f"         ❌ Lỗi thao tác: {e}")
+            return False
+
+    def _try_set_select2_multiselect_by_placeholder(self, page, placeholder, value):
+        """
+        Select2 multiselect handler using placeholder to find the correct search input.
+        Then locate its parent select2 container and reuse _handle_js_dropdown (multiselect).
+        """
+        try:
+            value_str = str(value).strip()
+            if not value_str:
+                return False
+
+            # Find the select2 search input by placeholder
+            search_input = page.locator(
+                f"input.select2-search__field[placeholder='{placeholder}']"
+            ).first
+            if search_input.count() == 0:
+                # fallback: contains placeholder (some UIs localize or truncate)
+                search_input = (
+                    page.locator("input.select2-search__field")
+                    .filter(has_text=placeholder)
+                    .first
+                )
+            if search_input.count() == 0:
+                # final fallback: match placeholder attr contains
+                search_input = (
+                    page.locator("input.select2-search__field")
+                    .filter(
+                        has=page.locator(
+                            f"xpath=ancestor::*[contains(@placeholder, '{placeholder}') ]"
+                        )
+                    )
+                    .first
+                )
+
+            if search_input.count() == 0:
+                return False
+
+            # The clickable container is typically the nearest select2 container/span
+            # e.g. span.select2-selection--multiple
+            container = search_input.locator(
+                "xpath=ancestor::span[contains(@class,'select2-selection')]"
+            ).first
+            if container.count() == 0:
+                container = search_input.locator(
+                    "xpath=ancestor::*[contains(@class,'select2-container') or contains(@class,'select2-selection')]"
+                ).first
+            if container.count() == 0:
+                return False
+
+            if not container.is_visible():
+                # even if hidden, force click should work inside select2
+                pass
+
+            # Reuse dropdown handler. For select2 multiselect, treat as 'select2'
+            return self._handle_js_dropdown(page, container, value_str, "select2")
+        except Exception as e:
+            print(f"         ⚠️ _try_set_select2_multiselect_by_placeholder error: {e}")
             return False
 
     def _handle_js_dropdown(self, page, container, value, lib_type="chosen"):

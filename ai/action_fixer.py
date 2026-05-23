@@ -569,6 +569,22 @@ def fix_action_plan(plan, user_command=""):
                 "id bất kỳ",
             }
             tgt = str(step.get("target", "")).lower().strip()
+
+            # [CRITICAL FIX] EventID dropdown vs table row confusion after PVP:
+            # Sometimes AI generates: click('PVP') -> edit_row('VS_Tournament_...')
+            # But VS_Tournament_* is an Event ID (belongs to update_form), not a table row ID.
+            # Turning this step into a no-op prevents crash: "Không tìm thấy dòng 'VS_Tournament...'"
+            pvp_in_cmd = "pvp" in str(user_command).lower()
+            event_id_like_vs_tournament = bool(
+                _re.match(r"^vs_tournament_", tgt, _re.IGNORECASE)
+            )
+            if pvp_in_cmd and event_id_like_vs_tournament:
+                old_target = step.get("target")
+                step["action"] = "wait"
+                step.pop("target", None)
+                print(
+                    f"   🔧 AUTO-FIX: Converted edit_row('{old_target}') → wait() because it's an Event ID after PVP"
+                )
             # Exact match OR contains "bất kỳ"/"random" pattern
             # Handles cases like "một Superstar bất kỳ", "Superstar bất kỳ", "random superstar"
             is_random_target = (

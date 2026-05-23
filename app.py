@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import io
+import re
 from ai.brain import (
     parse_command_to_json,
     save_scenario,
@@ -81,6 +82,10 @@ if "smoke_selected_csv" not in st.session_state:
     st.session_state.smoke_selected_csv = "downloads/smoketestBrickLive.csv"
 if "smoke_last_summary" not in st.session_state:
     st.session_state.smoke_last_summary = None
+if "smoke_last_created_id_by_feature" not in st.session_state:
+    # Key = value from CSV column "Features" (e.g. "RBE", "PVE", "Gacha"...)
+    # Value = last unique ID generated for a CREATE/CLONE case in that feature
+    st.session_state.smoke_last_created_id_by_feature = {}
 
 automation = st.session_state.automation
 
@@ -887,14 +892,84 @@ if st.session_state.run_mode == "Smoke Brick Live (theo CSV)" and smoke_run_btn:
         else:
             case_command = _build_case_command(feature, exec_steps)
 
+        generated_unique_id = None
+
         # Force unique ID for Create/Clone cases
         if _should_force_unique_id(label, testcase):
             unique_id = _make_unique_hieunm_test_id()
+            generated_unique_id = unique_id
             case_command = (
                 f"{case_command}\n\n"
                 f"Yêu cầu: Với các bước CREATE hoặc CLONE, hãy tạo/điền ID duy nhất "
                 f"bắt đầu bằng 'hieunm_test' và sử dụng đúng giá trị sau: {unique_id}. "
                 f"Nếu có chỗ yêu cầu nhập '... ID ...' thì hãy thay bằng {unique_id}."
+            )
+
+        # ✅ Safety guard (GENERAL): After we successfully CREATE/CLONE an entity
+        # in a given Feature, later cases of the SAME Feature must ONLY edit/filter
+        # that generated ID — never "Sửa ID bất kỳ" (random) / "Filter một ID bất kỳ".
+        feature_key = str(feature).strip()
+        last_created_id = st.session_state.smoke_last_created_id_by_feature.get(
+            feature_key
+        )
+
+        if last_created_id:
+            # CSV phrases:
+            # - "Sửa ID bất kỳ"
+            # - "Filter một ID bất kỳ"
+            case_command = re.sub(
+                r"Sửa\s+ID\s+bất\s+kỳ",
+                f"Sửa ID: {last_created_id}",
+                case_command,
+                flags=re.IGNORECASE,
+            )
+            case_command = re.sub(
+                r"Filter\s+một\s+ID\s+bất\s+kỳ",
+                f"Filter ID: {last_created_id}",
+                case_command,
+                flags=re.IGNORECASE,
+            )
+
+            # Extra: support commands like "Vào ID vừa tạo hoặc clone -> ..."
+            # by replacing them with the concrete ID.
+            case_command = re.sub(
+                r"Sửa\s+ID\s+j[ữu]a\s+clone",
+                f"Sửa ID: {last_created_id}",
+                case_command,
+                flags=re.IGNORECASE,
+            )
+            case_command = re.sub(
+                r"Filter\s+ID\s+j[ữu]a\s+clone",
+                f"Filter ID: {last_created_id}",
+                case_command,
+                flags=re.IGNORECASE,
+            )
+
+            case_command = re.sub(
+                r"ID\s+j[ữu]a\s+clone\s*(?:hoặc\s+tạo)?",
+                f"ID: {last_created_id}",
+                case_command,
+                flags=re.IGNORECASE,
+            )
+            case_command = re.sub(
+                r"ID\s+j[ữu]a\s+clone",
+                f"ID: {last_created_id}",
+                case_command,
+                flags=re.IGNORECASE,
+            )
+
+            # Keep existing “ID vừa tạo …” support
+            case_command = re.sub(
+                r"ID\s+j[ữu]a\s+tạo\s*(?:hoặc\s+clone)?",
+                f"ID: {last_created_id}",
+                case_command,
+                flags=re.IGNORECASE,
+            )
+            case_command = re.sub(
+                r"ID\s+j[ữu]a\s+tạo",
+                f"ID: {last_created_id}",
+                case_command,
+                flags=re.IGNORECASE,
             )
 
         # 2) Parse to JSON action plan
@@ -947,6 +1022,22 @@ if st.session_state.run_mode == "Smoke Brick Live (theo CSV)" and smoke_run_btn:
             status_str, note_detail = _extract_smoke_status_from_logs(logs)
             df_in.at[df_in.index[idx], "Result"] = status_str
             df_in.at[df_in.index[idx], "Note"] = note_detail
+
+            # ✅ Save the generated unique ID after successful CREATE/CLONE
+            # for THIS feature, so later cases of the same feature are safe.
+            if (
+                generated_unique_id
+                and feature
+                and str(status_str).strip().upper() in {"PASS", "WARNING"}
+            ):
+                feature_key = str(feature).strip()
+                st.session_state.smoke_last_created_id_by_feature[feature_key] = (
+                    generated_unique_id
+                )
+                print(
+                    f"   🧠 Smoke: saved smoke_last_created_id_by_feature[{feature_key}]={generated_unique_id} (status={status_str})"
+                )
+
             smoke_records.append(
                 {
                     "Features": feature,

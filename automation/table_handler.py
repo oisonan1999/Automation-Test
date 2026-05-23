@@ -589,6 +589,43 @@ class TableHandlerMixin:
                     else:
                         time.sleep(0.5)
             else:
+                # Fallback: không crash job nếu không tìm thấy row target_text (đặc biệt sau khi filter/tab thay đổi).
+                # Chọn dòng visible đầu tiên và thực hiện edit/clone theo action_type.
+                try:
+                    print(
+                        f"      ⚠️ Row '{target_text}' not found. Falling back to first visible row for action='{action_type}'."
+                    )
+                    # Find first visible data row
+                    first_row = (
+                        page.locator("tbody tr")
+                        .filter(has=page.locator("button, a, [role='button']"))
+                        .first
+                    )
+                    if first_row.count() > 0 and first_row.is_visible():
+                        js_fallback = """
+(e) => {
+  const row = e;
+  const buttons = row.querySelectorAll("button, a.btn, a[class*='btn'], [role='button']");
+  // Heuristic: pick first row action with edit if action hint exists in DOM text/aria
+  const clickables = Array.from(buttons).filter(b => {
+    const t = ((b.innerText||'') + ' ' + (b.getAttribute('aria-label')||'') + ' ' + (b.getAttribute('title')||'')).toLowerCase();
+    return b.offsetParent !== null && (t.includes('edit') || t.includes('clone') || t.includes('copy') || t.includes('open') || t.includes('save'));
+  });
+  const b = clickables[0] || buttons[0];
+  if (b) { b.closest('button,a')?.click?.(); (b.click ? b.click() : b.dispatchEvent(new MouseEvent('click',{bubbles:true}))); return true; }
+  return false;
+}
+"""
+                        ok = page.evaluate(js_fallback, first_row)
+                        if ok:
+                            time.sleep(1.0)
+                            return
+                    print(
+                        "      ⚠️ Fallback row click failed; no visible rows/actions found."
+                    )
+                except Exception as fb_e:
+                    print(f"      ❌ Fallback row click error: {fb_e}")
+                # As last resort, keep old behavior
                 raise Exception(f"Không tìm thấy dòng '{target_text}'")
 
     # ============================

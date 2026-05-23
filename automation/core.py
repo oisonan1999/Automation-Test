@@ -58,6 +58,46 @@ class BrickAutomation(
         except Exception:
             pass
 
+    def _ensure_rbe_are_you_sure_closed(self, page):
+        """
+        Only close the specific Bootstrap confirm modal:
+        “Are you sure?” / “This event schedule is outside of the RBE's schedule …”
+        so we don't accidentally dismiss other modals (e.g. “Defining Schedules”).
+        """
+        try:
+            modal_text_re = re.compile(
+                r"(are you sure|outside of the rbe.*schedule|rbe.*schedule)",
+                re.IGNORECASE,
+            )
+
+            # Bootstrap may render with slightly different class combos; broaden search.
+            modal = (
+                page.locator(
+                    ".modal.show, .modal.in, [role='dialog']:not([aria-hidden='true']), .swal2-popup:visible"
+                )
+                .filter(has_text=modal_text_re)
+                .first
+            )
+
+            if modal.count() > 0 and modal.is_visible():
+                # Prefer primary button (often OK), else match text fallbacks
+                btn = modal.locator("button.btn-primary, a.btn-primary").first
+                if not (btn.count() > 0 and btn.is_visible()):
+                    btn = modal.locator(
+                        "button:has-text('OK'), button:has-text('Ok'), "
+                        "button:has-text('Confirm'), button:has-text('Yes'), "
+                        "button:has-text('Proceed'), button:has-text('Continue')"
+                    ).first
+
+                if btn.count() > 0 and btn.is_visible():
+                    print("      🔕 Are-you-sure modal detected; clicking OK...")
+                    btn.click(force=True)
+                    time.sleep(0.35)
+                    return True
+        except Exception:
+            pass
+        return False
+
     def get_existing_page(self, p):
         try:
             # Kết nối vào trình duyệt Chrome đang mở sẵn qua cổng Debug
@@ -242,6 +282,15 @@ class BrickAutomation(
                     )
 
                     print(f"▶️ Executing: {act} -> {tgt} {val}")
+
+                    # Nếu đang có popup confirm “Are you sure?” kiểu Bootstrap (ví dụ:
+                    # “This event schedule is outside of the RBE's schedule...”) thì phải OK trước
+                    # khi tiếp tục các bước click/update/save, tránh AI bị block/nhảy bước sai.
+                    try:
+                        if act in {"click", "select", "update_form", "save_form"}:
+                            self._ensure_rbe_are_you_sure_closed(page)
+                    except Exception:
+                        pass
 
                     if act == "navigate":
                         nav_data = step.get("path") if step.get("path") else tgt

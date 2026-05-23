@@ -607,6 +607,101 @@ class NavigatorMixin:
         target_clean = target_text.strip()
         clicked = False
 
+        # RBE UI timing guard:
+        # "Contest Superstars" thường nằm trong accordion "Wrapper" và có thể chưa render kịp
+        # khi smart_click bắt đầu quét. Thêm 1 đoạn chờ ngắn để tránh FAIL timing.
+        try:
+            t = target_clean.lower()
+            if ("contest superstars" in t) or (t.strip() == "contest superstars"):
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=2000)
+                except:
+                    pass
+                time.sleep(1.2)
+                self._wait_for_long_loading(page)
+        except:
+            pass
+
+        # RBE/Contest UI timing guard: “PVP” tab may appear after “Contest Superstars” click + panel load.
+        # Add a targeted “PVP” click before generic sidebar fallback (to avoid early FAIL).
+        #
+        # Modal-scoped click: when "Define Schedules" opens a dialog, "Add Schedule" button
+        # may not exist at page level (only inside dialog).
+        try:
+            if "add schedule" in target_clean.lower():
+                add_sched_re = re.compile(r"Add\s*Schedule", re.IGNORECASE)
+
+                modal_scope = page.locator(
+                    ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible"
+                ).first
+
+                # Prefer dialog-local search if any modal is open
+                if modal_scope.count() > 0 and modal_scope.is_visible():
+                    btn = (
+                        modal_scope.locator("button, a, [role='button']")
+                        .filter(has_text=add_sched_re)
+                        .first
+                    )
+                    if btn.count() > 0 and btn.is_visible():
+                        print("         🎯 Modal-scoped click: 'Add Schedule'")
+                        btn.scroll_into_view_if_needed()
+                        time.sleep(0.2)
+                        btn.click(force=True)
+                        self._wait_for_long_loading(page)
+                        return True
+
+                # Fallback to global search (in case dialog isn't marked .show)
+                btn2 = (
+                    page.locator("button, a, [role='button']")
+                    .filter(has_text=add_sched_re)
+                    .first
+                )
+                if btn2.count() > 0 and btn2.is_visible():
+                    print("         🎯 Global click fallback: 'Add Schedule'")
+                    btn2.scroll_into_view_if_needed()
+                    time.sleep(0.2)
+                    btn2.click(force=True)
+                    self._wait_for_long_loading(page)
+                    return True
+        except Exception as _add_sched_e:
+            print(
+                f"         ⚠️ Modal-scoped 'Add Schedule' click failed: {_add_sched_e}"
+            )
+
+        try:
+            if target_clean.lower().strip() == "pvp":
+                time.sleep(0.8)
+                pvp_re = re.compile(r"^\s*pvp\s*$", re.IGNORECASE)
+                candidates = page.locator(
+                    "button, a, li, span, div[role='button'], .nav-link, .nav-tabs .nav-link, [role='tab']"
+                ).filter(has_text=pvp_re)
+                if candidates.count() > 0:
+                    for i in range(min(candidates.count(), 6)):
+                        cand = candidates.nth(i)
+                        if cand.is_visible():
+                            print("         🎯 PVP targeted click (exact)")
+                            cand.scroll_into_view_if_needed()
+                            time.sleep(0.2)
+                            cand.click(force=True)
+                            self._wait_for_long_loading(page)
+                            return True
+
+                # Fallback: contains match (handles line breaks / extra text)
+                candidates2 = page.locator(
+                    "button, a, li, span, div[role='button'], .nav-link, .nav-tabs .nav-link, [role='tab']"
+                ).filter(has_text=re.compile(r"pvp", re.IGNORECASE))
+                for i in range(min(candidates2.count(), 6)):
+                    cand = candidates2.nth(i)
+                    if cand.is_visible():
+                        print("         🎯 PVP targeted click (contains)")
+                        cand.scroll_into_view_if_needed()
+                        time.sleep(0.2)
+                        cand.click(force=True)
+                        self._wait_for_long_loading(page)
+                        return True
+        except Exception as _pvp_e:
+            print(f"         ⚠️ PVP targeted click error: {_pvp_e}")
+
         # Special reliable retry for "Add Event" (often appears after selecting a tab)
         try:
             if "add event" in target_clean.lower():
@@ -747,7 +842,9 @@ class NavigatorMixin:
 }
 """)
                         if js_clicked2:
-                            print("         🔁 Retry-click 'Add Event' (final JS sweep add+event)")
+                            print(
+                                "         🔁 Retry-click 'Add Event' (final JS sweep add+event)"
+                            )
                             self._wait_for_long_loading(page)
                             return True
                     except Exception:
@@ -777,13 +874,18 @@ class NavigatorMixin:
                     wrapper_toggle.click(force=True)
                     time.sleep(1.2)
 
-                # Secondary fallback: explicitly click any visible "Wrapper" text node
-                if not wrapper_toggle.is_visible():
-                    wrapper_text = page.locator("text=Wrapper").first
-                    if wrapper_text.count() > 0 and wrapper_text.is_visible():
-                        print("         🔽 Pre-expand fallback: click 'Wrapper' text")
-                        wrapper_text.click(force=True)
+                # If wrapper exists but isn't visible yet, force-click it to expand.
+                # NOTE: Do NOT click generic 'text=Wrapper' because it can select the
+                # "Wrapper" tab/section (wrong navigation). We only want to expand accordion.
+                if wrapper_toggle.count() > 0 and not wrapper_toggle.is_visible():
+                    try:
+                        print(
+                            "         🔽 Pre-expand fallback: force click 'Wrapper' accordion"
+                        )
+                        wrapper_toggle.click(force=True)
                         time.sleep(1.2)
+                    except Exception:
+                        pass
 
                 # Targeted DOM search inside Wrapper/sidebar region (more reliable than generic sidebar scan)
                 clicked_inside = False
@@ -798,19 +900,101 @@ class NavigatorMixin:
                         .filter(has_text=contest_re)
                     )
 
+                    # Priority: click only items whose *own* text is exactly "Contest Superstars"
+                    # (after normalizing whitespace). This avoids clicking accordion/container
+                    # elements that merely contain descendant text.
+                    contest_exact_re = re.compile(
+                        r"^\s*Contest\s*Superstars\s*$", re.IGNORECASE
+                    )
+
                     if targeted.count() > 0:
-                        # Click first visible match
-                        for i in range(min(targeted.count(), 5)):
+                        # Click first visible exact match
+                        clicked = False
+                        for i in range(min(targeted.count(), 8)):
                             cand = targeted.nth(i)
-                            if cand.is_visible():
+                            if not cand.is_visible():
+                                continue
+
+                            try:
+                                cand_text = cand.inner_text() or ""
+                                cand_norm = re.sub(r"\s+", " ", cand_text).strip()
+                            except:
+                                cand_norm = ""
+
+                            # Skip obvious wrapper header/container
+                            if re.search(r"\bWrapper\b", cand_norm, re.IGNORECASE):
+                                continue
+
+                            if contest_exact_re.match(cand_norm):
                                 print(
-                                    "         🎯 Targeted click: 'Contest Superstars' (inside Wrapper/sidebar)"
+                                    "         🎯 Targeted click (exact): 'Contest Superstars' (inside Wrapper/sidebar)"
                                 )
                                 cand.scroll_into_view_if_needed()
                                 time.sleep(0.2)
                                 cand.click(force=True)
-                                self._wait_for_long_loading(page)
-                                return True
+
+                                # Verify selection didn't just stop at Wrapper header
+                                time.sleep(1.0)
+                                try:
+                                    is_active = page.evaluate("""
+() => {
+  const norm = (s) => (s || "").toString().replace(/\\s+/g," ").trim().toLowerCase();
+  const isActiveClass = (el) => {
+    const cls = (el && el.className ? el.className : "").toString().toLowerCase();
+    return cls.includes('active') || cls.includes('selected') || cls.includes('current');
+  };
+  const root = document.querySelector('.sidebar, #left-menu, aside') || document.body;
+  const els = Array.from(root.querySelectorAll('a, button, li, span, div, [role="button"], .menu-item'));
+  const target = 'contest superstars';
+  for (const el of els) {
+    try {
+      const t = norm(el.innerText);
+      if (t === target && el.offsetParent !== null && isActiveClass(el)) return true;
+    } catch(e) {}
+  }
+  return false;
+}
+""")
+                                except:
+                                    is_active = True  # nếu JS detect fail thì coi như ok để không kẹt
+
+                                if is_active:
+                                    self._wait_for_long_loading(page)
+                                    clicked = True
+                                    return True
+                                else:
+                                    print(
+                                        "         ⚠️ 'Contest Superstars' click did not become active; retrying..."
+                                    )
+                                    clicked = True
+                                    # continue trying other candidates in this loop
+                                    continue
+
+                        # Fallback (if exact match fails): click first visible candidate whose text contains contest
+                        if not clicked:
+                            for i in range(min(targeted.count(), 8)):
+                                cand = targeted.nth(i)
+                                if not cand.is_visible():
+                                    continue
+                                try:
+                                    cand_text = cand.inner_text() or ""
+                                    cand_norm = re.sub(r"\s+", " ", cand_text).strip()
+                                except:
+                                    cand_norm = ""
+                                if re.search(
+                                    r"Contest\s*Superstars", cand_norm, re.IGNORECASE
+                                ) and not re.search(
+                                    r"\bWrapper\b", cand_norm, re.IGNORECASE
+                                ):
+                                    print(
+                                        "         🎯 Targeted click (contains): 'Contest Superstars' (inside Wrapper/sidebar)"
+                                    )
+                                    cand.scroll_into_view_if_needed()
+                                    time.sleep(0.2)
+                                    cand.click(force=True)
+                                    self._wait_for_long_loading(page)
+                                    return True
+
                     clicked_inside = targeted.count() > 0
                 except Exception as _tgt_e:
                     print(
@@ -1356,10 +1540,11 @@ class NavigatorMixin:
                     or "'.loader'" in spinner_str
                     or ".loader" in spinner_str
                 ):
-                    # Generic loader: treat as likely false positive
-                    wait_timeout = 1500
+                    # Generic loader: không còn coi là false positive nữa.
+                    # Một số trang (như RBE UI) cần >1.5s để render tab/panel sau click.
+                    wait_timeout = 7000
                 else:
-                    wait_timeout = 5000
+                    wait_timeout = 7000
 
                 page.locator(active_spinner).first.wait_for(
                     state="hidden", timeout=wait_timeout
