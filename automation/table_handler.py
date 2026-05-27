@@ -403,10 +403,30 @@ class TableHandlerMixin:
                 f"   🎲 Random mode: đang chọn ngẫu nhiên một dòng để {action_type}..."
             )
             try:
-                all_rows = page.locator("tbody tr").filter(has=page.locator("td"))
+                # Scope đúng bảng: chỉ lấy những <tr> có nút/icon Edit (hoặc Clone) bên trong.
+                # Tránh trường hợp page có nhiều tbody tr (vd fullcalendar) làm RANDOM chọn nhầm.
+                if action_type == "edit":
+                    action_has = page.locator(
+                        "i[class*='edit'], i[class*='pencil'], .btn-edit, button:has-text('Edit'), a:has-text('Edit')"
+                    )
+                else:
+                    action_has = page.locator(
+                        "i[class*='clone'], i[class*='copy'], i[class*='share'], .btn-clone, button:has-text('Clone'), a:has-text('Clone')"
+                    )
+
+                all_rows = page.locator("tbody tr").filter(has=action_has)
                 total = all_rows.count()
+
+                # If we can't find action buttons (icons) for this row type,
+                # don't crash. Fall back to any data row and click by heuristics later.
                 if total == 0:
-                    raise Exception("Bảng không có dòng nào để chọn ngẫu nhiên")
+                    all_rows = page.locator("tbody tr").filter(has=page.locator("td"))
+                    total = all_rows.count()
+                    if total == 0:
+                        raise Exception(
+                            f"Bảng không có dòng nào để chọn ngẫu nhiên (missing {action_type} action buttons)"
+                        )
+
                 idx = random.randint(0, total - 1)
                 # Wait/retry: sometimes table rows render a bit later (ajax).
                 # Don’t hard-fail when total==0 on first check.
@@ -499,9 +519,17 @@ class TableHandlerMixin:
                     else:
                         # Fallback to td[1] then td[0]
                         try:
-                            target_text = (
-                                chosen_row.locator("td").nth(1).inner_text().strip()
-                            )
+                            td_count = chosen_row.locator("td").count()
+                            if td_count >= 2:
+                                target_text = (
+                                    chosen_row.locator("td").nth(1).inner_text().strip()
+                                )
+                            elif td_count >= 1:
+                                target_text = (
+                                    chosen_row.locator("td").first.inner_text().strip()
+                                )
+                            else:
+                                target_text = ""
                         except:
                             target_text = (
                                 chosen_row.locator("td").first.inner_text().strip()
@@ -518,7 +546,199 @@ class TableHandlerMixin:
                         )
 
                 print(f"   🎲 Chọn ngẫu nhiên dòng #{idx + 1}: '{target_text}'")
+                # Lưu vào memory để debug/trace, nhưng KHÔNG dựa vào target_text để click row action.
                 self.memory["LAST_SELECTED"] = target_text
+
+                # CRITICAL FIX:
+                # Random mode có thể tạo target_text rỗng ('') → sau đó JS search dựa trên text sẽ match sai/treo.
+                # Vì vậy: click trực tiếp nút Edit/Clone nằm trong `chosen_row`.
+                try:
+                    if action_type == "edit":
+                        icon = chosen_row.locator(
+                            "i[class*='edit'], i[class*='pencil'], .btn-edit, button:has-text('Edit'), a:has-text('Edit')"
+                        ).first
+                        if icon.count() > 0 and icon.is_visible():
+                            icon.click(force=True)
+                        else:
+                            # fallback: click bất kỳ nút/link nào có chữ edit trong row
+                            any_action = (
+                                chosen_row.locator("button, a, [role='button']")
+                                .filter(has_text=re.compile(r"\bedit\b", re.IGNORECASE))
+                                .first
+                            )
+                            if any_action.count() > 0 and any_action.is_visible():
+                                any_action.click(force=True)
+                            else:
+                                # final fallback: click nút đầu tiên có vẻ là action icon
+                                fallback_btn = chosen_row.locator(
+                                    "button, a, [role='button']"
+                                ).first
+                                fallback_btn.click(force=True)
+                    else:
+                        icon = chosen_row.locator(
+                            "i[class*='clone'], i[class*='copy'], i[class*='share'], .btn-clone, button:has-text('Clone'), a:has-text('Clone')"
+                        ).first
+                        if icon.count() > 0 and icon.is_visible():
+                            icon.click(force=True)
+                        else:
+                            any_action = (
+                                chosen_row.locator("button, a, [role='button']")
+                                .filter(
+                                    has_text=re.compile(
+                                        r"\b(clone|copy|copy from|duplicate)\b",
+                                        re.IGNORECASE,
+                                    )
+                                )
+                                .first
+                            )
+                            if any_action.count() > 0 and any_action.is_visible():
+                                any_action.click(force=True)
+                            else:
+                                fallback_btn = chosen_row.locator(
+                                    "button, a, [role='button']"
+                                ).first
+                                fallback_btn.click(force=True)
+
+                    time.sleep(1.0)
+
+                    # Check lock popup only for edit
+                    # PVE/Classic PVE panels load async and show skeleton/vld-icon loader.
+                    # Requirement: do NOT check Locked Item popup until:
+                    #  - we have observed loading indicator at least once
+                    #  - and at least ~30s have passed
+                    if action_type == "edit":
+                        try:
+                            start_t = time.time()
+                            saw_async_loader = False
+
+                            # hard minimum wait (30s)
+                            while time.time() - start_t < 30:
+                                try:
+                                    aria_busy = (
+                                        page.locator(
+                                            "[aria-busy='true']:visible"
+                                        ).count()
+                                        > 0
+                                    )
+                                except:
+                                    aria_busy = False
+                                try:
+                                    skeleton = (
+                                        page.locator(".b-skeleton:visible").count() > 0
+                                    )
+                                except:
+                                    skeleton = False
+                                try:
+                                    vld_loader = (
+                                        page.locator(".vld-icon:visible").count() > 0
+                                    )
+                                except:
+                                    vld_loader = False
+
+                                if aria_busy or skeleton or vld_loader:
+                                    saw_async_loader = True
+
+                                # If already satisfied (min time + loader observed) we can stop early
+                                if saw_async_loader and time.time() - start_t >= 30:
+                                    break
+
+                                time.sleep(0.5)
+
+                            # Even if loader wasn't detected, wait_for_long_loading is still safer
+                            # than immediate popup check.
+                            if hasattr(self, "_wait_for_long_loading"):
+                                try:
+                                    self._wait_for_long_loading(page)
+                                except:
+                                    pass
+                        except:
+                            pass
+
+                        popup_handled = self._handle_locked_item_popup(page)
+                        if popup_handled:
+                            time.sleep(1.0)
+                            print("      ✅ Ready to update form.")
+                        else:
+                            time.sleep(0.5)
+
+                    # Random đã bấm xong action, thoát luôn để tránh JS search theo target_text.
+                    return
+                except Exception as click_e:
+                    # Nếu click direct fail thì KHÔNG dùng JS search theo `target_text`
+                    # (vì `target_text` có thể là chuỗi rác như fullcalendar/text lớn).
+                    # Thay vào đó: retry click trực tiếp action icon trong các row nằm trong scope `all_rows`.
+                    print(f"      ⚠️ Random direct click failed: {click_e}")
+                    try:
+                        for _retry in range(3):
+                            retry_row = all_rows.nth(
+                                random.randint(0, max(0, total - 1))
+                            )
+                            if action_type == "edit":
+                                retry_icon = retry_row.locator(
+                                    "i[class*='edit'], i[class*='pencil'], .btn-edit, button:has-text('Edit'), a:has-text('Edit')"
+                                ).first
+                                if retry_icon.count() > 0:
+                                    retry_icon.evaluate(
+                                        "el => { el.scrollIntoView({block: 'center'}); el.click(); }"
+                                    )
+                                else:
+                                    retry_any = (
+                                        retry_row.locator("button, a, [role='button']")
+                                        .filter(
+                                            has_text=re.compile(
+                                                r"\bedit\b",
+                                                re.IGNORECASE,
+                                            )
+                                        )
+                                        .first
+                                    )
+                                    if retry_any.count() > 0:
+                                        retry_any.evaluate(
+                                            "el => { el.scrollIntoView({block: 'center'}); el.click(); }"
+                                        )
+                                    else:
+                                        continue
+                            else:
+                                retry_icon = retry_row.locator(
+                                    "i[class*='clone'], i[class*='copy'], i[class*='share'], .btn-clone, button:has-text('Clone'), a:has-text('Clone')"
+                                ).first
+                                if retry_icon.count() > 0:
+                                    retry_icon.evaluate(
+                                        "el => { el.scrollIntoView({block: 'center'}); el.click(); }"
+                                    )
+                                else:
+                                    retry_any = (
+                                        retry_row.locator("button, a, [role='button']")
+                                        .filter(
+                                            has_text=re.compile(
+                                                r"\b(clone|copy|copy from|duplicate)\b",
+                                                re.IGNORECASE,
+                                            )
+                                        )
+                                        .first
+                                    )
+                                    if retry_any.count() > 0:
+                                        retry_any.evaluate(
+                                            "el => { el.scrollIntoView({block: 'center'}); el.click(); }"
+                                        )
+                                    else:
+                                        continue
+
+                            time.sleep(1.0)
+                            if action_type == "edit":
+                                popup_handled = self._handle_locked_item_popup(page)
+                                if popup_handled:
+                                    time.sleep(1.0)
+                                    print("      ✅ Ready to update form (retry).")
+                                else:
+                                    time.sleep(0.5)
+                            return
+                    except Exception as _retry_e:
+                        print(f"      ⚠️ Random direct click retry failed: {_retry_e}")
+
+                    raise Exception(
+                        f"Random direct click failed for action_type={action_type} after retries"
+                    )
             except Exception as e:
                 raise Exception(f"Random row selection failed: {e}")
 

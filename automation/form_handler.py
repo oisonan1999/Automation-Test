@@ -42,12 +42,43 @@ class FormHandlerMixin:
         """
         print(f"      📝 Updating Form Data: {data}")
 
-        # Chờ form ổn định
+        # Chờ form ổn định + chờ loader vld-icon/skeleton/aria-busy tắt hẳn
+        # (Match 1 panel dùng vld-icon spinner; nếu điền quá sớm select2/fields chưa mount)
         try:
             page.wait_for_load_state("domcontentloaded")
-            time.sleep(1)
         except:
             pass
+
+        time.sleep(0.8)
+
+        try:
+            timeout_s = 30
+            start_t = time.time()
+            while time.time() - start_t < timeout_s:
+                try:
+                    vld_visible = page.locator(".vld-icon:visible").count() > 0
+                except:
+                    vld_visible = False
+                try:
+                    skeleton_visible = page.locator(".b-skeleton:visible").count() > 0
+                except:
+                    skeleton_visible = False
+                try:
+                    aria_busy_visible = (
+                        page.locator("[aria-busy='true']:visible").count() > 0
+                    )
+                except:
+                    aria_busy_visible = False
+
+                # Break when ALL loaders are gone
+                if not vld_visible and not skeleton_visible and not aria_busy_visible:
+                    break
+                time.sleep(0.5)
+        except:
+            pass
+
+        # Give a tiny settle time for select2 mount
+        time.sleep(0.6)
 
         # ============================
         # SPECIAL: Clamp "Defining Schedules" Start/End Time to RBE restriction
@@ -139,6 +170,91 @@ class FormHandlerMixin:
             try:
                 label_lower = str(label).lower().strip()
                 value_lower = str(value).lower().strip()
+
+                # ============================
+                # PVE MATCH FIXES (missing wiring)
+                # ============================
+                # 1) SSGroup ID: handle multiselect or select2 depending on UI
+                if "ssgroup" in label_lower or "ssdb" in label_lower:
+                    try:
+                        # Upstream sometimes passes: "SS_Osbourne_Ozzy, 5 Star, Gold"
+                        # For SSGroup we only want the first SS token.
+                        ss_value_raw = str(value)
+                        ss_value = ss_value_raw.strip()
+
+                        m = re.search(r"(SS_[A-Za-z0-9_]+)", ss_value_raw)
+                        if m:
+                            ss_value = m.group(1)
+
+                        # Fallback: if comma-separated, take first token
+                        if "," in ss_value and "SS_" in ss_value:
+                            ss_value = ss_value.split(",")[0].strip()
+                        elif "," in ss_value and "SS_" not in ss_value:
+                            ss_value = ss_value.split(",")[0].strip()
+
+                        # UI bạn cung cấp cho Match 1 hiện là multiselect (not select2):
+                        #   input id="searchSSGroupId" placeholder="Type to search" aria-controls="listbox-searchSSGroupId"
+                        if self._try_set_ssgroup_id_by_multiselect_search_input(
+                            page, ss_value
+                        ):
+                            print(
+                                f"         ✅ SSGroup ID set via multiselect search: '{ss_value}'"
+                            )
+                            # PVE: dropdown data after SSGroup selection is heavy; wait here (not in save_form)
+                            if page.locator("#searchSSGroupId").count() > 0:
+                                time.sleep(30)
+                            else:
+                                time.sleep(2)
+                            continue
+
+                        # Fallback: legacy select2 SSDB handler
+                        if self._try_set_ssgroup_id_by_ssdb_search_placeholder(
+                            page, ss_value
+                        ):
+                            print(
+                                f"         ✅ SSGroup ID set via SSDB search: '{ss_value}'"
+                            )
+                            # PVE: dropdown data after SSGroup selection is heavy; wait here (not in save_form)
+                            if page.locator("#searchSSGroupId").count() > 0:
+                                time.sleep(30)
+                            else:
+                                time.sleep(2)
+                            continue
+                    except Exception as _ss_err:
+                        print(f"         ⚠️ SSGroup ID set error: {_ss_err}")
+
+                # 2) Option-as-value dropdown keys:
+                #    AI hay truyền {'5 Star':'select', 'Gold':'select'}
+                #    => cần chọn dropdown option = key (label), khi value == 'select'
+                if value_lower == "select":
+                    star_tier_match = bool(
+                        re.match(r"^\d+\s*star$", label_lower)
+                        or label_lower in ("bronze", "silver", "gold")
+                    )
+                    if star_tier_match:
+                        # Try native <select> first
+                        try:
+                            if self._try_select_option_by_select_option_text(
+                                page, label
+                            ):
+                                print(
+                                    f"         ✅ Dropdown option set (native select) -> '{label}'"
+                                )
+                                time.sleep(1.2)
+                                continue
+                        except:
+                            pass
+
+                        # Fallback: try select2 dropdowns by option text
+                        try:
+                            if self._try_set_select2_option_by_option_text(page, label):
+                                print(
+                                    f"         ✅ Dropdown option set (select2) -> '{label}'"
+                                )
+                                time.sleep(1.2)
+                                continue
+                        except:
+                            pass
 
                 # Boolean / toggle on main form (not sidebar nav links like #daily_reward)
                 if value_lower in (
@@ -444,6 +560,660 @@ class FormHandlerMixin:
                             pass
             except Exception as e:
                 print(f"         ❌ Error filling '{label}': {e}")
+
+    def _try_select_option_by_select_option_text(self, page, option_text):
+        """
+        Select option trong bất kỳ <select> nào mà option text khớp với option_text.
+        Hữu ích khi AI truyền kiểu key='Gold' -> value='select' (option-as-value),
+        trong khi UI thực tế chỉ là dropdown.
+        """
+        try:
+            if option_text is None:
+                return False
+
+            option_norm = re.sub(r"\s+", " ", str(option_text)).strip().lower()
+
+            # Collect all selects (can be hidden)
+            selects = page.locator("select").all()
+            if not selects:
+                return False
+
+            # Candidates: selects có option text match (exact/normalized)
+            candidates = []
+            for sel in selects:
+                try:
+                    opts = sel.locator("option").all()
+                    for opt in opts:
+                        try:
+                            t = (opt.inner_text() or "").strip()
+                            t_norm = re.sub(r"\s+", " ", t).strip().lower()
+                            if t_norm == option_norm:
+                                candidates.append(sel)
+                                break
+                        except:
+                            continue
+                except:
+                    continue
+
+            # Try sequentially
+            for sel in candidates:
+                try:
+                    if self._fill_element_smartly(page, sel, option_text):
+                        return True
+                except:
+                    continue
+
+            return False
+        except Exception as e:
+            print(f"         ⚠️ _try_select_option_by_select_option_text error: {e}")
+            return False
+
+    def _try_set_select2_option_by_option_text(self, page, option_text):
+        """
+        Fallback: thử set select2/chosen dropdown bằng cách:
+        - mở từng select2 selection (visible)
+        - scan các `.select2-results__option` đang visible
+        - nếu text match exact -> click
+        """
+        try:
+            if option_text is None:
+                return False
+
+            option_norm = re.sub(r"\s+", " ", str(option_text)).strip().lower()
+            if not option_norm:
+                return False
+
+            # Candidate select2 containers
+            containers = page.locator(
+                "span.select2-container, span.select2-selection"
+            ).all()
+
+            for cont in containers:
+                try:
+                    if not cont.is_visible():
+                        continue
+                except:
+                    continue
+
+                # Open dropdown
+                try:
+                    cont.click(force=True)
+                except:
+                    continue
+
+                time.sleep(0.25)
+
+                matched = False
+                try:
+                    matched = page.evaluate(
+                        "(valueNorm) => {"
+                        "  const norm = (s) => (s||'').toString().replace(/\\s+/g,' ').trim().toLowerCase();"
+                        "  const opts = document.querySelectorAll('.select2-results__option, .select2-results__option[role=\"option\"]');"
+                        "  for (const o of opts) {"
+                        "    try {"
+                        "      const rect = o.getBoundingClientRect();"
+                        "      if (rect.width <= 0 || rect.height <= 0) continue;"
+                        "      const t = norm(o.textContent);"
+                        "      if (t === valueNorm) { o.click(); return true; }"
+                        "    } catch (e) {}"
+                        "  }"
+                        "  return false;"
+                        "}",
+                        option_norm,
+                    )
+                except:
+                    matched = False
+
+                # Close dropdown regardless
+                try:
+                    page.keyboard.press("Escape")
+                except:
+                    pass
+
+                if matched:
+                    return True
+
+            return False
+        except Exception as e:
+            print(f"         ⚠️ _try_set_select2_option_by_option_text error: {e}")
+            return False
+
+            # Collect all selects (can be hidden)
+            selects = page.locator("select").all()
+            if not selects:
+                return False
+
+            # Candidates: selects có option text match (exact/normalized)
+            candidates = []
+            for sel in selects:
+                try:
+                    opts = sel.locator("option").all()
+                    for opt in opts:
+                        try:
+                            t = (opt.inner_text() or "").strip()
+                            t_norm = re.sub(r"\s+", " ", t).strip().lower()
+                            if t_norm == option_norm:
+                                candidates.append(sel)
+                                break
+                        except:
+                            continue
+                except:
+                    continue
+
+            # Try fill sequentially
+            for sel in candidates:
+                try:
+                    if self._fill_element_smartly(page, sel, option_text):
+                        return True
+                except:
+                    continue
+
+            return False
+        except Exception as e:
+            print(f"         ⚠️ _try_select_option_by_select_option_text error: {e}")
+            return False
+
+    def _try_set_ssgroup_id_by_multiselect_search_input(self, page, ssgroup_id):
+        """
+        Match panel (your provided HTML) uses a multiselect-like component:
+          <input id="searchSSGroupId" placeholder="Type to search" aria-controls="listbox-searchSSGroupId">
+          <span class="multiselect__single">SS_CPunk_BITW</span>
+        So we:
+          1) click/fill search input
+          2) wait for listbox results by aria-controls
+          3) click the option matching ssgroup_id
+          4) verify multiselect__single updated
+        """
+        try:
+            if ssgroup_id is None:
+                return False
+
+            value_str = str(ssgroup_id).strip()
+            if not value_str:
+                return False
+
+            # IMPORTANT: scope to the currently expanded Match 1 panel to avoid
+            # selecting the multiselect input from some other (already loaded) panel.
+            scoped_root = page
+            try:
+                panel_id = None
+                # Find the chevron/toggle button for Match 1 and extract aria-controls.
+                # (Don't require aria-expanded=true here; at fill time it can be flaky.)
+                match1_el = page.locator("text=Match 1").first
+                # More robust: search toggle button anywhere under the Match 1 ancestor
+                toggle_btn = match1_el.locator(
+                    "xpath=ancestor::*//button[contains(@aria-controls,'chapter-match-')][1]"
+                ).first
+                if toggle_btn.count() > 0:
+                    panel_id = toggle_btn.get_attribute("aria-controls")
+                if panel_id:
+                    scoped_root = page.locator(f"#{panel_id}")
+            except:
+                scoped_root = page
+
+            # Collect candidate search inputs within the intended Match 1 panel.
+            # If multiple exist, try each one until selection verifies.
+            candidate_inputs = scoped_root.locator("input#searchSSGroupId").all()
+            if not candidate_inputs:
+                candidate_inputs = scoped_root.locator(
+                    "input[aria-controls^='listbox-searchSSGroupId'], input[id^='searchSSGroup']"
+                ).all()
+
+            if not candidate_inputs:
+                return False
+
+            for search_input in candidate_inputs[:3]:
+                # Read aria-controls listbox id for THIS input
+                listbox_id = None
+                try:
+                    aria_controls = search_input.get_attribute("aria-controls") or ""
+                    # aria-controls can be space-separated
+                    listbox_id = aria_controls.split()[0] if aria_controls else None
+                except:
+                    listbox_id = None
+
+                # Click/open dropdown
+                try:
+                    search_input.click(force=True)
+                except:
+                    pass
+
+                # IMPORTANT: the SSGroup input may be width:0 and positioned absolute.
+                # Always set via JS + dispatch events (don’t rely on Playwright fill()).
+                try:
+                    search_input.evaluate(
+                        "(el,v)=>{"
+                        "  try{el.focus();}catch(e){}"
+                        "  el.value='';"
+                        "  el.dispatchEvent(new Event('input',{bubbles:true}));"
+                        "  el.dispatchEvent(new Event('change',{bubbles:true}));"
+                        "  el.value=v;"
+                        "  el.dispatchEvent(new Event('input',{bubbles:true}));"
+                        "  el.dispatchEvent(new Event('change',{bubbles:true}));"
+                        "}",
+                        value_str,
+                    )
+                except:
+                    # Fallback: try fill if JS fails
+                    try:
+                        search_input.fill("")
+                        search_input.fill(value_str)
+                    except:
+                        continue
+
+                time.sleep(0.25)
+
+                # Wait for listbox results (in this UI, options are often NOT guaranteed to have role="option")
+                if listbox_id:
+                    # The listbox popup might render outside the Match 1 panel container.
+                    # Using page-scoped lookup prevents missing the listbox due to strict scoping.
+                    listbox = page.locator(f"#{listbox_id}")
+                else:
+                    listbox = scoped_root.locator("ul, div, [role='listbox']").first
+
+                try:
+                    listbox.wait_for(state="attached", timeout=8000)
+                except:
+                    try:
+                        listbox.wait_for(state="visible", timeout=8000)
+                    except:
+                        pass
+
+                if listbox_id:
+                    # Try exact text match anywhere inside the listbox
+                    match_opt = (
+                        page.locator(f"#{listbox_id}")
+                        .filter(
+                            has_text=re.compile(
+                                r"^\s*" + re.escape(value_str) + r"\s*$"
+                            )
+                        )
+                        .first
+                    )
+
+                    # If exact text node isn't clickable, try broader clickable containers inside the listbox
+                    if match_opt.count() == 0:
+                        match_opt = (
+                            page.locator(f"#{listbox_id} li, #{listbox_id} div")
+                            .filter(
+                                has_text=re.compile(
+                                    r"^\s*" + re.escape(value_str) + r"\s*$",
+                                    re.IGNORECASE,
+                                )
+                            )
+                            .first
+                        )
+
+                    # Fallback: contains match
+                    if match_opt.count() == 0:
+                        match_opt = (
+                            page.locator(f"#{listbox_id} li, #{listbox_id} div")
+                            .filter(
+                                has_text=re.compile(
+                                    re.escape(value_str),
+                                    re.IGNORECASE,
+                                )
+                            )
+                            .first
+                        )
+
+                    # Final fallback: any element inside listbox containing the token
+                    if match_opt.count() == 0:
+                        match_opt = (
+                            page.locator(f"#{listbox_id}")
+                            .filter(
+                                has_text=re.compile(
+                                    re.escape(value_str),
+                                    re.IGNORECASE,
+                                )
+                            )
+                            .first
+                        )
+                else:
+                    match_opt = (
+                        scoped_root.locator("li, div, [role='option']")
+                        .filter(
+                            has_text=re.compile(
+                                r"^" + re.escape(value_str) + r"\s*$",
+                                re.IGNORECASE,
+                            )
+                        )
+                        .first
+                    )
+
+                if match_opt.count() == 0:
+                    continue
+
+                match_opt.click(force=True)
+
+                # Verify selection tag updated (inside intended panel)
+                # Try to scope selection tag to the same Match panel as this input.
+                panel_root = scoped_root
+                try:
+                    maybe_panel = search_input.locator(
+                        "xpath=ancestor::*[contains(@id,'chapter-match-')][1]"
+                    ).first
+                    if maybe_panel.count() > 0:
+                        panel_root = maybe_panel
+                except:
+                    pass
+
+                # UI may be slow (dropdown list heavy), so wait a bit and re-check.
+                for _ in range(20):
+                    try:
+                        selected = (
+                            panel_root.locator("span.multiselect__single")
+                            .filter(
+                                has_text=re.compile(
+                                    re.escape(value_str),
+                                    re.IGNORECASE,
+                                )
+                            )
+                            .first
+                        )
+                        if selected.count() > 0:
+                            return True
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+
+                # One last attempt: Enter to confirm selection
+                try:
+                    page.keyboard.press("Enter")
+                except:
+                    pass
+
+                time.sleep(0.5)
+                try:
+                    selected = (
+                        scoped_root.locator("span.multiselect__single")
+                        .filter(
+                            has_text=re.compile(
+                                re.escape(value_str),
+                                re.IGNORECASE,
+                            )
+                        )
+                        .first
+                    )
+                    if selected.count() > 0:
+                        return True
+                except Exception:
+                    pass
+            # If all candidate inputs failed
+            return False
+        except Exception:
+            return False
+
+    def _try_set_ssgroup_id_by_ssdb_search_placeholder(self, page, ssgroup_id):
+        """
+        Trong UI PVE Match, field SSGroup ID thường là select2 search có placeholder:
+          - "Type to search SSDB" (hoặc tương tự)
+        AI đưa data key='SSGroup ID' với value='SS_...'
+        => Mở dropdown đúng control theo placeholder rồi chọn option theo value.
+        """
+        try:
+            if ssgroup_id is None:
+                return False
+
+            value_str = str(ssgroup_id).strip()
+            if not value_str:
+                return False
+
+            # Find select2 search input by placeholder tokens
+            # (SSDB may vary: "SSDB", "SSD B", etc. -> match broadly)
+            search_re = re.compile(r"type\s*to\s*search.*ssdb", re.IGNORECASE)
+
+            # PVE Match panel loads async (you showed vld-icon + skeleton).
+            # Wait a bit so the SSDB select2 input exists before we scan containers.
+            try:
+                page.locator("text=SSGroup ID").first.wait_for(
+                    state="visible", timeout=8000
+                )
+            except:
+                pass
+
+            try:
+                page.locator("input.select2-search__field").first.wait_for(
+                    state="attached", timeout=8000
+                )
+            except:
+                pass
+
+            search_inputs = page.locator("input.select2-search__field").all()
+            target_container = None
+
+            def _get_ssdb_token_for_input(input_el):
+                try:
+                    ph = (input_el.get_attribute("placeholder") or "").strip()
+                    aria = (input_el.get_attribute("aria-label") or "").strip()
+                    data_ph = (input_el.get_attribute("data-placeholder") or "").strip()
+                    role = (input_el.get_attribute("role") or "").strip()
+                    combined = " ".join([ph, aria, data_ph, role]).strip()
+                    return combined
+                except:
+                    return ""
+
+            for inp in search_inputs:
+                try:
+                    token = _get_ssdb_token_for_input(inp)
+                    if not token:
+                        continue
+                    if search_re.search(token):
+                        # Prefer select2-container wrapper (click target)
+                        container = inp.locator(
+                            "xpath=ancestor::span[contains(@class,'select2-container')][1]"
+                        ).first
+                        if container.count() == 0:
+                            container = inp.locator(
+                                "xpath=ancestor::span[contains(@class,'select2-selection')][1]"
+                            ).first
+                        # As a last resort, allow direct parent click target
+                        if container.count() == 0:
+                            container = inp.locator("xpath=parent::*[1]").first
+
+                        if container.count() > 0:
+                            target_container = container
+                            try:
+                                if container.is_visible():
+                                    break
+                            except:
+                                # Still accept for force-click later
+                                break
+                except:
+                    continue
+
+            # If we found container but it may be hidden, still allow later force-click.
+
+            # Fallback: placeholder contains "Type to search" and we guess it's the SSDB one by nearby SS label text
+            if target_container is None:
+                generic_inputs = page.locator("input.select2-search__field").all()
+                for inp in generic_inputs:
+                    try:
+                        placeholder = (inp.get_attribute("placeholder") or "").strip()
+                        if not placeholder:
+                            continue
+                        if re.search(r"type\s*to\s*search", placeholder, re.IGNORECASE):
+                            container = inp.locator(
+                                "xpath=ancestor::span[contains(@class,'select2-container') or contains(@class,'select2-selection')][1]"
+                            ).first
+                            if container.count() > 0:
+                                # Heuristic: prefer ones near left-side match panel controls
+                                box = container.bounding_box()
+                                if box and box["x"] < 800:
+                                    target_container = container
+                                    break
+                            else:
+                                target_container = container
+                                break
+                    except:
+                        continue
+
+            if target_container is None:
+                # Fallback robust: mở từng select2 container để đợi input placeholder render
+                try:
+                    ssdb_token_re = re.compile(r"ssdb", re.IGNORECASE)
+
+                    select2_containers = page.locator(
+                        "span.select2-container, span.select2-selection"
+                    ).all()
+
+                    for cont in select2_containers:
+                        try:
+                            if not cont.is_visible():
+                                continue
+                        except:
+                            continue
+
+                        try:
+                            cont.click(force=True)
+                        except:
+                            continue
+
+                        time.sleep(0.25)
+
+                        try:
+                            # After opening, search field may exist with placeholder
+                            search_inputs_now = page.locator(
+                                "input.select2-search__field"
+                            ).all()
+                            ssdb_found = False
+                            for inp in search_inputs_now:
+                                try:
+                                    ph = (
+                                        inp.get_attribute("placeholder") or ""
+                                    ).strip()
+                                except:
+                                    ph = ""
+                                if ph and ssdb_token_re.search(ph):
+                                    ssdb_found = True
+                                    break
+
+                            if ssdb_found:
+                                target_container = cont
+                                print(
+                                    "         ✅ SSGroup ID: Found select2 container by opening/placeholder (SSDB)"
+                                )
+                                break
+                        except:
+                            pass
+
+                        # Close dropdown and try next
+                        try:
+                            page.keyboard.press("Escape")
+                        except:
+                            pass
+
+                    if target_container is None:
+                        return False
+                except:
+                    return False
+
+            # Primary path: use container determined by placeholder heuristics
+            if self._handle_js_dropdown(page, target_container, value_str, "select2"):
+                return True
+
+            # Fallback: brute-force visible select2 containers and try to select by option text.
+            # This handles cases where SSDB placeholder varies (or doesn't include SSDB token).
+            try:
+                select2_conts = page.locator(
+                    "span.select2-container:visible, span.select2-selection:visible"
+                ).all()
+                for cont in select2_conts[:10]:
+                    try:
+                        if not cont.is_visible():
+                            continue
+                    except:
+                        continue
+
+                    try:
+                        cont.click(force=True)
+                    except:
+                        continue
+
+                    time.sleep(0.25)
+
+                    # Find visible search input belonging to THIS opened select2 and type query
+                    try:
+                        ss_inp = cont.locator(
+                            "input.select2-search__field:visible"
+                        ).first
+                        if ss_inp.count() == 0:
+                            # fallback: global visible input (older layouts)
+                            ss_inp = page.locator(
+                                "input.select2-search__field:visible"
+                            ).first
+                        ss_inp.wait_for(state="visible", timeout=3000)
+                    except:
+                        # Close and continue
+                        try:
+                            page.keyboard.press("Escape")
+                        except:
+                            pass
+                        continue
+
+                    try:
+                        ss_inp.fill("")
+                        ss_inp.fill(value_str)
+                    except:
+                        # last resort: JS set value
+                        try:
+                            ss_inp.evaluate(
+                                "(el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));}",
+                                value_str,
+                            )
+                        except:
+                            pass
+
+                    time.sleep(0.5)
+
+                    # Wait for options and click match
+                    matched = False
+                    try:
+                        opts = page.locator(".select2-results__option:visible")
+                        # wait for options to render
+                        try:
+                            opts.first.wait_for(state="visible", timeout=3000)
+                        except:
+                            pass
+
+                        # prefer exact/equal text match
+                        match_opt = opts.filter(
+                            has_text=re.compile(r"^" + re.escape(value_str) + r"\s*$")
+                        ).first
+                        if match_opt.count() > 0 and match_opt.is_visible():
+                            match_opt.click(force=True)
+                            matched = True
+                        else:
+                            # contains fallback
+                            match_opt2 = opts.filter(
+                                has_text=re.compile(re.escape(value_str), re.IGNORECASE)
+                            ).first
+                            if match_opt2.count() > 0 and match_opt2.is_visible():
+                                match_opt2.click(force=True)
+                                matched = True
+                    except:
+                        matched = False
+
+                    # Close dropdown
+                    try:
+                        page.keyboard.press("Escape")
+                    except:
+                        pass
+
+                    if matched:
+                        print(
+                            "         ✅ SSGroup ID set via brute-force select2 option match"
+                        )
+                        return True
+            except:
+                pass
+
+            return False
+        except Exception as e:
+            print(
+                f"         ⚠️ _try_set_ssgroup_id_by_ssdb_search_placeholder error: {e}"
+            )
+            return False
 
     def _fill_multiple_datetime_fields(self, page, label_text, values):
         """
@@ -1722,6 +2492,9 @@ class FormHandlerMixin:
 
             target_btn = None
 
+            # Detect PVE Match 1 context (multiselect input exists only there)
+            is_pve_match_page = page.locator("#searchSSGroupId").count() > 0
+
             # =========================================================
             # CHIẾN THUẬT 1: TÌM NÚT THEO THỨ TỰ ƯU TIÊN CAO
             # Hỗ trợ mode="save" / mode="clone" / mode="continue"
@@ -1735,14 +2508,32 @@ class FormHandlerMixin:
                     "OK",
                 ]
             elif mode == "save":
-                # Mode "save": Chỉ bấm Save (KHÔNG bấm Save & Continue)
-                priority_buttons = [
-                    "Save",
-                    "Update",
-                    "Submit",
-                    "Confirm",
-                    "OK",
-                ]
+                # Mode "save":
+                # - On PVE we MUST prefer the green Match Save button (text "Save"),
+                #   not the generic "Save Book Info" button elsewhere.
+                if is_pve_match_page:
+                    priority_buttons = [
+                        "Save",  # prefer Match Save (green button)
+                        "Save Book Info",
+                        "Save Book",
+                        "Save Book Information",
+                        "Update",
+                        "Submit",
+                        "Confirm",
+                        "OK",
+                    ]
+                else:
+                    # Default non-PVE: keep original safety (prefer Save Book Info)
+                    priority_buttons = [
+                        "Save Book Info",
+                        "Save Book",
+                        "Save Book Information",
+                        "Save",  # fallback generic (exact match)
+                        "Update",
+                        "Submit",
+                        "Confirm",
+                        "OK",
+                    ]
             else:
                 # Mode "continue" (default): Ưu tiên Save & Continue
                 priority_buttons = [
@@ -1761,7 +2552,7 @@ class FormHandlerMixin:
 
             for btn_text in priority_buttons:
                 if mode == "save" and btn_text.lower() == "save":
-                    # EXACT MATCH: Tìm button "Save" nhưng KHÔNG match "Save & Continue"
+                    # EXACT MATCH generic "Save" nhưng KHÔNG match "Save & Continue"
                     all_btns = scope.locator(
                         "button, a.btn, input[type='submit']"
                     ).all()
@@ -1777,7 +2568,7 @@ class FormHandlerMixin:
                                 ):
                                     target_btn = candidate_btn
                                     print(
-                                        f"      🎯 Found exact 'Save' button (mode=save)"
+                                        f"      🎯 Found exact 'Save' button (mode=save fallback)"
                                     )
                                     break
                             except:
@@ -1785,18 +2576,25 @@ class FormHandlerMixin:
                     if target_btn:
                         break
                 else:
+                    # Prefer exact/contains match for the contextual button text
                     btn = (
                         scope.locator("button, a.btn, input[type='submit']")
                         .filter(
                             has_text=re.compile(
-                                f"^\\s*{re.escape(btn_text)}\\s*$|{re.escape(btn_text)}",
+                                rf"\\b{re.escape(btn_text)}\\b|^{re.escape(btn_text)}$|{re.escape(btn_text)}",
                                 re.IGNORECASE,
                             )
                         )
                         .last
                     )
                     if btn.count() > 0 and btn.is_visible():
-                        print(f"      🎯 Found button: '{btn_text}'")
+                        try:
+                            found_txt = btn.inner_text().strip()
+                        except:
+                            found_txt = btn_text
+                        print(
+                            f"      🎯 Found button for mode=save: '{found_txt}' (wanted '{btn_text}')"
+                        )
                         target_btn = btn
                         break
 
@@ -1821,6 +2619,55 @@ class FormHandlerMixin:
             # THỰC HIỆN CLICK (với Network Response Interception)
             # =========================================================
             if target_btn and target_btn.is_visible():
+                # PVE: choose the correct green "Save" button (bottom save bar),
+                # not the nearby "Save" next to the SSDB/multiselect dropdown.
+                # Also: per your request, no extra ~30s wait here (wait only during SSGroup ID fill).
+                if is_pve_match_page:
+                    try:
+                        save_candidates = (
+                            scope.locator("button, a.btn, input[type='submit']")
+                            .filter(has_text=re.compile(r"^\s*Save\s*$", re.IGNORECASE))
+                            .all()
+                        )
+
+                        best = None
+                        best_score = (-1, -1)  # (green_flag, y)
+                        for cand in save_candidates:
+                            try:
+                                if not cand.is_visible():
+                                    continue
+                                box = cand.bounding_box()
+                                y = box["y"] if box and "y" in box else -1
+                                cls = ""
+                                try:
+                                    cls = (cand.get_attribute("class") or "").lower()
+                                except:
+                                    cls = ""
+
+                                # Prefer green buttons (btn-success). If class isn't present,
+                                # still fall back to bottom-most (max y).
+                                green_flag = (
+                                    1
+                                    if "btn-success" in cls or "btn-green" in cls
+                                    else 0
+                                )
+                                score = (green_flag, y)
+                                if score > best_score:
+                                    best_score = score
+                                    best = cand
+                            except:
+                                continue
+
+                        if best is not None:
+                            target_btn = best
+                            print(
+                                f"      🎯 PVE Save button chosen at bottom (score={best_score})"
+                            )
+                    except Exception as _pve_save_pick_err:
+                        print(
+                            f"      ⚠️ PVE Save button picking failed: {_pve_save_pick_err}"
+                        )
+
                 target_btn.scroll_into_view_if_needed()
                 time.sleep(0.5)
 
@@ -2066,10 +2913,15 @@ class FormHandlerMixin:
         # CHECK 1: Detect SweetAlert2 error popup (e.g., datetime format error)
         # ========================================
         try:
+            # PVE dropdown/load can be slow; give more time for the success/error swal to appear
             swal_popup = page.locator(".swal2-popup")
-            swal_popup.wait_for(state="visible", timeout=3000)
+            swal_popup.wait_for(state="visible", timeout=8000)
+
+            popup_text = ""
             if swal_popup.is_visible():
                 popup_text = swal_popup.inner_text().strip()
+
+            if popup_text:
                 clean_text = popup_text.replace("\n", " ").strip()[:500]
                 print(f"      🚨 Popup detected after save: {clean_text[:200]}")
 
@@ -2080,7 +2932,11 @@ class FormHandlerMixin:
                     )
                     if ok_btn.count() > 0 and ok_btn.first.is_visible():
                         ok_btn.first.click(force=True)
-                        time.sleep(0.5)
+                        # Wait until popup fully closes so caller doesn't refresh early
+                        try:
+                            swal_popup.wait_for(state="hidden", timeout=5000)
+                        except:
+                            time.sleep(0.5)
                 except:
                     try:
                         page.evaluate("""
@@ -2091,7 +2947,6 @@ class FormHandlerMixin:
                     except:
                         pass
 
-                # Check if it's an error, warning/confirmation, or success
                 text_lower = popup_text.lower()
                 error_keywords = [
                     "error",
@@ -2107,8 +2962,6 @@ class FormHandlerMixin:
                     "lỗi",
                     "không hợp lệ",
                 ]
-                # Warning/confirmation popups that should NOT block execution
-                # These are informational warnings where clicking OK is the correct action
                 warning_keywords = [
                     "overlapping",
                     "overlap",
@@ -2119,6 +2972,7 @@ class FormHandlerMixin:
                     "proceed",
                     "continue",
                 ]
+
                 if any(k in text_lower for k in error_keywords):
                     print(f"      ❌ Error popup detected: {clean_text[:200]}")
                     return {"success": False, "error_message": clean_text}
@@ -2126,13 +2980,11 @@ class FormHandlerMixin:
                     print("      ✅ Success popup detected.")
                     return {"success": True, "error_message": None}
                 elif any(k in text_lower for k in warning_keywords):
-                    # Warning/confirmation popup — OK was already clicked above
                     print(
                         f"      ⚠️ Warning popup auto-dismissed (OK clicked): {clean_text[:200]}"
                     )
                     return {"success": True, "error_message": None}
                 else:
-                    # Unknown popup content - treat as potential error
                     print(f"      ⚠️ Unknown popup: {clean_text[:200]}")
                     return {"success": False, "error_message": clean_text}
         except:
@@ -2186,9 +3038,9 @@ class FormHandlerMixin:
         # CHECK 3: Success indicators
         # ========================================
         try:
-            # Chờ Toast Message xanh lá hiện lên
+            # Chờ Toast Message xanh lá hiện lên (đảm bảo popup success đã hiện trước khi refresh)
             page.locator(".toast-success, .alert-success").wait_for(
-                state="visible", timeout=2000
+                state="visible", timeout=8000
             )
             print("      ✅ Thành công (Toast detected).")
             return {"success": True, "error_message": None}
@@ -2982,9 +3834,18 @@ class FormHandlerMixin:
         _has_css_special = bool(re.search(r'[()\[\]{}#.>+~:,\'"\\]', label_lower))
         if not _has_css_special:
             label_id_format = label_lower.replace(" ", "_").replace("-", "_")
-            direct_by_id = page.locator(
-                f"#{label_id_format}, [name='{label_id_format}']"
-            ).first
+
+            # CSS selector "#5_star" is invalid (id starts with digit).
+            # Use attribute selector [id='...'] which is safe.
+            if label_id_format and str(label_id_format)[0].isdigit():
+                direct_by_id = page.locator(
+                    f"[id='{label_id_format}'], [name='{label_id_format}']"
+                ).first
+            else:
+                direct_by_id = page.locator(
+                    f"#{label_id_format}, [name='{label_id_format}']"
+                ).first
+
             if direct_by_id.count() > 0 and direct_by_id.is_visible():
                 tag = (direct_by_id.evaluate("el => el.tagName") or "").lower()
                 href = direct_by_id.get_attribute("href") or ""
@@ -3001,9 +3862,16 @@ class FormHandlerMixin:
 
             # Try with hyphens too
             label_id_hyphen = label_lower.replace(" ", "-").replace("_", "-")
-            direct_by_id_hyphen = page.locator(
-                f"#{label_id_hyphen}, [name='{label_id_hyphen}']"
-            ).first
+
+            if label_id_hyphen and str(label_id_hyphen)[0].isdigit():
+                direct_by_id_hyphen = page.locator(
+                    f"[id='{label_id_hyphen}'], [name='{label_id_hyphen}']"
+                ).first
+            else:
+                direct_by_id_hyphen = page.locator(
+                    f"#{label_id_hyphen}, [name='{label_id_hyphen}']"
+                ).first
+
             if direct_by_id_hyphen.count() > 0 and direct_by_id_hyphen.is_visible():
                 tag = (direct_by_id_hyphen.evaluate("el => el.tagName") or "").lower()
                 href = direct_by_id_hyphen.get_attribute("href") or ""
@@ -3125,8 +3993,31 @@ class FormHandlerMixin:
                         pass
 
                 if parent_containers:
+                    # [FIX] Multiselect (Vue multiselect / custom-vue-multiselect)
+                    # "Book Texture Icon" is rendered as <div class="multiselect">...</div>
+                    # and the underlying <input> is hidden (style width:0/absolute),
+                    # so searching only input/select/textarea will miss it.
+                    try:
+                        multiselect_box = parent_containers.locator(
+                            "div.multiselect"
+                        ).first
+                        if multiselect_box.count() > 0:
+                            # Return the visible wrapper if possible; otherwise still return it
+                            if multiselect_box.is_visible():
+                                print(
+                                    f"         ✅ Found multiselect wrapper for '{label_text}' via fieldset container"
+                                )
+                                return multiselect_box
+                            # Even if not visible, it can still be interacted with using force later
+                            print(
+                                f"         ⚠️ Found multiselect wrapper for '{label_text}' but it's not visible; returning anyway"
+                            )
+                            return multiselect_box
+                    except:
+                        pass
+
                     # [CRITICAL] Tìm input/select TRONG container này
-                    # Không dùng sibling/following, chỉ dùng child elements
+                    # Không dùng fallback
                     elements = parent_containers.locator(
                         "select, input:not([type='radio']):not([type='button']):not([type='hidden']), textarea"
                     ).all()
@@ -5271,59 +6162,10 @@ class FormHandlerMixin:
                 # CHỜ KẾT QUẢ FILTER
                 time.sleep(1.0)
 
-                wait_start = time.time()
+                # PERF/FIX:
+                # Tránh polling bằng `.all()` + `is_visible()` trên từng option (cực dễ treo khi list option nhiều).
+                # Ta sẽ chọn option bằng JS match/click ở các nhánh phía dưới.
                 visible_results = []
-                while time.time() - wait_start < 3:
-                    try:
-                        if lib_type == "chosen":
-                            results = container.locator(".active-result").all()
-                        elif lib_type == "multiselect":
-                            results = page.locator(
-                                ".multiselect__element, .multiselect__option"
-                            ).all()
-                        else:
-                            results = page.locator(
-                                ".select2-results__option:not(.select2-results__option--load-more)"
-                            ).all()
-
-                        visible_results = [r for r in results if r.is_visible()]
-                        if len(visible_results) > 0:
-                            print(
-                                f"         📋 Found {len(visible_results)} search results"
-                            )
-                            break
-                    except:
-                        pass
-                    time.sleep(0.3)
-
-                # [FIX] Nếu search không ra kết quả → clear search và thử lại với term ngắn hơn
-                if not visible_results and "_" in value_str:
-                    shorter_term = value_str.split("_")[0]  # Chỉ lấy từ đầu tiên
-                    print(f"         🔄 No results, retrying with: '{shorter_term}'")
-                    search_box.fill(shorter_term)
-                    time.sleep(1.0)
-                    wait_start = time.time()
-                    while time.time() - wait_start < 2:
-                        try:
-                            if lib_type == "chosen":
-                                results = container.locator(".active-result").all()
-                            elif lib_type == "multiselect":
-                                results = page.locator(
-                                    ".multiselect__element, .multiselect__option"
-                                ).all()
-                            else:
-                                results = page.locator(
-                                    ".select2-results__option:not(.select2-results__option--load-more)"
-                                ).all()
-                            visible_results = [r for r in results if r.is_visible()]
-                            if len(visible_results) > 0:
-                                print(
-                                    f"         📋 Found {len(visible_results)} results with shorter term"
-                                )
-                                break
-                        except:
-                            pass
-                        time.sleep(0.3)
 
                 # [FIX] Click option CHÍNH XÁC nhất (không phải first blind)
                 clicked = False
@@ -5364,14 +6206,77 @@ class FormHandlerMixin:
                             except:
                                 pass
                     # Fallback: Click first result
+                    # NOTE: Tránh gọi visible_results[0].inner_text() / click trực tiếp (dễ treo khi option nhiều).
                     if not clicked and visible_results:
                         try:
-                            visible_results[0].click()
-                            r_text = visible_results[0].inner_text().strip()
-                            print(
-                                f"         ⚠️ [Dropdown] Clicked first result: '{r_text}'"
+                            clicked_js = page.evaluate(
+                                """(valueLower) => {
+  const normalize = (s) => (s || "")
+    .toString()
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/-/g, " ")
+    .replace(/\\s+/g, " ")
+    .trim();
+
+  const target = normalize(valueLower);
+
+  const selectors = [
+    ".multiselect__element",
+    ".multiselect__option",
+    ".active-result",
+    ".select2-results__option",
+    ".chosen-results li",
+    "option"
+  ];
+
+  const els = selectors
+    .map(sel => Array.from(document.querySelectorAll(sel)))
+    .reduce((a,b) => a.concat(b), []);
+
+  const visible = (el) => {
+    try {
+      const r = el.getBoundingClientRect();
+      if (!r) return false;
+      if (r.width <= 0 || r.height <= 0) return false;
+      const style = window.getComputedStyle(el);
+      return style && style.visibility !== "hidden" && style.display !== "none";
+    } catch (e) { return false; }
+  };
+
+  // Prefer exact match first
+  for (const el of els) {
+    if (!visible(el)) continue;
+    const txt = normalize(el.innerText || el.textContent || el.getAttribute("title") || "");
+    if (txt === target) {
+      el.click();
+      return true;
+    }
+  }
+
+  // Then contains match
+  for (const el of els) {
+    if (!visible(el)) continue;
+    const txt = normalize(el.innerText || el.textContent || el.getAttribute("title") || "");
+    if (txt.includes(target) || target.includes(txt)) {
+      el.click();
+      return true;
+    }
+  }
+
+  return false;
+}""",
+                                value_lower,
                             )
-                            clicked = True
+
+                            if clicked_js:
+                                print(
+                                    "         ⚠️ [Dropdown] Clicked option via JS match"
+                                )
+                                clicked = True
+                            else:
+                                page.keyboard.press("Enter")
+                                clicked = True
                         except:
                             page.keyboard.press("Enter")
                             clicked = True

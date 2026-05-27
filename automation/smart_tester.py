@@ -385,15 +385,15 @@ class SmartTesterMixin:
                     # Chờ .swal2-popup xuất hiện (Timeout 10s)
                     # Selector này khớp chính xác với ảnh bạn gửi
                     popup = page.wait_for_selector(
-                        ".swal2-popup", state="visible", timeout=10000
+                        ".swal2-popup", state="visible", timeout=3000
                     )
 
                     if popup:
                         text = popup.inner_text().lower()
                         clean_text = text.replace("\n", " ").strip()[:200]
 
-                        print("      ⏳ Popup detected, waiting 10s...")
-                        time.sleep(10.0)  # Chờ thêm 10s để chắc chắn popup đã ổn định
+                        print("      ⏳ Popup detected, waiting ~2-3s...")
+                        time.sleep(2.0)  # Chờ ngắn để popup ổn định
                         # Tìm nút OK (.swal2-confirm) và click luôn
                         page.evaluate("""
                             const btn = document.querySelector('button.swal2-confirm');
@@ -1135,6 +1135,32 @@ class SmartTesterMixin:
     def _ensure_popup_closed(self, page):
         """Dọn dẹp popup bằng JS trực tiếp để tránh bị chặn bởi Overlay"""
         try:
+            # CRITICAL: Some import flows show a blocking "Warning" modal that requires clicking
+            # "Continue/Proceed" to actually apply CSV overwrite.
+            # If we generic-close it here (Escape/OK), the import may be skipped.
+            # Handle sequential import confirmation modals (2 popups in a row in your screenshot)
+            # Goal: click Continue/Proceed fast, without relying on modal text == "Warning".
+            try:
+                for _ in range(5):
+                    continue_btn = (
+                        page.locator(
+                            ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+                        )
+                        .locator(
+                            "button:has-text('Continue'), button:has-text('Proceed')"
+                        )
+                        .first
+                    )
+                    if continue_btn.count() > 0 and continue_btn.is_visible():
+                        print(
+                            "      🟠 Continue/Proceed popup detected in _ensure_popup_closed -> clicking..."
+                        )
+                        continue_btn.click(force=True)
+                        time.sleep(0.35)
+                        continue
+                    break
+            except Exception:
+                pass
             # Dùng JS tìm và click nút OK/Close/Confirm
             # Cách này mạnh hơn .click() của Playwright vì nó bỏ qua check visibility/overlay
             page.evaluate("""
@@ -1200,6 +1226,23 @@ class SmartTesterMixin:
                 const genericClose = document.querySelector(
                     '.popup button[class*="close"], .dialog button[class*="close"]'
                 );
+
+                // =============================
+                // 4) Continue/Proceed buttons (import warnings)
+                // =============================
+                const continueBtn = Array.from(
+                    document.querySelectorAll(
+                        '.modal.show button, .swal2-popup button, [role="dialog"]:visible button'
+                    )
+                ).find(b => {
+                    const txt = (b && b.textContent) ? b.textContent.trim() : '';
+                    return b && b.offsetParent !== null && /^(continue|proceed)$/i.test(txt);
+                });
+
+                if (continueBtn) {
+                    continueBtn.click();
+                    return;
+                }
 
                 // Click first available button (use .offsetParent to check if truly visible)
                 if (confirmBtn && confirmBtn.offsetParent !== null) {

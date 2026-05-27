@@ -35,6 +35,32 @@ class BrickAutomation(
         blocking modals like "DNU Warning".
         Uses SmartTesterMixin._ensure_popup_closed when available.
         """
+        # CRITICAL: Import CSV Warning popup cần bấm "Continue" để app thực sự ghi đè.
+        try:
+            warning_modal = (
+                page.locator(
+                    ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+                )
+                .filter(has_text=re.compile(r"\bwarning\b", re.IGNORECASE))
+                .first
+            )
+            continue_btn = warning_modal.locator(
+                "button:has-text('Continue'), button:has-text('Proceed')"
+            ).first
+            if (
+                warning_modal.count() > 0
+                and warning_modal.is_visible()
+                and continue_btn.is_visible()
+            ):
+                print(
+                    "      🟠 Warning popup detected (continue needed) -> clicking Continue..."
+                )
+                continue_btn.click(force=True)
+                time.sleep(0.35)
+                return
+        except Exception:
+            pass
+
         try:
             ensure_fn = getattr(self, "_ensure_popup_closed", None)
             if callable(ensure_fn):
