@@ -116,10 +116,12 @@ NAVIGATION_PATH_MAP = {
     # Versus
     "tournament": ["Live Events", "Versus", "Tournament"],
     "versus tournament": ["Live Events", "Versus", "Tournament"],
+    "notoriety reset brackets": ["Live Events", "Versus", "Notoriety Reset Brackets"],
     # Mission
     "mission": ["Live Events", "Mission", "Mission"],
     # Fight Card
     "fight card": ["Live Events", "Fight Card", "Fight Card"],
+    "fight card V3": ["Live Events", "Fight Card", "Fight Card V3"],
     "fight card slot": ["Live Events", "Fight Card", "Fight Card Slot"],
     # Cash Contract
     "cash contract": ["Live Events", "Cash Contract", "Cash Contract"],
@@ -128,8 +130,8 @@ NAVIGATION_PATH_MAP = {
     # Faction Lockbox
     "faction lockbox": ["Live Events", "Faction Lockbox", "Faction Lockbox"],
     # Faction Boss
-    "faction boss event": ["Live Events", "Faction Boss", "Faction Boss Event"],
-    "faction boss": ["Live Events", "Faction Boss"],
+    "faction boss event": ["Live Events", "Faction Boss Battle"],
+    "faction boss": ["Live Events", "Faction Boss Battle"],
     # Grab Bag
     "grab bag": ["Data Configs", "Grab Bag V2"],
     "grabbag": ["Data Configs", "Grab Bag V2"],
@@ -328,6 +330,22 @@ def fix_action_plan(plan, user_command=""):
     for pattern in uncheck_patterns:
         for m in _re.finditer(pattern, cmd_lower, _re.IGNORECASE):
             uncheck_targets.add(m.group(1).strip().lower())
+
+    # PVE special: "contain LTPVE bất kỳ" / "chứa LTPVE bất kỳ"
+    # Want edit_row target = "LTPVE" (substring match), not RANDOM.
+    contain_token = None
+    try:
+        m_contain = _re.search(
+            r"(?:contain|chứa)\s+([A-Za-z0-9_]+)\s+(?:bất\s*kỳ|bat\s*ky|any)",
+            cmd_lower,
+            _re.IGNORECASE,
+        )
+        if m_contain:
+            contain_token = m_contain.group(1).strip()
+            print(f"   🔍 Detected contain-token from command: {contain_token}")
+    except Exception:
+        contain_token = None
+
     if uncheck_targets:
         print(f"   🔍 Detected uncheck targets from command: {uncheck_targets}")
 
@@ -595,10 +613,18 @@ def fix_action_plan(plan, user_command=""):
                 or ("random" in tgt and tgt != "random_1")
             )
             if is_random_target:
-                step["target"] = "RANDOM"
-                print(
-                    f"   🔧 AUTO-FIX: {action}('{tgt or 'empty'}') → {action}('RANDOM') (random row mode)"
-                )
+                # If user asked: "contain <TOKEN> bất kỳ/chứa <TOKEN> bất kỳ"
+                # we DON'T want to pick RANDOM row; we want deterministic substring match.
+                if contain_token:
+                    step["target"] = contain_token
+                    print(
+                        f"   🔧 AUTO-FIX: {action}('{tgt or 'empty'}') → {action}('{contain_token}') (contain-token mode)"
+                    )
+                else:
+                    step["target"] = "RANDOM"
+                    print(
+                        f"   🔧 AUTO-FIX: {action}('{tgt or 'empty'}') → {action}('RANDOM') (random row mode)"
+                    )
 
         elif action == "navigate":
             # Fix: {menu: [...]} → {path: [...]}

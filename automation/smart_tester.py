@@ -502,13 +502,80 @@ class SmartTesterMixin:
         try:
             btn = None
 
+            # Chapter Import UI requires:
+            # 1) Click/select file in custom-file input[type='file']
+            # 2) THEN click submit button "Import CSV"
+            # If we pick the submit button as btn, file chooser won't open and import fails.
+            target_lower = str(target_text or "").lower()
+
+            # Chapter Import UI đôi khi được AI gọi là "Import Chapter ..." (không phải "Import CSV").
+            # Nếu không nhận diện đúng thì ta có thể bấm nhầm submit button => không mở filechooser => timeout.
+            is_import_csv_ui = (
+                "import csv" in target_lower or target_lower.strip() == "import csv"
+            )
+
+            is_import_chapter_ui = (
+                "import chapter" in target_lower
+                or ("import" in target_lower and "chapter" in target_lower)
+                or ("chapters" in target_lower and "import" in target_lower)
+            )
+
+            is_chapter_csv_file = str(file_name or "").lower().endswith(".csv") and (
+                "chapter" in str(file_name or "").lower()
+            )
+
+            is_import_csv_ui = bool(
+                is_import_csv_ui or is_import_chapter_ui or is_chapter_csv_file
+            )
+
+            submit_import_btn = None
+            if is_import_csv_ui:
+                try:
+                    submit_import_btn = (
+                        page.locator("button, a, [role='button']")
+                        .filter(
+                            has_text=re.compile(r"^\s*Import\s*CSV\s*$", re.IGNORECASE)
+                        )
+                        .first
+                    )
+                    if submit_import_btn.count() == 0:
+                        submit_import_btn = (
+                            page.locator("button, a, [role='button']")
+                            .filter(has_text=re.compile(r"Import\s*CSV", re.IGNORECASE))
+                            .first
+                        )
+                except:
+                    submit_import_btn = None
+
+                # Force btn to be the real file input (if present)
+                # IMPORTANT: custom-file input[type='file'] can be hidden (z-index:-5),
+                # but set_input_files works without it being visible.
+                try:
+                    file_input = (
+                        page.locator(
+                            "div.custom-file input[type='file'], input[type='file']"
+                        )
+                        .filter(has_not=page.locator("[disabled]"))
+                        .first
+                    )
+                    if file_input.count() > 0:
+                        btn = file_input
+                        cached_selector = "input[type='file']"
+                except:
+                    pass
+
             # Use cache if available
-            if cached_selector:
+            # IMPORTANT: if we already discovered a correct btn (e.g. custom-file input),
+            # don't overwrite it by re-fetching the first generic match.
+            if cached_selector and not btn:
                 try:
                     btn = page.locator(cached_selector).first
-                    if not btn.is_visible(timeout=500):
-                        btn = None
-                        cached_selector = None
+                    # File inputs (custom-file) có thể bị hidden (z-index:-5).
+                    # set_input_files vẫn hoạt động bình thường => không cần is_visible().
+                    if "input[type='file']" not in str(cached_selector).lower():
+                        if not btn.is_visible(timeout=500):
+                            btn = None
+                            cached_selector = None
                 except:
                     btn = None
                     cached_selector = None
@@ -696,6 +763,24 @@ class SmartTesterMixin:
                         btn.click()
                     fc_info.value.set_files(full_path)
                 time.sleep(0.3)  # Reduced from 0.5s
+
+                # If this is the Chapter Import UI, click the submit button after file is set
+                if "is_import_csv_ui" in locals() and is_import_csv_ui:
+                    try:
+                        if (
+                            submit_import_btn
+                            and submit_import_btn.count() > 0
+                            and submit_import_btn.is_visible()
+                        ):
+                            submit_import_btn.click(force=True)
+                            print(
+                                "   🧾 [Chapter Import] Clicked submit button: Import CSV"
+                            )
+                            time.sleep(0.4)
+                    except Exception as _click_import_err:
+                        print(
+                            f"   ⚠️ [Chapter Import] Failed to click Import CSV button: {_click_import_err}"
+                        )
 
                 # SweetAlert "Are you sure? / Yes, do it!" must be confirmed before result toasts
                 self._confirm_csv_overwrite_prompt_if_present(page)

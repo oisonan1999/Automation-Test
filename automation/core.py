@@ -84,6 +84,52 @@ class BrickAutomation(
         except Exception:
             pass
 
+    def _ensure_swal2_clone_confirmation_yes(self, page, max_rounds=5):
+        """
+        Auto-confirm SweetAlert2 clone prompt:
+        e.g. "Do you want to clone the Contest Superstar Section?"
+        Popup has buttons "Yes" (swal2-confirm) and "No"/"No" (cancel/deny).
+        """
+        try:
+            for _ in range(max_rounds):
+                popup = page.locator(".swal2-popup:visible").first
+                if popup.count() == 0 or not popup.is_visible():
+                    return False
+
+                text = ""
+                try:
+                    text = popup.inner_text(timeout=500).strip().lower()
+                except:
+                    text = (popup.get_attribute("data-text") or "").lower()
+
+                # Only handle clone prompts
+                if "clone" not in text:
+                    return False
+
+                yes_btn = popup.locator(
+                    "button.swal2-confirm, button:has-text('Yes'), button:has-text('yes')"
+                ).first
+
+                if yes_btn.count() > 0 and yes_btn.is_visible():
+                    print(
+                        "      🟡 SweetAlert2 clone confirmation detected -> clicking Yes..."
+                    )
+                    yes_btn.click(force=True)
+                    time.sleep(0.35)
+
+                    # Wait briefly for popup to disappear
+                    try:
+                        popup.wait_for(state="hidden", timeout=3000)
+                    except:
+                        pass
+                    return True
+
+                time.sleep(0.2)
+        except Exception:
+            return False
+
+        return False
+
     def _ensure_rbe_are_you_sure_closed(self, page):
         """
         Only close the specific Bootstrap confirm modal:
@@ -314,6 +360,9 @@ class BrickAutomation(
                     # khi tiếp tục các bước click/update/save, tránh AI bị block/nhảy bước sai.
                     try:
                         if act in {"click", "select", "update_form", "save_form"}:
+                            # Handle SweetAlert2 clone confirmation first (Yes/No)
+                            self._ensure_swal2_clone_confirmation_yes(page)
+                            # Then handle existing Bootstrap confirmation modals
                             self._ensure_rbe_are_you_sure_closed(page)
                     except Exception:
                         pass
@@ -490,18 +539,125 @@ class BrickAutomation(
                                 print(
                                     "      ⏳ Waiting for cloned item page to load..."
                                 )
-                                time.sleep(1.5)
+                                # Regression speed-up: reduce sleep aggressively to reach edit_row before tool timeout.
+                                time.sleep(0.1)
                                 popup_handled = self._handle_locked_item_popup(page)
                                 if popup_handled:
-                                    time.sleep(1.0)
+                                    time.sleep(0.1)
                                     print(
                                         "      ✅ Lock handled for cloned item. Ready to update form."
                                     )
                                 else:
-                                    time.sleep(0.5)
+                                    time.sleep(0.1)
 
                     elif act == "download":
                         try:
+                            # PVE Export Chapters special handling:
+                            # For Export Chapter, BookID must come from page header "Event: <BookID> (....)"
+                            # Then fill into input#searchChapterTemplate and select inside #listbox-searchChapterTemplate.
+                            if str(tgt or "").strip().lower() == "export chapter":
+                                book_id = None
+                                try:
+                                    # 1) Extract BookID from page text: "Event: LTPVE_.... (4149)"
+                                    # We'll scan visible text nodes and match "Event:" prefix.
+                                    book_id = page.evaluate("""() => {
+                                        const re = /Event:\\s*([^:\\s(]+)\\s*(?=[:(])/i;
+                                        const walker = document.createTreeWalker(
+                                            document.body,
+                                            NodeFilter.SHOW_TEXT,
+                                            null,
+                                            false
+                                        );
+                                        let node;
+                                        while(node = walker.nextNode()){
+                                            const t = (node.nodeValue || '').trim();
+                                            if(!t) continue;
+                                            const m = t.match(re);
+                                            if(m && m[1]) return m[1].trim();
+                                        }
+                                        return null;
+                                    }""")
+                                    if book_id:
+                                        book_id = str(book_id).strip()
+                                        print(
+                                            f"   🔍 Export Chapter: extracted BookID from page: '{book_id}'"
+                                        )
+                                except Exception as _extract_e:
+                                    print(
+                                        f"   ⚠️ Export Chapter: failed extracting BookID from page: {_extract_e}"
+                                    )
+                                    book_id = None
+
+                                # 2) Fallback: if extraction fails, try from downloads/chapter_test.csv
+                                if not book_id:
+                                    try:
+                                        import csv as _csv
+
+                                        csv_path = os.path.join(
+                                            DOWNLOAD_DIR, str(val or "chapter_test.csv")
+                                        )
+                                        prefer_path = os.path.join(
+                                            DOWNLOAD_DIR, "chapter_test.csv"
+                                        )
+                                        if os.path.exists(prefer_path):
+                                            csv_path = prefer_path
+
+                                        if os.path.exists(csv_path):
+                                            with open(
+                                                csv_path, "r", encoding="utf-8-sig"
+                                            ) as f:
+                                                reader = _csv.DictReader(f)
+                                                headers = reader.fieldnames or []
+                                                book_col = None
+                                                for h in headers:
+                                                    hl = str(h).strip().lower()
+                                                    if (
+                                                        hl == "bookid"
+                                                        or hl == "book id"
+                                                        or hl.endswith("bookid")
+                                                        or "bookid" in hl
+                                                    ):
+                                                        book_col = h
+                                                        break
+                                                if book_col is None and headers:
+                                                    book_col = headers[0]
+                                                for r in reader:
+                                                    raw_book_id = (
+                                                        r.get(book_col)
+                                                        if book_col
+                                                        else None
+                                                    )
+                                                    if raw_book_id:
+                                                        book_id = str(
+                                                            raw_book_id
+                                                        ).strip()
+                                                    break
+                                    except Exception as _csv_e:
+                                        print(
+                                            f"   ⚠️ Export Chapter: CSV fallback BookID error: {_csv_e}"
+                                        )
+
+                                # 3) Select BookID using the correct multiselect in DOM
+                                if book_id:
+                                    try:
+                                        ok = self._select_book_id_in_chapter_template_multiselect(
+                                            page, book_id
+                                        )
+                                        if ok:
+                                            time.sleep(1.0)
+                                        else:
+                                            print(
+                                                "   ⚠️ Export Chapter: BookID selection failed (best-effort)."
+                                            )
+                                    except Exception as _sel_e:
+                                        print(
+                                            f"   ⚠️ Export Chapter: BookID selection exception: {_sel_e}"
+                                        )
+                                else:
+                                    print(
+                                        "   ⚠️ Export Chapter: BookID is empty; skipping template selection (best-effort)."
+                                    )
+
                             btn = self._find_download_trigger(page, tgt)
                             if btn:
                                 with page.expect_download(timeout=30000) as dl:

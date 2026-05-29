@@ -417,6 +417,76 @@ class TableHandlerMixin:
                 all_rows = page.locator("tbody tr").filter(has=action_has)
                 total = all_rows.count()
 
+                # 🧠 Deterministic safeguard:
+                # Khi edit_row đang RANDOM nhưng ta đã biết New Tournament ID vừa clone,
+                # thì KHÔNG random nữa -> tìm row chứa LAST_CLONED_NEW_ID và bấm Edit đúng row đó.
+                if action_type == "edit":
+                    desired_id = str(
+                        self.memory.get("LAST_CLONED_NEW_ID") or ""
+                    ).strip()
+                    if desired_id:
+                        try:
+                            # Build a separator-flexible regex so it matches even if UI replaces
+                            # '_'/'-' with spaces (e.g. "VS_Tournament_hieunm_test" shown as "VS Tournament ...").
+                            tokens = [
+                                t
+                                for t in re.split(r"[_\-\s]+", desired_id)
+                                if t and t.strip()
+                            ]
+                            if tokens:
+                                pattern = "".join(
+                                    re.escape(t) + r"[\s_\-\.]*" for t in tokens
+                                )
+                                regex = re.compile(pattern, re.IGNORECASE)
+                            else:
+                                regex = re.compile(re.escape(desired_id), re.IGNORECASE)
+
+                            match_rows = all_rows.filter(has_text=regex)
+                            if match_rows.count() > 0:
+                                chosen_row = match_rows.first
+                                print(
+                                    f"   🧠 Deterministic edit: found row for LAST_CLONED_NEW_ID='{desired_id}', clicking Edit (skip random)"
+                                )
+
+                                try:
+                                    icon = chosen_row.locator(
+                                        "i[class*='edit'], i[class*='pencil'], .btn-edit, button:has-text('Edit'), a:has-text('Edit')"
+                                    ).first
+                                    if icon.count() > 0 and icon.is_visible():
+                                        icon.click(force=True)
+                                    else:
+                                        any_action = (
+                                            chosen_row.locator(
+                                                "button, a, [role='button']"
+                                            )
+                                            .filter(
+                                                has_text=re.compile(
+                                                    r"\bedit\b", re.IGNORECASE
+                                                )
+                                            )
+                                            .first
+                                        )
+                                        if (
+                                            any_action.count() > 0
+                                            and any_action.is_visible()
+                                        ):
+                                            any_action.click(force=True)
+                                        else:
+                                            fallback_btn = chosen_row.locator(
+                                                "button, a, [role='button']"
+                                            ).first
+                                            fallback_btn.click(force=True)
+                                except Exception as click_det_e:
+                                    print(
+                                        f"      ⚠️ Deterministic edit click failed, fallback to random: {click_det_e}"
+                                    )
+                                time.sleep(1.0)
+                                return
+                        except Exception as match_e:
+                            print(
+                                f"      ⚠️ Deterministic edit row matching failed, fallback to random: {match_e}"
+                            )
+
                 # If we can't find action buttons (icons) for this row type,
                 # don't crash. Fall back to any data row and click by heuristics later.
                 if total == 0:
@@ -611,8 +681,8 @@ class TableHandlerMixin:
                             start_t = time.time()
                             saw_async_loader = False
 
-                            # hard minimum wait (30s)
-                            while time.time() - start_t < 30:
+                            # hard minimum wait (8s) - regression speed-up
+                            while time.time() - start_t < 8:
                                 try:
                                     aria_busy = (
                                         page.locator(

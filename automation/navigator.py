@@ -342,31 +342,32 @@ class NavigatorMixin:
     def _handle_locked_item_popup(self, page):
         try:
             print("      🔍 Checking for Locked Item popup...")
-            time.sleep(0.5)
+            # Regression speed-up: giảm đợi để không vượt tool timeout (45s)
+            time.sleep(0.1)
 
             lock_btn = page.locator(".btn-acquire-lock, a.btn-acquire-lock").first
 
             try:
-                lock_btn.wait_for(state="visible", timeout=5000)
+                lock_btn.wait_for(state="visible", timeout=1500)
                 print("      🔒 Detected Locked Item popup (Class match).")
-                print("      🔓 Clicking 'Acquire Lock' button...")
+                print("       Clicking 'Acquire Lock' button...")
 
                 lock_btn.click(force=True)
 
                 try:
                     page.locator(".btn-acquire-lock").first.wait_for(
-                        state="hidden", timeout=5000
+                        state="hidden", timeout=1500
                     )
                     print("      ✅ Lock popup closed")
                 except:
                     pass
 
                 try:
-                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    page.wait_for_load_state("domcontentloaded", timeout=1500)
                 except:
                     pass
 
-                time.sleep(1.5)
+                time.sleep(0.8)
                 print("      ✅ Lock acquired successfully!")
                 return True
             except:
