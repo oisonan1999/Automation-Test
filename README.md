@@ -1,7 +1,7 @@
 # AutoGameOps — Codebase Overview (Brick QA Automation)
 
 ## Summary
-This project is a **Streamlit web app** that turns a human QA command (Vietnamese/English) into a **JSON action plan** using **local LLMs (Ollama)**, then executes the plan against the web UI **“The Brick”** via **Playwright (CDP attach)**. It supports a normal “AI Run (theo lệnh)” mode and a “Smoke Brick Live (theo CSV)” mode that repeatedly generates commands from CSV test cases and executes them end-to-end. The key value for developers is the combination of: (1) strict AI→JSON orchestration, (2) deterministic post-processing (action fixer), and (3) large amounts of UI-specific heuristics for unreliable web widgets (Vue multiselect, select2, collapse panels, SweetAlert2/Bootstrap modals).
+This project is a **Streamlit web app** that turns a human QA command (Vietnamese/English) into a **JSON action plan** using **local LLMs (Ollama)**, then executes the plan against the web UI **"The[...]
 
 ## Architecture
 **Primary pattern:** pipeline + deterministic orchestration.
@@ -19,7 +19,7 @@ This project is a **Streamlit web app** that turns a human QA command (Vietnames
 **Execution start**
 1. User enters a command → `app.py` calls `ai.brain.parse_command_to_json()`.
 2. AI returns plan → stored in `st.session_state.current_plan`.
-3. On “execute”, `automation.core.BrickAutomation.execute_action()` runs the plan sequentially.
+3. On "execute", `automation.core.BrickAutomation.execute_action()` runs the plan sequentially.
 
 ## Directory Structure (meaningful parts)
 ```text
@@ -35,7 +35,7 @@ project-root/
 │   ├── form_handler.py           — Field filling, dropdown handling, and save logic
 │   ├── table_handler.py          — Table checkbox selection + edit/clone row + reorder
 │   ├── data_handler.py           — CSV manipulation + upload/download wiring
-│   └── smart_tester.py          — CSV fuzz campaign + “smart test cycle”
+│   └── smart_tester.py          — CSV fuzz campaign + "smart test cycle"
 ├── config/
 │   └── scenarios.json (at runtime) — saved AI scenarios (not hardcoded)
 ├── downloads/                     — CSV fixtures & generated reports
@@ -55,7 +55,7 @@ project-root/
 - **Lifecycle**: Stateless across runs except `last_actual_mode` and scenario reuse.
 - **Used by**: `app.py` for both AI-run and smoke-run command planning.
 - **Non-obvious design**:
-  - Uses `clean_json_string()` to “salvage” malformed JSON from LLM output (removes comments, strips code fences, fixes brace/bracket counts).
+  - Uses `clean_json_string()` to "salvage" malformed JSON from LLM output (removes comments, strips code fences, fixes brace/bracket counts).
 
 ### `fix_action_plan()` (Deterministic Plan Repair)
 - **File**: `ai/action_fixer.py`
@@ -64,7 +64,7 @@ project-root/
   - Fix field names for certain actions
   - Merge consecutive `navigate` steps into one `navigate(path=[...])`
   - Merge deployment checkboxes into a single `process_deployment(options=[...])`
-  - Inject missing `clone_row` when user command contains “Clone …”
+  - Inject missing `clone_row` when user command contains "Clone …"
   - Inject `save_form(mode="clone")` after clone modal fields
   - Merge consecutive `update_form → save_form(save)` pairs to avoid multi-phase validation errors
 - **Interface**: `fix_action_plan(plan, user_command="")`
@@ -84,7 +84,7 @@ project-root/
 - **Non-obvious design**:
   - Before executing `click/select/update_form/save_form`, it tries to close/ack modals:
     - SweetAlert2 clone confirmations (`_ensure_swal2_clone_confirmation_yes`)
-    - Bootstrap/RBE “Are you sure” confirm (`_ensure_rbe_are_you_sure_closed`)
+    - Bootstrap/RBE "Are you sure" confirm (`_ensure_rbe_are_you_sure_closed`)
   - After each step: sleeps `time.sleep(1)` (simple throttling).
 
 ### `smart_click()` / navigation expansion
@@ -97,17 +97,17 @@ project-root/
 - **Non-obvious design**:
   - Special expansion logic for PVE accordion panels:
     - `_try_expand_pve_section()` uses `aria-controls` + `aria-expanded` to decide whether to click.
-  - Special handling for “Contest Superstars” sidebar accordion expansion.
+  - Special handling for "Contest Superstars" sidebar accordion expansion.
 
 ### `_smart_update_form()` (Major Form Filling Engine)
 - **File**: `automation/form_handler.py` (`FormHandlerMixin._smart_update_form`)
 - **Responsibility**: Fills all fields mentioned in `data: dict` using a priority-ordered workflow:
-  - Custom “Contest Superstar” PVE v2 special-case
+  - Custom "Contest Superstar" PVE v2 special-case
   - Datetime/schedule handling
   - Radio and inline edit detection
   - Generic input/select/toggle fill with widget-specific dispatch
 - **Non-obvious behavior**:
-  - Has an explicit **special-case for PVE v2 “Contest Superstar”**:
+  - Has an explicit **special-case for PVE v2 "Contest Superstar"**:
     - toggles the main checkbox
     - opens each Normal/Hard/Hell tab header
     - uses visible-input probes to avoid collapsing/hidden-panel misfills
@@ -129,7 +129,7 @@ project-root/
 - **File**: `automation/form_handler.py` (`FormHandlerMixin._save_form`)
 - **Responsibility**: Click the correct Save button and detect success/failure:
   - Detect modal scope (`.modal.show`, `.modal.in`, etc.)
-  - Prefer correct button in PVE Match page (green “Save” at bottom)
+  - Prefer correct button in PVE Match page (green "Save" at bottom)
   - Inject JS monkey-patch for `XMLHttpRequest` and `fetch` to capture API responses
   - Still detects SweetAlert2 and Bootstrap toast errors as backup
   - If error includes datetime parsing failure, auto-fixes and retries save
@@ -138,7 +138,7 @@ project-root/
 ### `smart_test_cycle()` (CSV fuzzing + sanity check)
 - **File**: `automation/smart_tester.py` (`SmartTesterMixin.smart_test_cycle`)
 - **Responsibility**: Runs a two-phase cycle for CSV:
-  1. Negative fuzz tests where “upload FAIL” is expected
+  1. Negative fuzz tests where "upload FAIL" is expected
   2. Valid import sanity test that should succeed
 - **Non-obvious design**:
   - For RBE CSVs: uses specialized `RBESmartTester` and RBE-specific fuzz generator.
@@ -165,11 +165,11 @@ project-root/
 
 ## Non-Obvious Behaviors & Design Decisions
 
-### 1) “AI plan is not trusted” → action fixer makes it executable
-Rather than relying on LLM correctness, the codebase assumes LLM output will violate invariants (wrong action names, missing clone/save ordering, incorrect save mode). `fix_action_plan()` encodes domain invariants (especially clone/save ordering and multi-phase form save grouping).
+### 1) "AI plan is not trusted" → action fixer makes it executable
+Rather than relying on LLM correctness, the codebase assumes LLM output will violate invariants (wrong action names, missing clone/save ordering, incorrect save mode). `fix_action_plan()` encodes[...]
 
-### 2) Multi-phase form validation is handled by *merging saves*, not by “waiting”
-For tournament/multi-phase forms, splitting fields across separate saves triggers UI validation constraints. The fixer merges consecutive `update_form → save_form(save)` sequences into a single combined update+save so the UI validates coherently.
+### 2) Multi-phase form validation is handled by *merging saves*, not by "waiting"
+For tournament/multi-phase forms, splitting fields across separate saves triggers UI validation constraints. The fixer merges consecutive `update_form → save_form(save)` sequences into a single[...]
 
 ### 3) Save correctness uses both UI popup and HTTP interception
 `_save_form()` injects JS to capture HTTP POST/PUT/PATCH responses. This makes the system more robust when UI popups are inconsistent or delayed. It still keeps UI detection as a fallback.
@@ -177,7 +177,7 @@ For tournament/multi-phase forms, splitting fields across separate saves trigger
 ### 4) Dropdown selection avoids Playwright element enumeration at large scale
 Widget options can be huge (thousands). `_handle_js_dropdown()` avoids iterating all options in Python; it uses `page.evaluate()` to match and click options directly.
 
-### 5) PVE v2 “Contest Superstar” is a dedicated state-machine-like workflow
+### 5) PVE v2 "Contest Superstar" is a dedicated state-machine-like workflow
 The special-case in `_smart_update_form()` exists because the UI uses:
 - a toggle that can collapse panel sub-sections,
 - collapsible tab headers (Normal/Hard/Hell),
@@ -186,16 +186,16 @@ The code mitigates this by:
 - probing for **visible** inputs rather than DOM existence,
 - re-opening the panel header only when expected inputs are missing,
 - scoping selectors to the correct panel_root,
-- removing special-case keys after the workflow to prevent generic filler from misfilling “Gate” or other similarly named controls.
+- removing special-case keys after the workflow to prevent generic filler from misfilling "Gate" or other similarly named controls.
 
 ### 6) Execution-level modal handling happens *before* risky actions
 In `core.execute_action()`, before `click/select/update_form/save_form`, it attempts to dismiss:
 - SweetAlert clone confirmations
-- RBE “Are you sure” confirmations
+- RBE "Are you sure" confirmations
 This is important because an open confirm modal can cause the action to target the wrong DOM or throw.
 
-### 7) Smoke mode uses strict “CREATE/CLONE → freeze IDs per feature” guard
-`app.py` tracks `smoke_last_created_id_by_feature[feature]`. For later testcases in the same feature, it rewrites prompts like “Sửa ID bất kỳ” into the concrete created ID, preventing “random edit” drift.
+### 7) Smoke mode uses strict "CREATE/CLONE → freeze IDs per feature" guard
+`app.py` tracks `smoke_last_created_id_by_feature[feature]`. For later testcases in the same feature, it rewrites prompts like "Sửa ID bất kỳ" into the concrete created ID, preventing…
 
 ## Module Reference (one-liners)
 | File | Purpose |
@@ -219,3 +219,163 @@ This is important because an open confirm modal can cause the action to target t
 5. **`automation/form_handler.py`** — focus on `_smart_update_form()` and `_save_form()` (contains most UI-specific logic, including Contest Superstar special-case).
 6. **`automation/navigator.py`** — understand how it expands accordions and finds clickable elements.
 7. **`automation/smart_tester.py`** — understand how CSV fuzzing and popup capture works.
+
+---
+
+## Getting Started / Setup Instructions
+
+### Prerequisites
+- **Python 3.10+**
+- **Ollama** installed and running locally (for LLM calls)
+- **Chromium** with debugging port open (for Playwright CDP connection)
+- **pip** or **poetry** (for dependency management)
+
+### 1. Clone the repository
+```bash
+git clone https://github.com/oisonan1999/Automation-Test.git
+cd Automation-Test
+```
+
+### 2. Install dependencies
+Using pip:
+```bash
+pip install -r requirements.txt
+```
+
+Or using poetry (if `pyproject.toml` is available):
+```bash
+poetry install
+```
+
+**Key dependencies:**
+- `streamlit` — UI framework
+- `playwright` — browser automation
+- `ollama` or `requests` — LLM integration
+- `pandas` — CSV handling
+
+### 3. Set up Ollama
+
+**Install Ollama:**
+- Download from [https://ollama.ai](https://ollama.ai) and install.
+
+**Pull required models:**
+```bash
+ollama pull qwen:7b        # Fast Mode model
+ollama pull deepseek-r1    # Careful Mode reasoning model (optional)
+```
+
+**Start Ollama server:**
+```bash
+ollama serve
+```
+The server will be available at `http://localhost:11434/api/generate`.
+
+### 4. Set up Chromium with debugging port
+
+**Option A: Manual (macOS/Linux)**
+```bash
+# Start Chromium with remote debugging enabled on port 9222
+/Applications/Chromium.app/Contents/MacOS/Chromium \
+  --remote-debugging-port=9222 \
+  --no-first-run \
+  --no-default-browser-check
+```
+
+**Option B: Manual (Windows)**
+```bash
+"C:\Program Files\Chromium\Application\chrome.exe" ^
+  --remote-debugging-port=9222 ^
+  --no-first-run ^
+  --no-default-browser-check
+```
+
+**Option C: Using helper script (if available)**
+```bash
+python scripts/start_browser_debug.py
+```
+
+Verify connection at: `http://localhost:9222`
+
+### 5. Configure environment variables (optional)
+
+Create a `.env` file in the project root:
+```bash
+# Ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_FAST_MODEL=qwen:7b
+OLLAMA_CAREFUL_MODEL=deepseek-r1
+
+# Playwright
+CDP_URL=http://localhost:9222
+
+# App
+STREAMLIT_SERVER_PORT=8501
+```
+
+### 6. Run the Streamlit app
+
+```bash
+streamlit run app.py
+```
+
+The app will be available at `http://localhost:8501`.
+
+**Initial screen:**
+- Enter a human-readable command (Vietnamese/English) in the text area
+- Click "Generate Plan" to see the AI-generated JSON action plan
+- Click "Execute Plan" to run the automation against the target website
+- Monitor execution logs and step-by-step results in real-time
+
+### 7. Running Smoke Tests (CSV-based automated testcases)
+
+In the Streamlit UI:
+1. Go to the **Smoke Tests** tab (if available)
+2. Upload a CSV file with test cases (see `downloads/` for examples)
+3. Click "Run Smoke Tests"
+4. Monitor the execution progress and see pass/fail results
+
+Alternatively, run from CLI:
+```bash
+python app.py -- --smoke-mode
+```
+
+### 8. Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| **Connection refused (localhost:11434)** | Ensure Ollama is running: `ollama serve` |
+| **Playwright CDP connection failed** | Ensure Chromium is running with `--remote-debugging-port=9222` and accessible at `http://localhost:9222` |
+| **JSON parse error from LLM** | Check `ai/brain.py` `clean_json_string()` logs; the system auto-repairs malformed JSON |
+| **Playwright timeout on navigation** | Increase `PLAYWRIGHT_TIMEOUT` in config; check if target UI is slow to load |
+| **Modal keeps appearing during execution** | The system tries to dismiss modals automatically; check `automation/core.py` `_ensure_*_modal_closed()` functions |
+| **Form fields not filled correctly** | Verify field selectors in `automation/form_handler.py`; PVE-specific logic may need adjustment |
+
+### 9. Development Tips
+
+**Adding a new action type:**
+1. Define the action in `ai/prompts.py` (strict instruction set)
+2. Add repair logic in `ai/action_fixer.py` if needed
+3. Implement execution in `automation/core.py` and appropriate mixin
+4. Test with both Fast and Careful modes
+
+**Debugging execution:**
+- Enable `DEBUG=1` environment variable for verbose logs
+- Use Playwright inspector: `playwright install` then `PWDEBUG=1 streamlit run app.py`
+- Check Streamlit logs in the terminal
+
+**CSV test case format:**
+See `downloads/` for sample CSV files. Typical columns: `action`, `data`, `expected_result`.
+
+### 10. Production Deployment (optional)
+
+For production, consider:
+- Running Ollama in a containerized environment (Docker)
+- Using a managed Chromium service or headless deployment
+- Setting up proper logging and monitoring (e.g., with structured JSON logs)
+- Scaling with background task queues (e.g., Celery)
+
+See `scripts/` for deployment helpers.
+
+---
+
+**For questions or issues, please refer to the relevant module or file as listed in the "Module Reference" section above.**
