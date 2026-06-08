@@ -462,7 +462,7 @@ def _smart_update_csv_result(
 def _show_save_success_dialog(scenario_name):
     st.success(f"Kịch bản **「{scenario_name}」** đã được lưu.")
     st.caption("File: `config/scenarios.json` — có thể load lại từ danh sách bên phải.")
-    if st.button("Đóng", type="primary", use_container_width=True):
+    if st.button("Đóng", type="primary", width='stretch'):
         st.session_state.pending_save_dialog = None
         st.rerun()
 
@@ -476,7 +476,7 @@ def _show_delete_confirm_dialog(scenario_names):
         st.markdown(f"- {name}")
     col_ok, col_cancel = st.columns(2)
     with col_ok:
-        if st.button("Xóa vĩnh viễn", type="primary", use_container_width=True):
+        if st.button("Xóa vĩnh viễn", type="primary", width='stretch'):
             removed = delete_scenarios(scenario_names)
             st.session_state.pending_delete_dialog = None
             remaining = load_scenarios()
@@ -493,7 +493,7 @@ def _show_delete_confirm_dialog(scenario_names):
             )
             st.rerun()
     with col_cancel:
-        if st.button("Hủy", use_container_width=True):
+        if st.button("Hủy", width='stretch'):
             st.session_state.pending_delete_dialog = None
             st.rerun()
 
@@ -609,10 +609,10 @@ with col1:
     # === BUTTONS ===
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        run_btn = st.button("🚀 Chạy Ngay", type="primary", use_container_width=True)
+        run_btn = st.button("🚀 Chạy Ngay", type="primary", width='stretch')
     with col_btn2:
         save_name = st.text_input("Tên kịch bản:", placeholder="Regression Test 1")
-        save_btn = st.button("💾 Lưu Kịch Bản", use_container_width=True)
+        save_btn = st.button("💾 Lưu Kịch Bản", width='stretch')
 
     st.divider()
 
@@ -785,7 +785,7 @@ with col1:
         smoke_run_btn = st.button(
             "🚀 Chạy Smoke Brick Live",
             type="primary",
-            use_container_width=True,
+            width='stretch',
         )
 
 with col2:
@@ -796,7 +796,7 @@ with col2:
         st.selectbox("Chọn kịch bản:", scenario_names, key="selected_file")
         st.button(
             "📂 Load Kịch Bản",
-            use_container_width=True,
+            width='stretch',
             on_click=load_scenario_callback,
         )
 
@@ -812,7 +812,7 @@ with col2:
         )
         delete_btn = st.button(
             "🗑 Xóa kịch bản đã chọn",
-            use_container_width=True,
+            width='stretch',
             disabled=not scenarios_to_delete,
         )
         if delete_btn and scenarios_to_delete:
@@ -947,7 +947,7 @@ if st.session_state.get("smoke_waiting_for_deploy", False):
         f"xác nhận deploy hoàn tất, sau đó bấm nút bên dưới để tiếp tục.  \n\n"
         f"*({_dep_next}/{_dep_total} cases đã xong)*"
     )
-    if st.button("▶️ Deploy xong, tiếp tục chạy", type="primary", use_container_width=True):
+    if st.button("▶️ Deploy xong, tiếp tục chạy", type="primary", width='stretch'):
         st.session_state.smoke_waiting_for_deploy = False
         st.rerun()
 
@@ -1044,7 +1044,7 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
 
         if smoke_records:
             live_table_box.dataframe(
-                pd.DataFrame(smoke_records), use_container_width=True, hide_index=True
+                pd.DataFrame(smoke_records), width='stretch', hide_index=True
             )
 
         for idx in range(start_idx, total_cases):
@@ -1058,7 +1058,7 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                 )
                 st.session_state.smoke_results = smoke_records
                 progress.progress((idx + 1) / total_cases)
-                live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+                live_table_box.dataframe(pd.DataFrame(smoke_records), width='stretch', hide_index=True)
                 continue
 
             label, steps = _split_testcase_label_and_steps(testcase)
@@ -1125,7 +1125,7 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                 smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "SKIPPED", "Note": note})
                 st.session_state.smoke_results = smoke_records
                 progress.progress((idx + 1) / total_cases)
-                live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+                live_table_box.dataframe(pd.DataFrame(smoke_records), width='stretch', hide_index=True)
                 continue
 
             try:
@@ -1141,13 +1141,13 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                     smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "FAIL", "Note": "Empty action plan (AI returned no steps)"})
                     st.session_state.smoke_results = smoke_records
                     progress.progress((idx + 1) / total_cases)
-                    live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+                    live_table_box.dataframe(pd.DataFrame(smoke_records), width='stretch', hide_index=True)
                     continue
             except Exception as e:
                 smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "CRASH", "Note": f"AI parse crashed: {str(e)[:250]}"})
                 st.session_state.smoke_results = smoke_records
                 progress.progress((idx + 1) / total_cases)
-                live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+                live_table_box.dataframe(pd.DataFrame(smoke_records), width='stretch', hide_index=True)
                 continue
 
             try:
@@ -1185,7 +1185,7 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
 
             st.session_state.smoke_results = smoke_records
             progress.progress((idx + 1) / total_cases)
-            live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+            live_table_box.dataframe(pd.DataFrame(smoke_records), width='stretch', hide_index=True)
 
             # Sau mỗi deploy case: dừng lại chờ user kiểm tra diff
             if _is_deploy_case(label, steps):
@@ -1286,7 +1286,7 @@ if (
         target_col = "Result"
         st.dataframe(
             df_smoke.style.map(color_highlight_smoke, subset=[target_col]),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -1326,7 +1326,7 @@ if (
                     df_f[["Testcase", "Result", "Note"]].style.map(
                         color_highlight_smoke, subset=["Result"]
                     ),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
 
@@ -1348,7 +1348,7 @@ if (
                 data=out_bytes,
                 file_name=os.path.basename(out_name),
                 mime="text/csv",
-                use_container_width=True,
+                width='stretch',
             )
 
     except Exception as e:
@@ -1382,7 +1382,7 @@ if st.session_state.test_logs:
         if not df_log.empty and target_col in df_log.columns:
             st.dataframe(
                 df_log.style.map(color_highlight, subset=[target_col]),
-                use_container_width=True,
+                width='stretch',
             )
 
             # === THỐNG KÊ ===
@@ -1433,7 +1433,7 @@ if st.session_state.test_logs:
                     f"Vui lòng kiểm tra các dòng có status WARNING bên dưới."
                 )
         else:
-            st.dataframe(df_log, use_container_width=True)
+            st.dataframe(df_log, width='stretch')
 
     except Exception as e:
         st.error(f"Lỗi hiển thị bảng: {e}")
