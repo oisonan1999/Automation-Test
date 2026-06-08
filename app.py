@@ -82,10 +82,42 @@ if "smoke_selected_csv" not in st.session_state:
     st.session_state.smoke_selected_csv = "downloads/smoketestBrickLive.csv"
 if "smoke_last_summary" not in st.session_state:
     st.session_state.smoke_last_summary = None
+_SMOKE_ID_CACHE_FILE = os.path.join(os.path.dirname(__file__), "config", "smoke_last_ids.json")
+
+def _load_smoke_ids():
+    try:
+        if os.path.exists(_SMOKE_ID_CACHE_FILE):
+            with open(_SMOKE_ID_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_smoke_ids(mapping: dict):
+    try:
+        os.makedirs(os.path.dirname(_SMOKE_ID_CACHE_FILE), exist_ok=True)
+        with open(_SMOKE_ID_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"   ⚠️ Could not save smoke IDs: {e}")
+
 if "smoke_last_created_id_by_feature" not in st.session_state:
     # Key = value from CSV column "Features" (e.g. "RBE", "PVE", "Gacha"...)
     # Value = last unique ID generated for a CREATE/CLONE case in that feature
-    st.session_state.smoke_last_created_id_by_feature = {}
+    # Loaded from disk so it persists across Streamlit restarts
+    st.session_state.smoke_last_created_id_by_feature = _load_smoke_ids()
+if "smoke_running" not in st.session_state:
+    st.session_state.smoke_running = False
+if "smoke_current_idx" not in st.session_state:
+    st.session_state.smoke_current_idx = 0
+if "smoke_df_csv" not in st.session_state:
+    st.session_state.smoke_df_csv = None
+if "smoke_total_cases" not in st.session_state:
+    st.session_state.smoke_total_cases = 0
+if "smoke_waiting_for_deploy" not in st.session_state:
+    st.session_state.smoke_waiting_for_deploy = False
+if "smoke_deploy_info" not in st.session_state:
+    st.session_state.smoke_deploy_info = {}
 
 automation = st.session_state.automation
 
@@ -203,6 +235,47 @@ def _build_case_command(feature: str, testcase: str) -> str:
     return testcase
 
 
+_PLAN_FIELD_TO_FEATURE = {
+    "book name": "PVE",
+    "rules based tournament id": "RBE",
+    "cloned rules based tournament id": "RBE",
+    "new event id": "Gacha",
+    "new ff id": "Faction Feud",
+    "new tournament id": "Showdown",
+    "bracket id": "Showdown",
+    "nrb id": "Showdown",
+    "new offer id": "Offer",
+    "new section id": "Offer Section",
+    "currency id": "Currency",
+    "grabbag id": "Grabbag",
+    "new tier id": "Fight Card Slots",
+    "fightcard id": "Fight Card",
+    "faction boss battle name": "Faction Boss",
+    "new key": "Perk/Perk Slot",
+    "new superstar id": "SuperStar",
+    "loc id": "Localization",
+    "moment poster id": "Moment Poster",
+}
+
+
+def _extract_id_from_plan(action_plan: list, feature_key: str):
+    """Scan action_plan for the actual ID that was filled for the given feature.
+
+    Reads from update_form data in reverse so the last-filled value wins.
+    Returns None when no matching field is found.
+    """
+    if not action_plan:
+        return None
+    for step in reversed(action_plan):
+        if step.get("action") == "update_form":
+            data = step.get("data") or {}
+            for key, val in data.items():
+                feat = _PLAN_FIELD_TO_FEATURE.get(str(key).lower().strip())
+                if feat == feature_key and val and str(val).strip():
+                    return str(val).strip()
+    return None
+
+
 def _make_unique_hieunm_test_id() -> str:
     """
     Generate a unique ID for weekly runs.
@@ -216,13 +289,91 @@ def _make_unique_hieunm_test_id() -> str:
     return f"hieunm_test_{ts}_{rnd}"
 
 
+def _substitute_last_clone_id(command: str, smoke_ids: dict) -> str:
+    """
+    In manual AI Run mode, substitute "ID vừa clone/tạo" phrases with the
+    actual last-created ID. Always reads FRESH from the JSON file so that
+    the value is always in sync with what's on disk (not stale session state).
+
+    Strategy: scan smoke_ids keys (e.g. "RBE", "PVE", "Gacha") and pick the
+    one whose name appears in the command. If multiple match, use the first.
+    Fallback: use the only entry if dict has exactly one key.
+    """
+    import re as _re
+
+    _vua = r"[vj][ưừữu]a"
+    # Broad trigger: also match "vua" (ASCII fallback for Unicode encoding variants)
+    _vua_broad = r"(?:[vj][ưừữu]a|vua)"
+    # Trigger: any word followed by "vừa clone/tạo" — covers "ID vừa clone", "Book vừa clone", etc.
+    _vua_pattern = _re.compile(
+        rf"\S+\s+{_vua_broad}\s+(?:clone|t[ạa]o)",
+        _re.IGNORECASE,
+    )
+    if not _vua_pattern.search(command):
+        return command
+
+    # Always read fresh from disk to avoid session-state drift; fallback to passed smoke_ids
+    fresh_ids = _load_smoke_ids() or smoke_ids
+    if not fresh_ids:
+        return command
+
+    # Pick the best matching feature ID from fresh on-disk data
+    cmd_upper = command.upper()
+    last_id = None
+    for feature_key, fid in fresh_ids.items():
+        if fid and feature_key.upper() in cmd_upper:
+            last_id = fid[-1] if isinstance(fid, list) and fid else fid
+            break
+    # Entity-word hints: "Book" in command → PVE feature (covers "Sửa Book vừa clone")
+    _ENTITY_HINTS = {"book": "PVE", "chapter": "PVE"}
+    if not last_id:
+        cmd_lower = command.lower()
+        for _ent_word, _hint_feat in _ENTITY_HINTS.items():
+            if _ent_word in cmd_lower and _hint_feat in fresh_ids:
+                _fid = fresh_ids[_hint_feat]
+                last_id = _fid[-1] if isinstance(_fid, list) and _fid else _fid
+                if last_id:
+                    print(f"   🔁 Entity hint: '{_ent_word}' → feature '{_hint_feat}', id='{last_id}'")
+                    break
+    # Fallback: single entry in dict
+    if not last_id and len(fresh_ids) == 1:
+        _v = next(iter(fresh_ids.values()))
+        last_id = _v[-1] if isinstance(_v, list) and _v else _v
+
+    if not last_id:
+        return command
+
+    print(f"   🔁 Manual mode: substituting 'vừa clone/tạo' → '{last_id}' (from smoke_last_ids.json)")
+
+    # Order matters: most specific patterns first (Sửa/Filter before bare entity)
+    substitutions = [
+        (rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"Sửa ID: {last_id}"),
+        (rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"Sửa ID: {last_id}"),
+        (rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"Filter ID: {last_id}"),
+        (rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"Filter ID: {last_id}"),
+        (rf"(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"ID: {last_id}"),
+        (rf"(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"ID: {last_id}"),
+    ]
+    for pattern, replacement in substitutions:
+        command = _re.sub(pattern, replacement, command, flags=_re.IGNORECASE)
+
+    return command
+
+
+def _is_deploy_case(label: str, steps: str) -> bool:
+    return "deploy" in f"{label} {steps}".lower()
+
+
 def _should_force_unique_id(case_label: str, testcase_text: str) -> bool:
     """
-    Force unique ID for cases that are Create / Clone.
-    We use English keywords because CSV label/steps are English.
+    Force unique ID only when the test case explicitly requests ID generation via
+    the Vietnamese pattern "hãy tự generate ... bắt đầu bằng <prefix>".
+    This avoids false-positives for labels like "Clone Chapter then Save" which use
+    "clone" as a sub-action verb (not creating a new top-level item).
     """
-    text = f"{case_label or ''} {testcase_text or ''}".lower()
-    return ("create" in text) or ("clone" in text)
+    import re as _re
+    text = f"{case_label or ''} {testcase_text or ''}"
+    return bool(_re.search(r'h[aã]y\s+t[uự]\s+generate', text, _re.IGNORECASE))
 
 
 def _split_testcase_label_and_steps(testcase: str) -> tuple[str, str]:
@@ -734,10 +885,16 @@ if st.session_state.run_mode == "AI Run (theo lệnh)" and run_btn and user_inpu
         # Placeholder cho real-time logs
         log_placeholder = st.empty()
 
+        # Pre-process: substitute "ID vừa clone/tạo" with last known ID (same as smoke flow)
+        processed_input = _substitute_last_clone_id(
+            user_input,
+            st.session_state.smoke_last_created_id_by_feature,
+        )
+
         # Gọi AI với streaming log
         with StreamingLogCapture(log_placeholder) as ai_log:
             action_plan = parse_command_to_json(
-                user_input,
+                processed_input,
                 use_fast_mode=st.session_state.use_fast_mode,
                 context_plan=st.session_state.loaded_scenario_plan,
                 base_command=st.session_state.loaded_scenario_command,
@@ -774,22 +931,38 @@ if st.session_state.run_execution and st.session_state.current_plan:
     st.rerun()
 
 
-# --- XỬ LÝ SMOKE BRICK LIVE (THEO CSV) ---
+# --- DEPLOY CONFIRM WAITING ---
+if st.session_state.get("smoke_waiting_for_deploy", False):
+    deploy_info = st.session_state.get("smoke_deploy_info", {})
+    _dep_feature = deploy_info.get("feature", "")
+    _dep_case = deploy_info.get("case", "")
+    _dep_next = deploy_info.get("next_idx", 0)
+    _dep_total = st.session_state.get("smoke_total_cases", 0)
+
+    st.warning(
+        f"⏸️ **Automation đang tạm dừng — Đang chờ bạn kiểm tra Deploy**\n\n"
+        f"**Feature:** {_dep_feature}  \n"
+        f"**Case vừa chạy:** {_dep_case}  \n\n"
+        f"Hệ thống đã bấm **Process**. Vui lòng kiểm tra diff trên trình duyệt và "
+        f"xác nhận deploy hoàn tất, sau đó bấm nút bên dưới để tiếp tục.  \n\n"
+        f"*({_dep_next}/{_dep_total} cases đã xong)*"
+    )
+    if st.button("▶️ Deploy xong, tiếp tục chạy", type="primary", use_container_width=True):
+        st.session_state.smoke_waiting_for_deploy = False
+        st.rerun()
+
+
+# --- KHỞI TẠO SMOKE BRICK LIVE (khi bấm nút Run) ---
 if st.session_state.run_mode == "Smoke Brick Live (theo CSV)" and smoke_run_btn:
-    # Clear AI-run logs to avoid confusing UI
     st.session_state.test_logs = []
     st.session_state.smoke_results = []
     st.session_state.smoke_last_summary = None
 
-    # Basic guard
     if not st.session_state.smoke_selected_csv:
         st.error("Vui lòng chọn CSV cho Smoke Brick Live.")
         st.stop()
 
     df_in = _parse_smoke_csv(st.session_state.smoke_selected_csv)
-
-    # Forward-fill Features (CSV của bạn để trống Features cho các dòng testcase cùng feature)
-    # Replace "" -> NaN -> ffill
     df_in["Features"] = (
         df_in["Features"].replace("", pd.NA).ffill().fillna("").astype(str)
     )
@@ -808,7 +981,6 @@ if st.session_state.run_mode == "Smoke Brick Live (theo CSV)" and smoke_run_btn:
             "smoke_testcase_feature_choice", "(Tất cả Features)"
         )
         feature_choice = str(feature_choice or "").strip()
-
         if feature_choice and feature_choice != "(Tất cả Features)":
             df_in = df_in[df_in["Features"].astype(str).eq(feature_choice)].copy()
 
@@ -816,21 +988,17 @@ if st.session_state.run_mode == "Smoke Brick Live (theo CSV)" and smoke_run_btn:
             "smoke_testcase_item_choice", "Tất cả Testcase"
         )
         testcase_choice_display = str(testcase_choice_display or "").strip()
-
         if testcase_choice_display and testcase_choice_display != "Tất cả Testcase":
             display_to_value = st.session_state.get("smoke_testcase_display_to_value")
             raw_testcase_value = None
             if isinstance(display_to_value, dict):
                 raw_testcase_value = display_to_value.get(testcase_choice_display)
-
-            # Fallback: rebuild mapping from current df_in
             if not raw_testcase_value:
                 try:
                     _opts, _map = _build_smoke_dropdowns(df_in, None)
                     raw_testcase_value = _map.get(testcase_choice_display)
                 except Exception:
                     raw_testcase_value = None
-
             if raw_testcase_value:
                 df_in = df_in[
                     df_in["Testcase"]
@@ -839,263 +1007,225 @@ if st.session_state.run_mode == "Smoke Brick Live (theo CSV)" and smoke_run_btn:
                     .eq(str(raw_testcase_value).strip())
                 ].copy()
 
-    # Apply limit (0 = run all)
     if st.session_state.smoke_limit and int(st.session_state.smoke_limit) > 0:
         df_in = df_in.iloc[: int(st.session_state.smoke_limit)].copy()
 
+    df_in = df_in.reset_index(drop=True)
     total_cases = len(df_in)
+
+    st.session_state.smoke_running = True
+    st.session_state.smoke_current_idx = 0
+    st.session_state.smoke_total_cases = total_cases
+    st.session_state.smoke_df_csv = df_in.to_csv(index=False)
+    st.session_state.smoke_waiting_for_deploy = False
+    st.session_state.smoke_deploy_info = {}
+
     st.info(f"Smoke Brick Live: chạy {total_cases} case từ CSV.")
-
-    # Placeholders for incremental UI
-    progress = st.progress(0)
-    current_status_box = st.empty()
-    live_table_box = st.empty()
-
-    smoke_records = []
-
-    for idx in range(total_cases):
-        row = df_in.iloc[idx]
-        feature = str(row.get("Features", "") or "").strip()
-        testcase = str(row.get("Testcase", "") or "").strip()
-
-        # Skip empty testcase rows (defensive)
-        if not testcase:
-            df_in.at[df_in.index[idx], "Result"] = "SKIPPED"
-            df_in.at[df_in.index[idx], "Note"] = "Empty testcase"
-            smoke_records.append(
-                {
-                    "Features": feature,
-                    "Testcase": testcase,
-                    "Result": "SKIPPED",
-                    "Note": "Empty testcase",
-                }
-            )
-            progress.progress((idx + 1) / total_cases)
-            continue
-
-        label, steps = _split_testcase_label_and_steps(testcase)
-        display_case = label if label else testcase
-        exec_steps = steps if steps else testcase
-
-        current_status_box.markdown(
-            f"**Case {idx+1}/{total_cases}**  \n"
-            f"- Feature: `{feature}`  \n"
-            f"- Testcase: `{display_case}`"
-        )
-
-        # 1) Build AI command for this testcase
-        #    If CSV provides explicit steps after ":", pass BOTH:
-        #    - label (without colon) to give the AI better context
-        #    - steps (actual execution steps)
-        if steps:
-            case_command = f"{label}. {exec_steps}"
-        else:
-            case_command = _build_case_command(feature, exec_steps)
-
-        generated_unique_id = None
-
-        # Force unique ID for Create/Clone cases
-        if _should_force_unique_id(label, testcase):
-            unique_id = _make_unique_hieunm_test_id()
-            generated_unique_id = unique_id
-            case_command = (
-                f"{case_command}\n\n"
-                f"Yêu cầu: Với các bước CREATE hoặc CLONE, hãy tạo/điền ID duy nhất "
-                f"bắt đầu bằng 'hieunm_test' và sử dụng đúng giá trị sau: {unique_id}. "
-                f"Nếu có chỗ yêu cầu nhập '... ID ...' thì hãy thay bằng {unique_id}."
-            )
-
-        # ✅ Safety guard (GENERAL): After we successfully CREATE/CLONE an entity
-        # in a given Feature, later cases of the SAME Feature must ONLY edit/filter
-        # that generated ID — never "Sửa ID bất kỳ" (random) / "Filter một ID bất kỳ".
-        feature_key = str(feature).strip()
-        last_created_id = st.session_state.smoke_last_created_id_by_feature.get(
-            feature_key
-        )
-
-        if last_created_id:
-            # CSV phrases:
-            # - "Sửa ID bất kỳ"
-            # - "Filter một ID bất kỳ"
-            case_command = re.sub(
-                r"Sửa\s+ID\s+bất\s+kỳ",
-                f"Sửa ID: {last_created_id}",
-                case_command,
-                flags=re.IGNORECASE,
-            )
-            case_command = re.sub(
-                r"Filter\s+một\s+ID\s+bất\s+kỳ",
-                f"Filter ID: {last_created_id}",
-                case_command,
-                flags=re.IGNORECASE,
-            )
-
-            # Extra: support commands like "Vào ID vừa tạo hoặc clone -> ..."
-            # by replacing them with the concrete ID.
-            case_command = re.sub(
-                r"Sửa\s+ID\s+j[ữu]a\s+clone",
-                f"Sửa ID: {last_created_id}",
-                case_command,
-                flags=re.IGNORECASE,
-            )
-            case_command = re.sub(
-                r"Filter\s+ID\s+j[ữu]a\s+clone",
-                f"Filter ID: {last_created_id}",
-                case_command,
-                flags=re.IGNORECASE,
-            )
-
-            case_command = re.sub(
-                r"ID\s+j[ữu]a\s+clone\s*(?:hoặc\s+tạo)?",
-                f"ID: {last_created_id}",
-                case_command,
-                flags=re.IGNORECASE,
-            )
-            case_command = re.sub(
-                r"ID\s+j[ữu]a\s+clone",
-                f"ID: {last_created_id}",
-                case_command,
-                flags=re.IGNORECASE,
-            )
-
-            # Keep existing “ID vừa tạo …” support
-            case_command = re.sub(
-                r"ID\s+j[ữu]a\s+tạo\s*(?:hoặc\s+clone)?",
-                f"ID: {last_created_id}",
-                case_command,
-                flags=re.IGNORECASE,
-            )
-            case_command = re.sub(
-                r"ID\s+j[ữu]a\s+tạo",
-                f"ID: {last_created_id}",
-                case_command,
-                flags=re.IGNORECASE,
-            )
-
-        # 2) Parse to JSON action plan
-        #    (Smoke mode chạy trực tiếp automation; dùng lại fast_mode checkbox)
-        try:
-            with st.status("🧠 AI đang phân tích...", expanded=False):
-                action_plan = parse_command_to_json(
-                    case_command,
-                    use_fast_mode=st.session_state.use_fast_mode,
-                    context_plan=None,
-                    base_command=None,
-                )
-
-            if not action_plan:
-                df_in.at[df_in.index[idx], "Result"] = "FAIL"
-                df_in.at[df_in.index[idx], "Note"] = (
-                    "Empty action plan (AI returned no steps)"
-                )
-                smoke_records.append(
-                    {
-                        "Features": feature,
-                        "Testcase": display_case,
-                        "Result": "FAIL",
-                        "Note": "Empty action plan (AI returned no steps)",
-                    }
-                )
-                progress.progress((idx + 1) / total_cases)
-                continue
-        except Exception as e:
-            df_in.at[df_in.index[idx], "Result"] = "CRASH"
-            df_in.at[df_in.index[idx], "Note"] = f"AI parse crashed: {str(e)[:250]}"
-            smoke_records.append(
-                {
-                    "Features": feature,
-                    "Testcase": display_case,
-                    "Result": "CRASH",
-                    "Note": f"AI parse crashed: {str(e)[:250]}",
-                }
-            )
-            progress.progress((idx + 1) / total_cases)
-            continue
-
-        # 3) Execute action plan
-        try:
-            exec_log_placeholder = st.empty()
-            with st.status("🤖 Automation đang chạy...", expanded=False):
-                with StreamingLogCapture(exec_log_placeholder) as exec_log:
-                    logs = automation.execute_action(action_plan)
-
-            status_str, note_detail = _extract_smoke_status_from_logs(logs)
-            df_in.at[df_in.index[idx], "Result"] = status_str
-            df_in.at[df_in.index[idx], "Note"] = note_detail
-
-            # ✅ Save the generated unique ID after successful CREATE/CLONE
-            # for THIS feature, so later cases of the same feature are safe.
-            if (
-                generated_unique_id
-                and feature
-                and str(status_str).strip().upper() in {"PASS", "WARNING"}
-            ):
-                feature_key = str(feature).strip()
-                st.session_state.smoke_last_created_id_by_feature[feature_key] = (
-                    generated_unique_id
-                )
-                print(
-                    f"   🧠 Smoke: saved smoke_last_created_id_by_feature[{feature_key}]={generated_unique_id} (status={status_str})"
-                )
-
-            smoke_records.append(
-                {
-                    "Features": feature,
-                    "Testcase": display_case,
-                    "Result": status_str,
-                    "Note": note_detail,
-                }
-            )
-        except Exception as e:
-            df_in.at[df_in.index[idx], "Result"] = "CRASH"
-            df_in.at[df_in.index[idx], "Note"] = f"Automation crashed: {str(e)[:250]}"
-            smoke_records.append(
-                {
-                    "Features": feature,
-                    "Testcase": display_case,
-                    "Result": "CRASH",
-                    "Note": f"Automation crashed: {str(e)[:250]}",
-                }
-            )
-
-        # 4) Update live table (so user sees results per case)
-        progress.progress((idx + 1) / total_cases)
-        live_table_box.dataframe(
-            pd.DataFrame(smoke_records),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    # Save report CSV (IN-MEMORY only: không ghi ra downloads/*)
-    try:
-        import datetime as _dt
-
-        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_name = f"{SMOKE_OUTPUT_PREFIX}{ts}.csv"
-        df_out = df_in.copy()
-
-        buf = io.BytesIO()
-        df_out.to_csv(buf, index=False, encoding="utf-8-sig")
-        output_bytes = buf.getvalue()
-
-        st.session_state.smoke_last_summary = {
-            "output_bytes": output_bytes,
-            "file_name": out_name,
-            "total_cases": total_cases,
-        }
-    except Exception as e:
-        st.session_state.smoke_last_summary = {
-            "output_bytes": None,
-            "file_name": None,
-            "total_cases": total_cases,
-            "save_error": str(e)[:200],
-        }
-
-    st.success("✅ Smoke Brick Live finished!")
-    st.session_state.smoke_results = smoke_records
-
-    # Force rerun to render smoke section below reliably
     st.rerun()
+
+
+# --- CHẠY SMOKE BRICK LIVE (loop từng case, hỗ trợ resume sau deploy) ---
+if st.session_state.get("smoke_running", False) and not st.session_state.get("smoke_waiting_for_deploy", False):
+    if not st.session_state.get("smoke_df_csv"):
+        st.session_state.smoke_running = False
+    else:
+        df_in = pd.read_csv(
+            io.StringIO(st.session_state.smoke_df_csv),
+            dtype=str,
+            keep_default_na=False,
+        ).fillna("")
+        total_cases = st.session_state.smoke_total_cases
+        start_idx = st.session_state.smoke_current_idx
+        smoke_records = list(st.session_state.smoke_results)
+
+        progress = st.progress(start_idx / total_cases if total_cases > 0 else 0)
+        current_status_box = st.empty()
+        live_table_box = st.empty()
+
+        if smoke_records:
+            live_table_box.dataframe(
+                pd.DataFrame(smoke_records), use_container_width=True, hide_index=True
+            )
+
+        for idx in range(start_idx, total_cases):
+            row = df_in.iloc[idx]
+            feature = str(row.get("Features", "") or "").strip()
+            testcase = str(row.get("Testcase", "") or "").strip()
+
+            if not testcase:
+                smoke_records.append(
+                    {"Features": feature, "Testcase": testcase, "Result": "SKIPPED", "Note": "Empty testcase"}
+                )
+                st.session_state.smoke_results = smoke_records
+                progress.progress((idx + 1) / total_cases)
+                live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+                continue
+
+            label, steps = _split_testcase_label_and_steps(testcase)
+            display_case = label if label else testcase
+            exec_steps = steps if steps else testcase
+
+            current_status_box.markdown(
+                f"**Case {idx+1}/{total_cases}**  \n"
+                f"- Feature: `{feature}`  \n"
+                f"- Testcase: `{display_case}`"
+            )
+
+            if steps:
+                case_command = f"{label}. {exec_steps}"
+            else:
+                case_command = _build_case_command(feature, exec_steps)
+
+            generated_unique_id = None
+            if _should_force_unique_id(label, testcase):
+                import datetime as _dt_uid, uuid as _uuid_uid
+                # Extract the actual prefix from "bắt đầu bằng X" in the command so the
+                # injected ID respects feature-specific prefixes (e.g. LTPVE_hieunm_test,
+                # FightCard_hieunm_test) instead of always forcing plain "hieunm_test".
+                _pfix_m = re.search(r"bắt\s+đầu\s+bằng\s+(\S+)", case_command, re.IGNORECASE)
+                if _pfix_m:
+                    _pfix = re.sub(r"[.,;:]*$", "", _pfix_m.group(1)).strip()
+                else:
+                    _pfix = "hieunm_test"
+                _ts_uid = _dt_uid.datetime.now().strftime("%Y%m%d_%H%M%S")
+                _rnd_uid = _uuid_uid.uuid4().hex[:6]
+                unique_id = f"{_pfix}_{_ts_uid}_{_rnd_uid}"
+                generated_unique_id = unique_id
+                case_command = (
+                    f"{case_command}\n\n"
+                    f"Yêu cầu: Với các bước CREATE hoặc CLONE, hãy tạo/điền ID duy nhất "
+                    f"bắt đầu bằng '{_pfix}' và sử dụng đúng giá trị sau: {unique_id}. "
+                    f"Nếu có chỗ yêu cầu nhập '... ID ...' thì hãy thay bằng {unique_id}."
+                )
+
+            feature_key = str(feature).strip()
+            _raw_id = st.session_state.smoke_last_created_id_by_feature.get(feature_key)
+            if isinstance(_raw_id, list):
+                last_created_id = _raw_id[-1] if _raw_id else None
+            else:
+                last_created_id = _raw_id
+
+            if last_created_id:
+                case_command = re.sub(r"Sửa\s+ID\s+bất\s+kỳ", f"Sửa ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+                case_command = re.sub(r"Filter\s+một\s+ID\s+bất\s+kỳ", f"Filter ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+                _vua = r"[vj][ưừữu]a"
+                # Broaden: match any entity word before "vừa clone/tạo" (not just "ID")
+                # e.g. "Sửa Book vừa clone", "Sửa 1 Book vừa clone", "Book vừa clone"
+                case_command = re.sub(rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"Sửa ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+                case_command = re.sub(rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"Sửa ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+                case_command = re.sub(rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"Filter ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+                case_command = re.sub(rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"Filter ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+                case_command = re.sub(rf"(?:\d+\s+)?\S+\s+{_vua}\s+clone\s*(?:ho[ặa]c\s+t[ạa]o)?", f"ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+                case_command = re.sub(rf"(?:\d+\s+)?\S+\s+{_vua}\s+t[ạa]o\s*(?:ho[ặa]c\s+clone)?", f"ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+
+            _vua_pattern = r"[^\s]*\s*v[uưừữ]a\s+(clone|tạo)"
+            if not last_created_id and re.search(_vua_pattern, case_command, re.IGNORECASE):
+                note = f"Skipped: no last_created_id for feature '{feature_key}' (no prior clone/create passed)"
+                print(f"   ⏭️ {note}")
+                smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "SKIPPED", "Note": note})
+                st.session_state.smoke_results = smoke_records
+                progress.progress((idx + 1) / total_cases)
+                live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+                continue
+
+            try:
+                with st.status("🧠 AI đang phân tích...", expanded=False):
+                    action_plan = parse_command_to_json(
+                        case_command,
+                        use_fast_mode=st.session_state.use_fast_mode,
+                        context_plan=None,
+                        base_command=None,
+                    )
+
+                if not action_plan:
+                    smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "FAIL", "Note": "Empty action plan (AI returned no steps)"})
+                    st.session_state.smoke_results = smoke_records
+                    progress.progress((idx + 1) / total_cases)
+                    live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+                    continue
+            except Exception as e:
+                smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "CRASH", "Note": f"AI parse crashed: {str(e)[:250]}"})
+                st.session_state.smoke_results = smoke_records
+                progress.progress((idx + 1) / total_cases)
+                live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+                continue
+
+            try:
+                exec_log_placeholder = st.empty()
+                with st.status("🤖 Automation đang chạy...", expanded=False):
+                    with StreamingLogCapture(exec_log_placeholder) as exec_log:
+                        logs = automation.execute_action(action_plan)
+
+                status_str, note_detail = _extract_smoke_status_from_logs(logs)
+
+                if feature and str(status_str).strip().upper() in {"PASS", "WARNING"}:
+                    # Prefer the ID actually filled in the form (from action_plan update_form data)
+                    # over the pre-generated generic ID.  This handles cases where _inject_generated_ids
+                    # in brain.py created a feature-prefixed ID (e.g. LTPVE_hieunm_test_*) that
+                    # differs from the generic hieunm_test_* produced by _make_unique_hieunm_test_id.
+                    actual_id = _extract_id_from_plan(action_plan, feature_key)
+                    id_to_save = actual_id or generated_unique_id
+                    if id_to_save:
+                        # Reload from disk first so we don't overwrite IDs written by
+                        # _persist_clone_id (core.py) during execution.
+                        _fresh = _load_smoke_ids()
+                        _existing = _fresh.get(feature_key, [])
+                        if isinstance(_existing, str):
+                            _existing = [_existing] if _existing else []
+                        if id_to_save not in _existing:
+                            _existing.append(id_to_save)
+                        st.session_state.smoke_last_created_id_by_feature[feature_key] = _existing
+                        _save_smoke_ids(st.session_state.smoke_last_created_id_by_feature)
+                        _src = "plan" if actual_id else "pre-gen"
+                        print(f"   🧠 Smoke: saved smoke_last_created_id_by_feature[{feature_key}]={_existing} (status={status_str}, src={_src})")
+
+                smoke_records.append({"Features": feature, "Testcase": display_case, "Result": status_str, "Note": note_detail})
+            except Exception as e:
+                smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "CRASH", "Note": f"Automation crashed: {str(e)[:250]}"})
+
+            st.session_state.smoke_results = smoke_records
+            progress.progress((idx + 1) / total_cases)
+            live_table_box.dataframe(pd.DataFrame(smoke_records), use_container_width=True, hide_index=True)
+
+            # Sau mỗi deploy case: dừng lại chờ user kiểm tra diff
+            if _is_deploy_case(label, steps):
+                st.session_state.smoke_current_idx = idx + 1
+                st.session_state.smoke_waiting_for_deploy = True
+                st.session_state.smoke_deploy_info = {
+                    "feature": feature,
+                    "case": label or display_case,
+                    "next_idx": idx + 1,
+                }
+                st.rerun()
+
+        # Tất cả cases xong
+        st.session_state.smoke_running = False
+        st.session_state.smoke_current_idx = 0
+
+        try:
+            import datetime as _dt
+            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_name = f"{SMOKE_OUTPUT_PREFIX}{ts}.csv"
+            df_out = pd.DataFrame(smoke_records)
+            buf = io.BytesIO()
+            df_out.to_csv(buf, index=False, encoding="utf-8-sig")
+            output_bytes = buf.getvalue()
+            st.session_state.smoke_last_summary = {
+                "output_bytes": output_bytes,
+                "file_name": out_name,
+                "total_cases": total_cases,
+            }
+        except Exception as e:
+            st.session_state.smoke_last_summary = {
+                "output_bytes": None,
+                "file_name": None,
+                "total_cases": total_cases,
+                "save_error": str(e)[:200],
+            }
+
+        st.success("✅ Smoke Brick Live finished!")
+        st.session_state.smoke_results = smoke_records
+        st.rerun()
 
 # --- HIỂN THỊ BẢNG KẾT QUẢ SMOKE BRICK LIVE ---
 if (

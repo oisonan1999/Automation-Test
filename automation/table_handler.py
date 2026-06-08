@@ -812,12 +812,13 @@ class TableHandlerMixin:
             except Exception as e:
                 raise Exception(f"Random row selection failed: {e}")
 
+        self._ensure_liveoptest_items_visible(page)
         print(f"   🔎 Tìm dòng '{target_text}' để {action_type}...")
 
         js_script = """
             (args) => {
                 const targetText = args.text.toLowerCase().trim();
-                const action = args.action; 
+                const action = args.action;
                 const rows = Array.from(document.querySelectorAll('tbody tr'));
                 
                 for (const row of rows) {
@@ -922,7 +923,33 @@ class TableHandlerMixin:
     # TABLE HELPERS
     # ============================
 
+    def _ensure_liveoptest_items_visible(self, page):
+        """Auto-uncheck 'Hide LiveopsTest gate items' checkbox if present and checked."""
+        try:
+            result = page.evaluate("""
+                () => {
+                    const allEls = document.querySelectorAll('label, span, div');
+                    for (const el of allEls) {
+                        if (!/hide liveo[p]?stest/i.test(el.textContent || '')) continue;
+                        if (!el.offsetParent) continue;
+                        let chk = el.querySelector('input[type="checkbox"]');
+                        if (!chk && el.previousElementSibling && el.previousElementSibling.tagName === 'INPUT')
+                            chk = el.previousElementSibling;
+                        if (!chk) chk = el.parentElement && el.parentElement.querySelector('input[type="checkbox"]');
+                        if (chk && chk.checked) { chk.click(); return true; }
+                        if (chk && !chk.checked) return false;
+                    }
+                    return null;
+                }
+            """)
+            if result is True:
+                print("   🔓 Auto-unchecked 'Hide LiveopsTest gate items'")
+                time.sleep(0.8)
+        except Exception as e:
+            print(f"   ⚠️ _ensure_liveoptest_items_visible: {e}")
+
     def _auto_filter_data(self, page, keyword):
+        self._ensure_liveoptest_items_visible(page)
         try:
             search_input = None
             placeholders = ["ID", "Search", "Name", "Filter", "Title"]
@@ -938,7 +965,20 @@ class TableHandlerMixin:
             if search_input and search_input.is_visible():
                 print(f"      👉 Auto Filter: '{keyword}'")
                 search_input.fill(keyword)
-                search_input.press("Enter")
+                # Try clicking the Filter button explicitly before pressing Enter
+                _filter_clicked = False
+                try:
+                    _filter_btn = page.locator(
+                        "button#btn-filter, button:has-text('Filter'), a.btn:has-text('Filter')"
+                    ).first
+                    if _filter_btn.count() > 0 and _filter_btn.is_visible():
+                        _filter_btn.click()
+                        _filter_clicked = True
+                        print(f"      🔘 Clicked Filter button")
+                except Exception:
+                    pass
+                if not _filter_clicked:
+                    search_input.press("Enter")
                 time.sleep(2)
                 return True
         except:
@@ -978,6 +1018,7 @@ class TableHandlerMixin:
 
     def _perform_table_filter(self, page, col_name, value):
         """Tự động điền Filter và bấm nút"""
+        self._ensure_liveoptest_items_visible(page)
         # 1. Tìm Input
         search_input = None
         placeholders = [f"{col_name} Contains", f"{col_name}", "Search", "Filter", "ID"]

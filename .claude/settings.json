@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(system_profiler SPHardwareDataType)",
+      "Bash(ollama show *)",
+      "Bash(.venv/bin/python3 /tmp/bench_models.py)",
+      "Bash(.venv/bin/python3 /tmp/bench2.py)",
+      "Bash(python -c \"import ai.prompts; print\\('OK'\\)\")",
+      "Bash(python3 -c \"import ai.prompts; print\\('OK'\\)\")",
+      "Bash(awk -F: '$2 > 365 && $2 < 600')"
+    ],
+    "additionalDirectories": [
+      "/tmp",
+      "/private/tmp"
+    ]
+  }
+}

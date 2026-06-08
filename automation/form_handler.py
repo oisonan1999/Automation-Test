@@ -187,8 +187,13 @@ class FormHandlerMixin:
         # SPECIAL CASE: PVE v2 "Contest Superstar" (Normal/Hard/Hell Node 1 + SS/Soft Currency)
         # ============================
         # Bật toggle + điền theo đúng panel visible để tránh misfill sang các field khác (VD: "Gate in Chapter Info").
+        # Chỉ chạy khi data chứa key PVE-specific: "contest superstar" hoặc "node 1" (không phải soft currency).
         try:
-            if isinstance(data, dict):
+            has_cs_keys = isinstance(data, dict) and any(
+                "contest superstar" in str(k).lower()
+                for k in data.keys()
+            )
+            if has_cs_keys:
                 print("         🧩 [Contest Superstar] special-case entered")
                 panels = [("normal", "Normal"), ("hard", "Hard"), ("hell", "Hell")]
                 gate_skip: bool = False
@@ -1527,18 +1532,94 @@ class FormHandlerMixin:
             pass
 
         # Debug: keys left after Contest Superstar special-case pop()
+        # Only print when the special-case actually ran (PVE only).
         try:
-            print(
-                f"         🧩 [Contest Superstar] keys remaining after special-case pops: {list(data.keys())}"
-            )
+            if has_cs_keys:
+                print(
+                    f"         🧩 [Contest Superstar] keys remaining after special-case pops: {list(data.keys())}"
+                )
         except Exception:
             pass
 
         for label, value in data.items():
+            # DNU Warning / "Are you sure" from the PREVIOUS field fill may still be visible.
+            # Dismiss it before attempting the next field so it doesn't block the fill.
+            try:
+                ensure_fn = getattr(self, "_ensure_rbe_are_you_sure_closed", None)
+                if callable(ensure_fn):
+                    ensure_fn(page)
+            except Exception:
+                pass
+
+            # ============================
+            # RANDOM FILTER RESOLVER
+            # "ID contains": "RANDOM" → pick a real row ID from the visible table
+            # so the filter actually returns results instead of being empty.
+            # ============================
+            if str(label).lower().strip() == "id contains" and str(value).strip().upper() == "RANDOM":
+                try:
+                    resolved = page.evaluate("""
+                        () => {
+                            const rows = document.querySelectorAll('tbody tr');
+                            for (const row of rows) {
+                                if (!row.offsetParent) continue;
+                                const cells = row.querySelectorAll('td');
+                                // col 0 is usually checkbox; scan from col 1 onward
+                                for (let i = 1; i < Math.min(cells.length, 6); i++) {
+                                    const text = (cells[i].textContent || '').trim();
+                                    if (text && text !== '-' && text !== 'N/A') {
+                                        return text.substring(0, 20);
+                                    }
+                                }
+                            }
+                            return null;
+                        }
+                    """)
+                    if resolved:
+                        value = resolved
+                        print(f"         🎲 RANDOM filter resolved → '{value}'")
+                    else:
+                        print(f"         ⚠️ RANDOM filter: no visible table rows found, using empty string")
+                        value = ""
+                except Exception as _re:
+                    print(f"         ⚠️ RANDOM filter resolve failed: {_re}")
+
+            # Strip contextual location suffix added by AI:
+            # "Gate in Chapter Info" → "Gate", "Gate trong Chapter Info" → "Gate"
+            _loc_suffix = re.search(
+                r"\s+(in|trong)\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s*$",
+                str(label),
+            )
+            if _loc_suffix:
+                label = str(label)[: _loc_suffix.start()].strip()
+
             print(f"         ↳ Processing '{label}' -> '{value}'")
             try:
                 label_lower = str(label).lower().strip()
                 value_lower = str(value).lower().strip()
+
+                # ============================
+                # CHECKBOX/TOGGLE LABEL SUFFIX FIX
+                # AI sometimes appends " checkbox" / " toggle" to label names
+                # (e.g. "Hide LiveOpsTest gate items checkbox") but the actual page
+                # label has no such suffix. Strip it and route to the toggle filler.
+                # ============================
+                _cs_suffix_match = re.search(
+                    r"\s+(checkbox|toggle|check|switch)\s*$", label_lower
+                )
+                if _cs_suffix_match:
+                    _clean_label = label_lower[: _cs_suffix_match.start()].strip()
+                    try:
+                        _tog_ok = self._try_set_form_toggle_by_label(
+                            page, _clean_label, value
+                        )
+                    except Exception:
+                        _tog_ok = False
+                    if _tog_ok:
+                        print(
+                            f"         ✅ Toggle '{_clean_label}' set (stripped suffix '{_cs_suffix_match.group().strip()}' from label)"
+                        )
+                        continue
 
                 # ============================
                 # PVE MATCH FIXES (missing wiring)
@@ -1791,6 +1872,27 @@ class FormHandlerMixin:
                         print(f"         ⚠️ Select2 multiselect set failed: {_sel2_e}")
 
                 # ========================================
+                # SPECIAL CASE 3b: CSS row plain-number inputs (Attempt / Amount)
+                # These fields have no <label> — only placeholder/title/class attrs.
+                # Always target .last so we fill the most recently added CSS row.
+                # ========================================
+                if label_lower in ("attempt", "amount"):
+                    try:
+                        _css_inp = page.locator(
+                            f"input[placeholder='{label}'], input[title='{label}']"
+                        ).last
+                        if _css_inp.count() > 0 and _css_inp.is_visible(timeout=2000):
+                            _css_inp.click(force=True)
+                            _css_inp.fill(str(value))
+                            print(
+                                f"         ✅ CSS row field '{label}' filled via placeholder → '{value}'"
+                            )
+                            time.sleep(0.5)
+                            continue
+                    except Exception as _css_e:
+                        print(f"         ⚠️ CSS row field '{label}' placeholder fill failed: {_css_e}")
+
+                # ========================================
                 # SPECIAL CASE 4: EARLY INLINE EDIT DETECTION
                 # Trước khi tìm element thông thường, kiểm tra xem field có phải dạng
                 # inline-edit (có nút Edit) không. VD: Lock Time Offset, Buffer Time,
@@ -1886,6 +1988,16 @@ class FormHandlerMixin:
                             pass
                         # Chờ 3s sau mỗi field để dropdown/data load xong và conditional fields appear
                         time.sleep(3)
+                        # Dismiss any blocking popup that appeared as a result of the field fill
+                        # e.g. "Are you sure? This CSS event is already set in RBE"
+                        #      "DNU Warning: X is currently in the DNU list"
+                        # These appear AFTER Select2 selection and would block the next action.
+                        try:
+                            ensure_fn = getattr(self, "_ensure_rbe_are_you_sure_closed", None)
+                            if callable(ensure_fn):
+                                ensure_fn(page)
+                        except Exception:
+                            pass
                 else:
                     # RETRY LOGIC: Field có thể chưa xuất hiện (conditional field)
                     # Thử lại sau 2s (có thể đang chờ previous field trigger)
@@ -1906,6 +2018,12 @@ class FormHandlerMixin:
                             except:
                                 pass
                             time.sleep(3)
+                            try:
+                                ensure_fn = getattr(self, "_ensure_rbe_are_you_sure_closed", None)
+                                if callable(ensure_fn):
+                                    ensure_fn(page)
+                            except Exception:
+                                pass
                         else:
                             print(f"         ❌ Retry fill failed for '{label}'")
                     else:
@@ -3886,6 +4004,7 @@ class FormHandlerMixin:
             if mode == "clone":
                 # Mode "clone": Bấm nút Clone trong modal (ưu tiên tuyệt đối)
                 priority_buttons = [
+                    "Create book and Open in V2",  # PVE clone submit button
                     "Clone",
                     "Submit",
                     "Confirm",
@@ -4153,12 +4272,21 @@ class FormHandlerMixin:
                 target_btn.click(force=True)
                 print("      ✅ Clicked successfully.")
 
-                # Chờ network settle (AJAX call + response)
+                # Chờ network settle; clone mode causes full-page navigation so give more time
+                _idle_timeout = 45000 if mode == "clone" else 15000
                 try:
-                    page.wait_for_load_state("networkidle", timeout=15000)
+                    page.wait_for_load_state("networkidle", timeout=_idle_timeout)
                 except:
                     pass
                 time.sleep(2)
+
+                # For clone mode the page navigates; also wait for any spinners/loaders
+                if mode == "clone":
+                    try:
+                        if hasattr(self, "_wait_for_long_loading"):
+                            self._wait_for_long_loading(page)
+                    except Exception:
+                        pass
 
                 # --- READ CAPTURED NETWORK ERRORS ---
                 network_error = None
@@ -4357,10 +4485,15 @@ class FormHandlerMixin:
                     "continue",
                 ]
 
+                _success_keywords = (
+                    "success", "hoàn thành", "good job", "has been saved",
+                    "saved successfully", "changes saved", "created successfully",
+                    "updated successfully", "deleted successfully",
+                )
                 if any(k in text_lower for k in error_keywords):
                     print(f"      ❌ Error popup detected: {clean_text[:200]}")
                     return {"success": False, "error_message": clean_text}
-                elif "success" in text_lower or "hoàn thành" in text_lower:
+                elif any(k in text_lower for k in _success_keywords):
                     print("      ✅ Success popup detected.")
                     return {"success": True, "error_message": None}
                 elif any(k in text_lower for k in warning_keywords):
@@ -5039,6 +5172,42 @@ class FormHandlerMixin:
         scope = self._main_form_scope(page)
         safe = re.compile(rf"^\s*{re.escape(label_text)}\s*$", re.IGNORECASE)
 
+        # ── Priority path: scan <label> elements directly, use 'for' attribute ──
+        # This avoids iterating parent divs (div.col-auto, div.form-check) that also
+        # match the regex but whose ancestor::row contains multiple checkboxes.
+        try:
+            for _lbl in page.locator("label").all():
+                try:
+                    if not _lbl.is_visible():
+                        continue
+                    if _lbl.inner_text().strip().lower() != label_lower:
+                        continue
+                    _for_id = _lbl.get_attribute("for")
+                    if _for_id:
+                        _inp = page.locator(f"#{_for_id}").first
+                        if _inp.count() > 0:
+                            _checked = _inp.is_checked()
+                            if want_on and not _checked:
+                                _inp.click(force=True)
+                            elif not want_on and _checked:
+                                _inp.click(force=True)
+                            print(
+                                f"         🎚️ Toggle '{label_text}' → "
+                                f"{'ON' if want_on else 'OFF'} (label[for=#{_for_id}])"
+                            )
+                            return True
+                    # No 'for': click the label itself — browser natively toggles its input
+                    _lbl.click(force=True)
+                    print(
+                        f"         🎚️ Toggle '{label_text}' → "
+                        f"{'ON' if want_on else 'OFF'} (label click)"
+                    )
+                    return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
         for label_el in (
             scope.locator("label, span, strong, b, div").filter(has_text=safe).all()
         ):
@@ -5047,9 +5216,58 @@ class FormHandlerMixin:
                     continue
                 if label_el.inner_text().strip().lower() != label_lower:
                     continue
+                # Fast path A: if label_el itself is a form-check/form-group container,
+                # search within it directly (avoids ancestor::row escaping to wrong scope)
+                try:
+                    _self_cls = (label_el.get_attribute("class") or "").lower()
+                    if "form-check" in _self_cls or "form-group" in _self_cls:
+                        _inner_toggles = label_el.locator(
+                            "input[type='checkbox'], .toggle input, "
+                            ".bootstrap-switch input, [role='switch']"
+                        ).all()
+                        for _it in _inner_toggles:
+                            try:
+                                if not _it.is_visible(timeout=300):
+                                    continue
+                            except Exception:
+                                pass
+                            checked = _it.is_checked()
+                            if want_on and not checked:
+                                _it.click(force=True)
+                            elif not want_on and checked:
+                                _it.click(force=True)
+                            print(
+                                f"         🎚️ Toggle '{label_text}' → "
+                                f"{'ON' if want_on else 'OFF'} (form-check self-container)"
+                            )
+                            return True
+                except Exception:
+                    pass
+                # Fast path B: if label has a 'for' attribute, click the associated input directly
+                try:
+                    for_id = label_el.get_attribute("for")
+                    if for_id:
+                        target_input = scope.locator(f"#{for_id}").first
+                        if target_input.count() == 0:
+                            # scope might not contain it; fall back to page-level search
+                            target_input = page.locator(f"#{for_id}").first
+                        if target_input.count() > 0:
+                            checked = target_input.is_checked()
+                            if want_on and not checked:
+                                target_input.click(force=True)
+                            elif not want_on and checked:
+                                target_input.click(force=True)
+                            print(
+                                f"         🎚️ Toggle '{label_text}' → "
+                                f"{'ON' if want_on else 'OFF'} (by for=#{for_id})"
+                            )
+                            return True
+                except Exception:
+                    pass
                 for xpath in (
                     "xpath=ancestor::div[contains(@class,'form-group')][1]",
                     "xpath=ancestor::div[contains(@class,'control-group')][1]",
+                    "xpath=ancestor::div[contains(@class,'form-check')][1]",
                     "xpath=ancestor::div[contains(@class,'row')][1]",
                 ):
                     try:
@@ -5127,10 +5345,12 @@ class FormHandlerMixin:
 
         # ─── Auto-scope to modal if one is open ────────────────────────────────────────
         # Shadow ‘page’ → modal so mọi page.locator() bên dưới đều scoped đúng
-        for _ms in [".modal.show", ".modal.in", ".modal[aria-hidden='false']"]:
+        _in_modal = False
+        for _ms in [".modal.show", ".modal.in", ".modal[aria-hidden=’false’]"]:
             try:
                 if page.locator(_ms).count() > 0:
                     page = page.locator(_ms).last
+                    _in_modal = True
                     print(f"         🔒 Auto-scoped to modal ({_ms})")
                     break
             except Exception:
@@ -5360,12 +5580,26 @@ class FormHandlerMixin:
                 # LUÔN tìm input/select TRONG container này trước, không dùng fallback
                 parent_containers = None
                 container_source = None
-                for xpath in [
+                # [FIX] When inside a modal, try input-group BEFORE row.
+                # Clone modal Gate uses div.input-group (not div.form-group).
+                # Without this, ancestor::row escapes the modal and picks
+                # the main-page's <select id="gate"> (40+ elements) instead
+                # of the modal's <select id="id_clone_gate">.
+                # Only applies inside modals to avoid breaking regular-page selects.
+                _container_xpaths = [
                     "xpath=ancestor::div[contains(@class,'form-group')]",
                     "xpath=ancestor::div[contains(@class,'control-group')]",
                     "xpath=ancestor::fieldset",
-                    "xpath=ancestor::div[contains(@class,'row')]",
-                ]:
+                ]
+                if _in_modal:
+                    _container_xpaths.append(
+                        "xpath=ancestor::div[contains(@class,'input-group')"
+                        " and not(contains(@class,'input-group-prepend'))"
+                        " and not(contains(@class,'input-group-append'))"
+                        " and not(contains(@class,'input-group-text'))]"
+                    )
+                _container_xpaths.append("xpath=ancestor::div[contains(@class,'row')]")
+                for xpath in _container_xpaths:
                     try:
                         container = label_el.locator(xpath).first
                         if container.count() > 0 and container.is_visible():
@@ -7453,11 +7687,56 @@ class FormHandlerMixin:
                         const visible = [];
                         for (const o of options) { if (o.offsetParent !== null) visible.push(o); }
                         const total = visible.length;
+
+                        // In a Clone modal, clicking a result option dispatches a body-level
+                        // click event that Bootstrap interprets as "click outside modal" and
+                        // dismisses the modal. Use jQuery programmatic selection instead.
+                        const modalEl = document.querySelector('.modal.show, .modal.in');
+                        const inCloneModal = !!(modalEl &&
+                            /Clone/i.test(modalEl.innerText || modalEl.textContent || ''));
+
+                        function selectOpt(opt) {
+                            if (!inCloneModal) { opt.click(); return; }
+                            const optText = (opt.textContent || '').trim();
+                            let optId = optText;
+                            try {
+                                const d = (typeof jQuery !== 'undefined') ? jQuery(opt).data('data') : null;
+                                if (d && d.id !== undefined) optId = String(d.id);
+                            } catch(e) {}
+                            if (optId === optText) {
+                                const m = (opt.id || '').match(/select2-[^-]+-result-[^-]+-(.+)$/);
+                                if (m && m[1]) optId = m[1];
+                            }
+                            const dropdownEl = opt.closest('.select2-dropdown');
+                            let $sel = null;
+                            if (typeof jQuery !== 'undefined') {
+                                jQuery('select').each(function() {
+                                    const s2 = jQuery(this).data('select2');
+                                    if (s2 && s2.$dropdown && s2.$dropdown[0] === dropdownEl) {
+                                        $sel = jQuery(this); return false;
+                                    }
+                                });
+                                if (!$sel) jQuery('select').each(function() {
+                                    const s2 = jQuery(this).data('select2');
+                                    if (s2 && s2.$container && s2.$container.hasClass('select2-container--open')) {
+                                        $sel = jQuery(this); return false;
+                                    }
+                                });
+                            }
+                            if (!$sel) return;
+                            if (!$sel.find('option[value="' + optId + '"]').length) {
+                                $sel.append(new Option(optText, optId, true, true));
+                            }
+                            $sel.val(optId).trigger('change');
+                            try { $sel.trigger('change.select2'); } catch(e) {}
+                            try { $sel.select2('close'); } catch(e) {}
+                        }
+
                         for (const opt of visible) {
                             const text = opt.textContent.trim();
                             const textLower = text.toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ');
                             if (textLower === valueLower || text === value) {
-                                opt.click();
+                                selectOpt(opt);
                                 return {matched: true, text: text, type: 'exact', total: total};
                             }
                         }
@@ -7465,7 +7744,7 @@ class FormHandlerMixin:
                             const text = opt.textContent.trim();
                             const textLower = text.toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ');
                             if (textLower.includes(valueLower) || valueLower.includes(textLower)) {
-                                opt.click();
+                                selectOpt(opt);
                                 return {matched: true, text: text, type: 'partial', total: total};
                             }
                         }
@@ -7571,7 +7850,11 @@ class FormHandlerMixin:
                 print(f"         🔍 Searching: '{search_term}'")
 
                 # CHỜ KẾT QUẢ FILTER
-                time.sleep(1.0)
+                # Select2 cần 3-4s để server trả về kết quả và render dropdown
+                if lib_type == "select2":
+                    time.sleep(3.5)
+                else:
+                    time.sleep(1.0)
 
                 # PERF/FIX:
                 # Tránh polling bằng `.all()` + `is_visible()` trên từng option (cực dễ treo khi list option nhiều).
@@ -7986,6 +8269,54 @@ class FormHandlerMixin:
 
         except Exception as e:
             print(f"         ❌ [fill_vue_multiselect] {e}")
+            return False
+
+    def _select_book_id_in_chapter_template_multiselect(
+        self, page, book_id: str
+    ) -> bool:
+        """
+        Select a BookID in the #searchChapterTemplate Vue multiselect on the
+        Import/Export Chapters tab of the PVE detail page.
+
+        HTML:  input#searchChapterTemplate.multiselect__input
+               aria-controls="listbox-searchChapterTemplate"
+
+        Reuses _open_vue_multiselect + _fill_vue_multiselect so the same
+        trusted-event / polling logic is applied as for all other Vue multiselects.
+        """
+        try:
+            inp = page.locator("#searchChapterTemplate").first
+            if inp.count() == 0:
+                print("   ⚠️ #searchChapterTemplate input not found")
+                return False
+
+            # Open via the arrow button (trusted click, Vue checks isTrusted)
+            opened = self._open_vue_multiselect(page, inp, timeout_ms=3000)
+            if not opened:
+                print("   ⚠️ Could not open #searchChapterTemplate multiselect; trying anyway")
+
+            # Find wrapper so _fill_vue_multiselect can scope the input correctly
+            wrapper = page.locator(".multiselect:has(#searchChapterTemplate)").first
+            if wrapper.count() == 0:
+                wrapper = inp  # fallback: pass the input directly
+
+            # Scope the listbox search to the dedicated listbox element
+            listbox_scope = page.locator("#listbox-searchChapterTemplate")
+
+            ok = self._fill_vue_multiselect(
+                page,
+                wrapper,
+                book_id,
+                listbox_scope=listbox_scope,
+                timeout_s=5.0,
+            )
+            if ok:
+                print(f"   ✅ Chapter template: selected BookID '{book_id}'")
+            else:
+                print(f"   ⚠️ Chapter template: no match found for '{book_id}'")
+            return ok
+        except Exception as e:
+            print(f"   ❌ _select_book_id_in_chapter_template_multiselect: {e}")
             return False
 
     def _switch_to_tab(self, page, tab_name):

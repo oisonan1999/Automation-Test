@@ -506,6 +506,18 @@ class NavigatorMixin:
                 pass
 
             if not already_home:
+                # Dismiss any blocking SweetAlert2 popup before clicking the logo
+                try:
+                    page.evaluate("""
+                        const btn = document.querySelector(
+                            '.swal2-popup.swal2-show button.swal2-confirm'
+                        );
+                        if (btn && btn.offsetParent !== null) btn.click();
+                    """)
+                    time.sleep(0.4)
+                except Exception:
+                    pass
+
                 print("      🏠 Navigating to Home page...")
                 logo = page.locator(".brand-link, .logo, a.navbar-brand").first
                 if not logo.is_visible():
@@ -657,14 +669,17 @@ class NavigatorMixin:
                     except Exception as e:
                         print(f"         ⚠️ Strategy 2 failed for '{opt_name}': {e}")
 
-            print("      🖱 Clicking Process button...")
-            btn = page.locator("button:has-text('Process')").first
-            if btn.is_visible():
-                btn.click()
-                print("      ✅ Clicked Process button")
-                time.sleep(2)
+            if options:
+                print("      🖱 Clicking Process button...")
+                btn = page.locator("button:has-text('Process')").first
+                if btn.is_visible():
+                    btn.click()
+                    print("      ✅ Clicked Process button")
+                    time.sleep(2)
+                else:
+                    raise Exception("Process button not found or not visible")
             else:
-                raise Exception("Process button not found or not visible")
+                print("      ℹ️ No options selected — navigated home only, skipping Process button")
 
         except Exception as e:
             print(f"   ❌ Process Deployment Error: {e}")
@@ -1016,6 +1031,37 @@ class NavigatorMixin:
         print(f"      🖱 Smart Click: '{target_text}'")
         target_clean = target_text.strip()
         clicked = False
+
+        # Early-exit: "Filter Data" / "Filter" button — click the page-level Filter button
+        # directly instead of running through all strategies.
+        if re.fullmatch(r"filter\s*(data)?", target_clean, re.IGNORECASE):
+            for _fsel in [
+                "button#btn-filter",
+                "button:has-text('Filter')",
+                "a.btn:has-text('Filter')",
+                "input[type='submit'][value*='ilter']",
+                "button[type='submit']",
+            ]:
+                try:
+                    _fb = page.locator(_fsel).first
+                    if _fb.count() > 0 and _fb.is_visible():
+                        _fb.click()
+                        print(f"         ✅ Filter button clicked via '{_fsel}'")
+                        self._wait_for_long_loading(page)
+                        return True
+                except Exception:
+                    continue
+            # Last resort: press Enter in the visible search input
+            try:
+                _inp = page.locator("input[type='text']:visible, input[type='search']:visible").first
+                if _inp.count() > 0 and _inp.is_visible():
+                    _inp.press("Enter")
+                    print(f"         ✅ Filter fallback: pressed Enter in search input")
+                    time.sleep(2)
+                    self._wait_for_long_loading(page)
+                    return True
+            except Exception:
+                pass
 
         # RBE UI timing guard:
         # "Contest Superstars" thường nằm trong accordion "Wrapper" và có thể chưa render kịp
@@ -1741,6 +1787,48 @@ class NavigatorMixin:
             except:
                 pass
 
+        # Checkbox-label strategy: find label with exact text → click its checkbox
+        # Handles filter toggles like "Hide LiveopsTest gate items", "Hide Feeders", etc.
+        if not clicked:
+            try:
+                lbl_candidates = (
+                    page.locator("label")
+                    .filter(has_text=re.compile(re.escape(target_clean), re.IGNORECASE))
+                    .all()
+                )
+                for lbl in lbl_candidates:
+                    if not lbl.is_visible():
+                        continue
+                    lbl_text = lbl.inner_text().strip()
+                    # Only accept label whose text closely matches target (not a container label)
+                    if len(lbl_text) > len(target_clean) * 2 + 20:
+                        continue
+                    chk = None
+                    try:
+                        chk = lbl.locator("input[type='checkbox']").first
+                    except Exception:
+                        pass
+                    if not chk or chk.count() == 0:
+                        try:
+                            for_attr = lbl.get_attribute("for")
+                            if for_attr:
+                                chk = page.locator(f"#{for_attr}").first
+                        except Exception:
+                            pass
+                    if chk and chk.count() > 0:
+                        chk.scroll_into_view_if_needed()
+                        chk.click(force=True)
+                        print(f"         ✅ Checkbox toggled via label: '{lbl_text}'")
+                    else:
+                        lbl.scroll_into_view_if_needed()
+                        lbl.click()
+                        print(f"         ✅ Label clicked: '{lbl_text}'")
+                    time.sleep(0.5)
+                    clicked = True
+                    break
+            except Exception:
+                pass
+
         if not clicked:
             panel_selectors = [
                 "button[class*='store-sidebar']",
@@ -1807,28 +1895,32 @@ class NavigatorMixin:
                     for item in active_items:
                         if item.is_visible():
                             item_text = item.inner_text().strip()
-                            if target_clean.lower() in item_text.lower():
-                                if target_clean.lower() == "daily reward":
-                                    if self._is_daily_reward_content_loaded(page):
-                                        print(
-                                            f"         ℹ️ Element '{target_text}' is already active/selected"
-                                        )
-                                        clicked = True
-                                        break
+                            # Must be EXACT match (not substring) to avoid parent containers
+                            # that contain multiple tab names (e.g. li.active with children
+                            # Tasks, Milestones, Leaderboards all inside one active wrapper)
+                            if item_text.lower() != target_clean.lower():
+                                continue
+                            if target_clean.lower() == "daily reward":
+                                if self._is_daily_reward_content_loaded(page):
                                     print(
-                                        f"         ⚠️ '{target_text}' nav active but content missing — re-clicking"
+                                        f"         ℹ️ Element '{target_text}' is already active/selected"
                                     )
-                                    if self._click_sidebar_nav_by_id(
-                                        page, "daily_reward", target_clean
-                                    ):
-                                        clicked = True
-                                        time.sleep(1)
+                                    clicked = True
                                     break
                                 print(
-                                    f"         ℹ️ Element '{target_text}' is already active/selected"
+                                    f"         ⚠️ '{target_text}' nav active but content missing — re-clicking"
                                 )
-                                clicked = True
+                                if self._click_sidebar_nav_by_id(
+                                    page, "daily_reward", target_clean
+                                ):
+                                    clicked = True
+                                    time.sleep(1)
                                 break
+                            print(
+                                f"         ℹ️ Element '{target_text}' is already active/selected"
+                            )
+                            clicked = True
+                            break
                 except:
                     pass
 
@@ -1993,6 +2085,37 @@ class NavigatorMixin:
         except Exception:
             pass
 
+        # Fallback for "Filter Data" / "Filter" button not found:
+        # Try common filter button selectors, then press Enter in the visible search input.
+        if "filter" in target_clean.lower():
+            try:
+                for _fsel in [
+                    "button#btn-filter",
+                    "button:has-text('Filter')",
+                    "a.btn:has-text('Filter')",
+                    "input[type='submit'][value*='ilter']",
+                    "button[type='submit']",
+                ]:
+                    try:
+                        _fb = page.locator(_fsel).first
+                        if _fb.count() > 0 and _fb.is_visible():
+                            _fb.click()
+                            print(f"         ✅ Filter fallback: clicked '{_fsel}'")
+                            self._wait_for_long_loading(page)
+                            return True
+                    except Exception:
+                        continue
+                # Last resort: press Enter in the visible text / search input
+                _inp = page.locator("input[type='text']:visible, input[type='search']:visible").first
+                if _inp.count() > 0 and _inp.is_visible():
+                    _inp.press("Enter")
+                    print(f"         ✅ Filter fallback: pressed Enter in search input")
+                    time.sleep(2)
+                    self._wait_for_long_loading(page)
+                    return True
+            except Exception as _fe:
+                print(f"         ⚠️ Filter fallback error: {_fe}")
+
         print(f"         ❌ FAILED: Cannot find clickable element '{target_text}'")
         return False
 
@@ -2017,6 +2140,8 @@ class NavigatorMixin:
             ".swal2-loading",
             ".blockUI",
             "div:has-text('Loading')",
+            # PVE-specific SVG loader: three animated circles (viewBox="0 0 120 30")
+            "svg[viewBox='0 0 120 30']",
         ]
 
         def _any_spinner_visible():
@@ -2041,29 +2166,32 @@ class NavigatorMixin:
                 f"         🔄 Spinner DETECTED: '{active_spinner}'. Waiting for it to finish..."
             )
             try:
-                # Spinner heuristics: avoid hard-stalling on generic loader overlays
-                # (e.g. pages that keep an always-on .loader / [class*='loader'] element).
                 spinner_str = str(active_spinner)
-                if "has-text('Loading')" in spinner_str:
-                    wait_timeout = 2000
-                elif (
-                    "class*='loader'" in spinner_str
-                    or "'.loader'" in spinner_str
-                    or ".loader" in spinner_str
-                ):
-                    # Generic loader: reduce hard wait to avoid step-level timeouts.
-                    wait_timeout = 2500
+                # Generic/always-on loaders get shorter timeout to avoid stalling
+                if "has-text('Loading')" in spinner_str or "class*='loader'" in spinner_str or ".loader" in spinner_str:
+                    wait_timeout = 8000
+                elif "svg[viewBox" in spinner_str:
+                    # PVE SVG loader: page navigation is slow, allow up to 45s
+                    wait_timeout = 45000
                 else:
-                    wait_timeout = 2000
+                    wait_timeout = 10000
 
                 page.locator(active_spinner).first.wait_for(
                     state="hidden", timeout=wait_timeout
                 )
                 print("         ✅ Spinner finished (Main content loaded).")
             except Exception:
-                print(
-                    "         ℹ️ Spinner wait timed out (possible false positive). Continuing execution."
-                )
+                # Still spinning after timeout — do a final visibility check
+                try:
+                    still_visible = page.locator(active_spinner).first.is_visible(timeout=200)
+                except Exception:
+                    still_visible = False
+                if still_visible:
+                    print(
+                        "         ⚠️ Spinner still visible after 15s — possible persistent loader, continuing anyway."
+                    )
+                else:
+                    print("         ✅ Spinner gone (detected late).")
         else:
             print(
                 "         ℹ️ No spinner detected immediately. Waiting for network idle just in case."

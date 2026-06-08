@@ -22,6 +22,10 @@ load_dotenv()
 # Module-level variable to track the actual mode used in the last parse
 last_actual_mode = "fast"
 
+# Periodic model reload: force-unload after this many formatting calls to clear VRAM fragmentation.
+_RELOAD_EVERY_N_CALLS = 15
+_formatting_call_count = 0
+
 # === CONFIGURATION ===
 MODEL_REASONING = "deepseek-r1:8b"  # 8B: 19.7 tok/s vs 14B: 11.4 tok/s trên M4. Output chỉ là analysis text → 8B đủ chất lượng
 MODEL_FORMATTING = "qwen2.5-coder:14b"  # Giữ 14B cho formatting vì cần JSON chính xác
@@ -87,10 +91,10 @@ def clean_json_string(text):
 
     # 0. [CRITICAL] Fix double braces từ LLM ({{ -> {, }} -> })
     # LLM hay copy pattern từ f-string examples và trả về {{ }} thay vì { }
-    # [FIX] Chỉ thay thế khi {{ bao quanh identifier/text (f-string style), KHÔNG được thay }}
-    # trong JSON hợp lệ vì "}}" là 2 closing braces của nested objects (VD: "data":{...}})
-    # Thay "{{word}}" → "{word}" (chỉ fix f-string templates thực sự)
-    text = re.sub(r"\{\{([^{}]+)\}\}", r"{\1}", text)
+    # Nếu text chứa {{ thì TOÀN BỘ output đang ở "double-brace mode" — thay thế tất cả.
+    # Valid JSON không bao giờ có {{ nên phát hiện {{ là đủ để kích hoạt fix toàn cục.
+    if "{{" in text:
+        text = text.replace("{{", "{").replace("}}", "}")
 
     # 1. Xóa Markdown code block (```json ... ```)
     text = re.sub(r"```json|```", "", text)
@@ -148,6 +152,13 @@ def clean_json_string(text):
     # Pattern: SPACE DASH SPACE [TitleCase key name] QUOTE COLON QUOTE
     # Dấu hiệu nhận biết: chuỗi kết thúc bằng [TitleCase]":"  → rõ ràng là key JSON bị chèn vào value
     text = re.sub(r' - ([A-Z][A-Za-z0-9 ()]+)"(\s*:\s*")', r'","\1"\2', text)
+
+    # 7b. [NEW] Fix LLM merging two fields: "val1, Key2":"val2" → "val1","Key2":"val2"
+    # Xảy ra khi lệnh có dạng "Field1: val1, Field2: val2" mà LLM gom thành một value:
+    # "Superstars or Groups":"Body_OOsbourne, Attempt":"10000" (SAI)
+    # → "Superstars or Groups":"Body_OOsbourne","Attempt":"10000" (ĐÚNG)
+    # Pattern: COMMA SPACE [TitleCase key name] QUOTE COLON QUOTE
+    text = re.sub(r', ([A-Z][A-Za-z0-9 ()]+)"(\s*:\s*")', r'","\1"\2', text)
 
     # 8. [NEW] Fix incomplete JSON (bị cắt output)
     # Nếu JSON không đóng đúng, tự động thêm closing brackets
@@ -259,32 +270,32 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
     # Config tối ưu cho Careful Mode - Reasoning Phase (DeepSeek-R1:8b)
     if careful_phase == "reasoning":
         options = {
-            "temperature": 0.1,
-            "num_ctx": 4096,  # Đủ cho reasoning prompt (~2k tokens)
-            "num_predict": 1200,  # ⬆️ Tăng từ 768: tránh bị cắt giữa chừng khi lệnh phức tạp (768 hit limit = analysis bị truncate → Qwen fail)
+            "temperature": 0.1,  # Giữ nhỏ >0 cho reasoning để không bị "tunnel vision"
+            "num_ctx": 4096,
+            "num_predict": 1200,  # ✅ Giảm từ 2000 → 1200: tiết kiệm ~40s/call, đủ cho lệnh dài 900+ chars hoàn thành think block
             "num_gpu": 99,
-            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn 30-50% trên Apple Silicon M4
-            "flash_attn": True,  # ⬆️ Flash Attention: giảm memory bandwidth, tăng tốc attention computation
+            "num_batch": 2048,
+            "flash_attn": True,
         }
     # Config tối ưu cho Careful Mode - Formatting Phase (Qwen2.5-Coder)
     elif careful_phase == "formatting":
         options = {
-            "temperature": 0.1,
-            "num_ctx": 8192,  # ⬆️ Đủ cho formatting prompt lớn (~6k tokens)
-            "num_predict": 4096,  # Đủ cho JSON output
+            "temperature": 0.0,  # 0.0 = hoàn toàn deterministic → JSON nhất quán hơn qua nhiều lần gọi
+            "num_ctx": 12288,  # ⬆️ Tăng từ 8192: formatting prompt ~6-8k + output buffer dư ~4k
+            "num_predict": 2048,  # ✅ Giảm từ 4096: JSON output thực tế không bao giờ vượt 1500 tokens
             "num_gpu": 99,
-            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn cho prompt ~6k tokens
-            "flash_attn": True,  # ⬆️ Flash Attention: tối ưu KV cache access pattern
+            "num_batch": 2048,
+            "flash_attn": True,
         }
     # Config tối ưu tốc độ (Fast Mode)
     elif optimized:
         options = {
-            "temperature": 0.0,  # Set to 0 for strict adherence to rules
-            "num_ctx": 8192,  # Đủ chứa Fast Mode prompt (~4k tokens) + output
-            "num_predict": 1024,  # ⬇️ Giảm từ 4096: max output ~400-600 tokens cho lệnh đơn giản
+            "temperature": 0.0,
+            "num_ctx": 12288,  # ⬆️ Tăng từ 8192: Fast Mode prompt ~4k + output buffer dư
+            "num_predict": 1500,  # ✅ Tăng nhẹ từ 1024: đủ cho JSON phức tạp nhất mà không waste
             "num_gpu": 99,
-            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn cho prompt lớn (few-shot ~4k tokens)
-            "flash_attn": True,  # ⬆️ Flash Attention: giảm memory IO, tăng tốc trên Metal backend
+            "num_batch": 2048,
+            "flash_attn": True,
         }
 
     payload = {
@@ -360,12 +371,8 @@ def unload_model(model_name):
 
 def ensure_clean_context():
     """
-    Force-unload tất cả model đang loaded để đảm bảo lần load tiếp theo
-    dùng đúng num_ctx từ request (không bị kế thừa context 131K từ lần load trước).
-
-    VẤN ĐỀ GỐC: Nếu model đã load với num_ctx=131072 (default),
-    Ollama có thể giữ allocation đó cho các request sau dù num_ctx nhỏ hơn.
-    → KV cache 131K chiếm ~20GB trên model 8B/14B → swap → chậm 10x.
+    Force-unload models loaded với context quá lớn (131K default → swap → chậm 10x).
+    KHÔNG unload khi ctx hợp lý — giữ warm để tận dụng prompt-prefix KV caching.
     """
     try:
         response = requests.get("http://localhost:11434/api/ps")
@@ -374,15 +381,31 @@ def ensure_clean_context():
             for m in models:
                 ctx = m.get("context_length", 0)
                 name = m.get("name", "")
-                if ctx > 16384:  # Model đang load với context quá lớn (131K default)
+                if ctx > 16384:
                     print(
                         f"   ⚠️  Model {name} loaded với context={ctx} (quá lớn!) → Force unload..."
                     )
                     unload_model(name)
-                # ✅ KHÔNG unload nữa nếu model đang ở ctx hợp lý (8192):
-                # Unload mọi lần = cold-start mỗi request = tốn 15-30s reload từ disk!
     except:
         pass
+
+
+def _maybe_periodic_reload():
+    """
+    Sau mỗi _RELOAD_EVERY_N_CALLS lần gọi formatting model, force-unload tất cả
+    để giải phóng VRAM fragmentation tích lũy qua nhiều session calls.
+    Model sẽ cold-start lần tiếp theo (~15-30s) nhưng VRAM sạch hoàn toàn.
+    """
+    global _formatting_call_count
+    _formatting_call_count += 1
+    if _formatting_call_count >= _RELOAD_EVERY_N_CALLS:
+        print(
+            f"   🔄 PERIODIC RELOAD: {_formatting_call_count} calls reached "
+            f"(threshold={_RELOAD_EVERY_N_CALLS}) → force-unloading all models..."
+        )
+        unload_model(MODEL_FORMATTING)
+        unload_model(MODEL_REASONING)
+        _formatting_call_count = 0
 
 
 # ============================================================================
@@ -443,10 +466,10 @@ def detect_complexity(user_command):
 
     # 2. Đếm số bước (dấu -> hoặc →)
     num_steps = command_lower.count("->") + command_lower.count("→")
-    many_steps = num_steps > 7  # Tăng từ 5 lên 7 để tránh false positive
+    many_steps = num_steps > 14  # ✅ Tăng từ 7: smoke test commands thường 8-12 bước → không nên escalate
 
     # 3. Độ dài lệnh (lệnh quá dài thường phức tạp)
-    is_very_long = len(user_command) > 350  # Tăng từ 250 lên 350
+    is_very_long = len(user_command) > 700  # ✅ Tăng từ 350: tránh false escalate cho commands dài nhưng linear
 
     # 4. Có chứa nhiều actions khác nhau
     action_keywords = [
@@ -463,7 +486,7 @@ def detect_complexity(user_command):
         "update",
     ]
     action_count = sum(1 for kw in action_keywords if kw in command_lower)
-    many_actions = action_count > 6  # Tăng từ 4 lên 6
+    many_actions = action_count > 8  # ✅ Tăng từ 6: smoke test commands thường dùng 4-6 action types
 
     # KẾT LUẬN
     is_complex = has_complex_logic or many_steps or is_very_long or many_actions
@@ -505,11 +528,11 @@ def single_model_pipeline(user_command):
     pipeline_start = time.time()
 
     # Đảm bảo không có model nào đang load với context khổng lồ
+    _maybe_periodic_reload()
     ensure_clean_context()
 
     prompt = get_fast_mode_prompt(user_command)
 
-    # Gọi model với config tối ưu (temperature=0 để less creative)
     json_output = call_ollama(MODEL_FORMATTING, prompt, optimized=True)
     # ✅ KHÔNG unload sau Fast Mode: giữ model warm cho request tiếp theo
     # (Careful Mode sẽ tự unload khi cần VRAM cho DeepSeek-R1)
@@ -539,16 +562,23 @@ def single_model_pipeline(user_command):
         return plan
     except json.JSONDecodeError as e:
         print(f"   ❌ Fast Mode Parse Error: {e}")
-        print(f"   Raw output (first 500 chars): {json_output[:500]}...")
-        print(f"   Cleaned output (first 500 chars): {final_json_str[:500]}...")
-
-        # [DEBUG] Show full cleaned output if short enough
+        print(f"   Raw (first 500): {json_output[:500]}...")
         if len(final_json_str) < 2000:
-            print(f"   📝 Full Cleaned JSON:\n{final_json_str}")
+            print(f"   📝 Cleaned:\n{final_json_str}")
 
-        print(
-            f"   ⚠️  Tip: Lệnh này có thể phức tạp, hãy thử tắt Fast Mode và chạy lại."
-        )
+        # Retry once: flush VRAM fragmentation then call again
+        print("   🔄 Retry Fast Mode (fresh context)...")
+        unload_model(MODEL_FORMATTING)
+        time.sleep(1)
+        json_output_retry = call_ollama(MODEL_FORMATTING, prompt, optimized=True)
+        if json_output_retry:
+            retry_str = clean_json_string(json_output_retry)
+            try:
+                plan_retry = json.loads(retry_str)
+                print(f"   ✅ Fast Mode retry OK: {len(plan_retry)} bước")
+                return plan_retry
+            except json.JSONDecodeError:
+                print("   ❌ Fast Mode retry cũng thất bại → fallback to Careful Mode")
         return []
 
 
@@ -565,6 +595,7 @@ def dual_model_pipeline(user_command):
     pipeline_start = time.time()
 
     # CRITICAL: Force-unload models có context lớn để tránh swap (131K ctx = 25GB!)
+    _maybe_periodic_reload()
     ensure_clean_context()
 
     # =========================================================================
@@ -587,6 +618,19 @@ def dual_model_pipeline(user_command):
     analysis_clean = re.sub(
         r"<think>.*?</think>", "", raw_analysis, flags=re.DOTALL
     ).strip()
+
+    # Handle truncated output: nếu </think> bị cắt (num_predict limit), analysis_clean sẽ rỗng
+    # hoặc vẫn chứa <think> tag mở. Fallback: lấy nội dung bên trong <think> block.
+    if not analysis_clean or "<think>" in analysis_clean:
+        think_match = re.search(r"<think>(.*)", raw_analysis, re.DOTALL)
+        if think_match:
+            inner = think_match.group(1).strip()
+            # Lấy 600 chars cuối (phần reasoning gần nhất với kết luận)
+            analysis_clean = inner[-600:].strip() if len(inner) > 600 else inner
+            print(f"      ⚠️  Think block truncated — dùng inner reasoning ({len(analysis_clean)} chars)")
+        else:
+            analysis_clean = raw_analysis[:600].strip()
+            print(f"      ⚠️  No think block found — dùng raw output")
 
     print(
         f"      📝 Analysis from DeepSeek: {analysis_clean[:100].replace(chr(10), ' ')}..."
@@ -637,8 +681,24 @@ def dual_model_pipeline(user_command):
             )
         return plan
     except json.JSONDecodeError as e:
-        print(f"   ❌ Lỗi Parse JSON từ Qwen: {e}")
-        print(f"   Raw output: {json_output}")
+        print(f"   ❌ Careful Mode Parse Error (Qwen): {e}")
+        print(f"   Raw (first 500): {json_output[:500]}...")
+
+        # Retry once: flush Qwen then re-run formatting phase only (keep DeepSeek analysis)
+        print("   🔄 Retry Careful Mode formatting phase (fresh Qwen context)...")
+        unload_model(MODEL_FORMATTING)
+        time.sleep(1)
+        json_output_retry = call_ollama(
+            MODEL_FORMATTING, formatting_prompt, careful_phase="formatting"
+        )
+        if json_output_retry:
+            retry_str = clean_json_string(json_output_retry)
+            try:
+                plan_retry = json.loads(retry_str)
+                print(f"   ✅ Careful Mode retry OK: {len(plan_retry)} bước")
+                return plan_retry
+            except json.JSONDecodeError:
+                print("   ❌ Careful Mode retry cũng thất bại → trả về []")
         return []
 
 
@@ -683,6 +743,36 @@ def patch_model_pipeline(user_command, base_command, base_plan):
 # ============================================================================
 
 
+def _inject_generated_ids(user_command: str) -> str:
+    """
+    Preprocessing: replace 'hãy tự generate một ID duy nhất bắt đầu bằng <prefix>'
+    with '<prefix>_<timestamp>_<random>' before the AI pipeline sees the command.
+    Prevents the AI from reusing previously-seen IDs from its context window.
+    """
+    import datetime as _dt
+    import uuid as _uuid
+
+    _pattern = re.compile(
+        r"hãy tự generate một ID duy nhất bắt đầu bằng\s+(\S+)",
+        re.IGNORECASE,
+    )
+
+    def _make_id(match):
+        token = match.group(1).strip()
+        # Separate the prefix from any trailing punctuation so it stays in output
+        m = re.match(r"^(.*?)([.,;]*)$", token)
+        prefix = m.group(1) if m else token
+        trailing = m.group(2) if m else ""
+        ts = _dt.datetime.now().strftime("%m%d%H%M%S")
+        rnd = _uuid.uuid4().hex[:4]
+        return f"{prefix}_{ts}_{rnd}{trailing}"
+
+    result, count = _pattern.subn(_make_id, user_command)
+    if count:
+        print(f"   🔑 Auto-generated {count} unique ID(s) before AI processing")
+    return result
+
+
 def parse_command_to_json(
     user_command, use_fast_mode=True, context_plan=None, base_command=None
 ):
@@ -699,6 +789,9 @@ def parse_command_to_json(
         List[dict]: JSON Action Plan
     """
     global last_actual_mode
+
+    # Preprocess: inject unique IDs before AI sees the command
+    user_command = _inject_generated_ids(user_command)
 
     print("\n🧠 AI Pipeline Started...")
     print(

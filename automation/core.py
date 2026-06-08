@@ -8,6 +8,70 @@ import sys
 import asyncio
 from playwright.sync_api import sync_playwright
 
+# Map from clone-modal field name (lowercase) → feature key in smoke_last_ids.json
+_CLONE_FIELD_TO_FEATURE = {
+    "book name": "PVE",
+    "rules based tournament id": "RBE",
+    "cloned rules based tournament id": "RBE",
+    "new event id": "Gacha",
+    "new ff id": "Faction Feud",
+    "new tournament id": "Showdown",
+    "bracket id": "Showdown",
+    "nrb id": "Showdown",
+    "new offer id": "Offer",
+    "new section id": "Offer Section",
+    "currency id": "Currency",
+    "grabbag id": "Grabbag",
+    "new tier id": "Fight Card Slots",
+    "fightcard id": "Fight Card",
+    "faction boss battle name": "Faction Boss",
+    "new key": "Perk/Perk Slot",
+    "new superstar id": "SuperStar",
+    "loc id": "Localization",
+    "moment poster id": "Moment Poster",
+}
+
+_SMOKE_ID_FILE = os.path.join(os.path.dirname(__file__), "..", "config", "smoke_last_ids.json")
+
+
+def _persist_clone_id(last_update_form_data: dict):
+    """
+    After save_form(mode='clone') succeeds, extract the new ID from the most
+    recent update_form data and persist it to smoke_last_ids.json.
+    Logs a confirmation line so the user knows it was saved.
+    """
+    if not last_update_form_data:
+        return
+
+    new_id = None
+    feature = None
+    for key, val in last_update_form_data.items():
+        if _CLONE_FIELD_TO_FEATURE.get(key.lower().strip()) and val:
+            new_id = str(val).strip()
+            feature = _CLONE_FIELD_TO_FEATURE[key.lower().strip()]
+            break
+
+    if not new_id or not feature:
+        return
+
+    try:
+        ids = {}
+        if os.path.exists(_SMOKE_ID_FILE):
+            with open(_SMOKE_ID_FILE, "r", encoding="utf-8") as f:
+                ids = json.load(f)
+        existing = ids.get(feature, [])
+        if isinstance(existing, str):
+            existing = [existing]
+        if new_id not in existing:
+            existing.append(new_id)
+        ids[feature] = existing
+        os.makedirs(os.path.dirname(_SMOKE_ID_FILE), exist_ok=True)
+        with open(_SMOKE_ID_FILE, "w", encoding="utf-8") as f:
+            json.dump(ids, f, ensure_ascii=False, indent=2)
+        print(f"      💾 Clone ID saved → '{feature}': '{new_id}' (smoke_last_ids.json)")
+    except Exception as e:
+        print(f"      ⚠️ Could not save clone ID: {e}")
+
 # --- IMPORT CÁC MODULE CON ---
 from automation.constants import DOWNLOAD_DIR
 from automation.navigator import NavigatorMixin
@@ -132,43 +196,82 @@ class BrickAutomation(
 
     def _ensure_rbe_are_you_sure_closed(self, page):
         """
-        Only close the specific Bootstrap confirm modal:
-        “Are you sure?” / “This event schedule is outside of the RBE's schedule …”
-        so we don't accidentally dismiss other modals (e.g. “Defining Schedules”).
+        Dismiss two categories of blocking popups that appear in RBE/Contest flows:
+
+        1. Confirmation modals:
+           "Are you sure?" / "This event schedule is outside of the RBE's schedule"
+        2. DNU Warning:
+           "[X] is currently in the DNU list" (SweetAlert2 or Bootstrap modal, OK only)
+
+        IMPORTANT: Never dismiss the "Defining Schedules" modal - that is a real data entry
+        dialog, not a blocking confirmation.
         """
+        dismissed = False
         try:
-            modal_text_re = re.compile(
-                r"(are you sure|outside of the rbe.*schedule|rbe.*schedule)",
+            # --- PASS 1: Confirmation modals ("Are you sure" / "outside of RBE schedule") ---
+            # Regex is intentionally specific: requires "are you sure" OR the exact phrase
+            # "outside of the rbe.*schedule". The old bare "rbe.*schedule" pattern was too
+            # broad and matched the "Defining Schedules" modal body text, causing it to be
+            # dismissed before "Add Schedule" could be clicked.
+            confirm_re = re.compile(
+                r"(are you sure|outside of the rbe.*schedule)",
                 re.IGNORECASE,
             )
 
-            # Bootstrap may render with slightly different class combos; broaden search.
-            modal = (
-                page.locator(
-                    ".modal.show, .modal.in, [role='dialog']:not([aria-hidden='true']), .swal2-popup:visible"
-                )
-                .filter(has_text=modal_text_re)
-                .first
+            candidates = page.locator(
+                ".modal.show, .modal.in, [role='dialog']:not([aria-hidden='true']), .swal2-popup:visible"
             )
-
-            if modal.count() > 0 and modal.is_visible():
-                # Prefer primary button (often OK), else match text fallbacks
-                btn = modal.locator("button.btn-primary, a.btn-primary").first
-                if not (btn.count() > 0 and btn.is_visible()):
+            count = candidates.count()
+            for i in range(count):
+                try:
+                    modal = candidates.nth(i)
+                    if not modal.is_visible():
+                        continue
+                    modal_text = modal.inner_text(timeout=600).strip()
+                    # Skip "Defining Schedules" modal - it is a data entry form, not a confirmation
+                    if "defining schedules" in modal_text.lower():
+                        continue
+                    if not confirm_re.search(modal_text):
+                        continue
+                    # Prefer explicit OK-like button; never guess on generic primary button
                     btn = modal.locator(
                         "button:has-text('OK'), button:has-text('Ok'), "
                         "button:has-text('Confirm'), button:has-text('Yes'), "
                         "button:has-text('Proceed'), button:has-text('Continue')"
                     ).first
-
-                if btn.count() > 0 and btn.is_visible():
-                    print("      🔕 Are-you-sure modal detected; clicking OK...")
-                    btn.click(force=True)
-                    time.sleep(0.35)
-                    return True
+                    if btn.count() > 0 and btn.is_visible():
+                        print("      🔕 Are-you-sure modal detected; clicking OK...")
+                        btn.click(force=True)
+                        time.sleep(0.35)
+                        dismissed = True
+                except Exception:
+                    continue
         except Exception:
             pass
-        return False
+
+        try:
+            # --- PASS 2: DNU Warning popup ---
+            # "PointCurrency_XXX is currently in the DNU list" - SweetAlert2 or Bootstrap.
+            # Only has an OK button; must be dismissed so subsequent actions can proceed.
+            dnu_re = re.compile(r"dnu", re.IGNORECASE)
+            dnu_candidates = page.locator(
+                ".modal.show, .modal.in, .swal2-popup:visible, [role='dialog']:visible"
+            ).filter(has_text=dnu_re)
+            if dnu_candidates.count() > 0 and dnu_candidates.first.is_visible():
+                dnu_modal = dnu_candidates.first
+                ok_btn = dnu_modal.locator(
+                    "button:has-text('OK'), button:has-text('Ok'), "
+                    "button.swal2-confirm, button.btn-primary"
+                ).first
+                if ok_btn.count() > 0 and ok_btn.is_visible():
+                    print("      🔔 DNU Warning detected; clicking OK to dismiss...")
+                    ok_btn.click(force=True)
+                    time.sleep(0.35)
+                    dismissed = True
+        except Exception:
+            pass
+
+        return dismissed
 
     def get_existing_page(self, p):
         try:
@@ -225,6 +328,7 @@ class BrickAutomation(
     def _execute_with_playwright(self, action_plan):
         """Core logic chạy Playwright - được gọi sau khi event loop policy đã được set đúng."""
         report_logs = []
+        last_update_form_data = {}  # Track most recent update_form data for clone ID capture
         with sync_playwright() as p:
             try:
                 browser, page = self.get_existing_page(p)
@@ -355,11 +459,12 @@ class BrickAutomation(
 
                     print(f"▶️ Executing: {act} -> {tgt} {val}")
 
-                    # Nếu đang có popup confirm “Are you sure?” kiểu Bootstrap (ví dụ:
-                    # “This event schedule is outside of the RBE's schedule...”) thì phải OK trước
+                    # Nếu đang có popup confirm "Are you sure?" kiểu Bootstrap (ví dụ:
+                    # "This event schedule is outside of the RBE's schedule...") thì phải OK trước
                     # khi tiếp tục các bước click/update/save, tránh AI bị block/nhảy bước sai.
                     try:
-                        if act in {"click", "select", "update_form", "save_form"}:
+                        if act in {"click", "select", "update_form", "save_form",
+                                   "navigate", "process_deployment"}:
                             # Handle SweetAlert2 clone confirmation first (Yes/No)
                             self._ensure_swal2_clone_confirmation_yes(page)
                             # Then handle existing Bootstrap confirmation modals
@@ -500,6 +605,7 @@ class BrickAutomation(
                         self._click_icon_in_row(page, tgt, "clone")
                     elif act == "update_form":
                         self._smart_update_form(page, popup_data)
+                        last_update_form_data = popup_data  # Track for clone ID capture
                         report_logs.append(
                             {
                                 "step": "Form",
@@ -536,6 +642,8 @@ class BrickAutomation(
                             # [CRITICAL] After save_form(clone), check for Locked Item popup
                             # Cloning navigates to the new item's edit page which may be locked
                             if mode == "clone":
+                                # Persist the new clone ID so downstream "vừa clone" substitution works
+                                _persist_clone_id(last_update_form_data)
                                 print(
                                     "      ⏳ Waiting for cloned item page to load..."
                                 )
@@ -803,6 +911,19 @@ class BrickAutomation(
                     elif act == "process_deployment":
                         options = step.get("options", [])
                         print(f"   🚀 Process Deployment: {options}")
+                        # Dismiss any lingering popup before navigating home
+                        try:
+                            swal = page.locator(".swal2-popup")
+                            if swal.count() > 0 and swal.first.is_visible():
+                                ok_btn = swal.first.locator(
+                                    "button.swal2-confirm, button:has-text('OK'), button:has-text('Yes')"
+                                )
+                                if ok_btn.count() > 0 and ok_btn.first.is_visible():
+                                    ok_btn.first.click(force=True)
+                                    time.sleep(0.3)
+                                    print("      ✅ Dismissed lingering popup before navigating home")
+                        except Exception:
+                            pass
                         try:
                             self.process_deployment(page, options)
                             report_logs.append(

@@ -99,6 +99,26 @@ DEPLOYMENT_KEYWORDS = [
 # Map: destination keyword (lowercase) → full navigation path
 # When user says "Vào Faction Feud Event", AI may generate navigate(["Faction Feud Event"])
 # This map resolves it to the full path ["Live Events", "Faction Feud", "Faction Feud Event"]
+
+
+# ============================================================================
+# PAGE TAB NAMES - Elements that are in-page tabs/buttons, NEVER sidebar nav items
+# ============================================================================
+# If the AI generates navigate(["X"]) where X is in this set, it is wrong.
+# These elements only exist as tabs/buttons WITHIN a page (e.g. RBE form tabs),
+# and must be interacted with via `click`, not `navigate`.
+# Bug: AI confuses "Bấm vào tab Contest Superstars" → navigate(["Contest Superstars"])
+# which causes navigator to deep-scan sidebar, fail, and crash/refresh the page.
+PAGE_TAB_NAMES = {
+    "contest superstars",
+    "define schedules",
+    "add event",
+    "add schedule",
+    "add css",
+    "pvp",
+}
+
+
 NAVIGATION_PATH_MAP = {
     # === Live Events ===
     # Faction Feud
@@ -297,6 +317,451 @@ VALID_ACTIONS = {
     "reorder",
 }
 
+# Valid deployment options (checkboxes on The Brick home screen).
+# Anything outside this set that the AI puts in process_deployment.options is stripped.
+_VALID_DEPLOY_OPTIONS = {
+    "Localization", "Excel", "Currency", "Consumables", "Faction Feud", "Grab Bag",
+    "Chat Channels", "PVE", "Faction Mission", "Merch Store", "Feature Setting",
+    "Invasion", "Mizz Missions", "Subscription 1.5", "Feature Gate Setting",
+    "Versus Shop", "League Config", "Champion Rewards", "Battle Shop", "Notification",
+    "Reactivation Flow & Contest", "Auto Play & Speed Up", "News Modal", "Stat Change",
+    "Gacha Events", "Offers", "Missions", "Fight Card", "Cash Contract",
+    "LiveOps Message", "RBE", "Faction Lockbox", "Promo Code", "Subscription & VIP",
+    "Perks", "Effect Cap Setting", "Social Box Gacha", "Monthly Bonus",
+    "Versus Tournament", "Player League", "Strap and Medal", "Superstars", "Boost",
+    "Faction Boss", "Moment Poster", "Time Challenge", "Social Friends", "Token",
+    "Prize Wall", "Hyper Blueprint", "Live Events", "Data Configs",
+}
+
+
+def _remove_download_before_edit_row(plan, user_command=""):
+    """
+    Remove spurious download steps that appear before the first edit_row/clone_row,
+    when a legitimate download already exists after edit_row.
+
+    Also removes a duplicate navigate immediately following the spurious download.
+    AI pattern: navigate(X) → download [spurious] → navigate(X) [dup] → edit_row → ... → download [real]
+    """
+    edit_row_positions = [
+        i for i, s in enumerate(plan) if s.get("action") in ("edit_row", "clone_row")
+    ]
+    download_positions = [i for i, s in enumerate(plan) if s.get("action") == "download"]
+
+    if not edit_row_positions or not download_positions:
+        return plan
+
+    first_edit = min(edit_row_positions)
+    downloads_before = [i for i in download_positions if i < first_edit]
+    downloads_after = [i for i in download_positions if i > first_edit]
+
+    if not downloads_before or not downloads_after:
+        return plan
+
+    # No guard needed: there is no legitimate test case where a download appears
+    # before edit_row AND another download appears after edit_row.
+    # The only time this pattern occurs is when the AI hallucinates an early export.
+    print(
+        f"   🔧 DETECT: download before edit_row at positions {downloads_before}, "
+        f"real download after at {downloads_after} — removing spurious early download(s)"
+    )
+
+    positions_to_remove = set(downloads_before)
+
+    # Also remove duplicate navigate immediately after the spurious download
+    for dl_pos in downloads_before:
+        next_pos = dl_pos + 1
+        if next_pos >= len(plan) or plan[next_pos].get("action") != "navigate":
+            continue
+        prev_nav = next(
+            (plan[k] for k in range(dl_pos - 1, -1, -1) if plan[k].get("action") == "navigate"),
+            None,
+        )
+        if prev_nav is None:
+            continue
+        prev_path = prev_nav.get("path", [])
+        next_path = plan[next_pos].get("path", [])
+        if prev_path and prev_path == next_path:
+            positions_to_remove.add(next_pos)
+            print(f"   🔧 REMOVE duplicate navigate after spurious download (path={next_path})")
+
+    result = []
+    for i, step in enumerate(plan):
+        if i in positions_to_remove:
+            if step.get("action") == "download":
+                print(
+                    f"   🔧 REMOVE spurious download('{step.get('target', '?')}', "
+                    f"'{step.get('value', '')}') before edit_row"
+                )
+            continue
+        result.append(step)
+    return result
+
+
+
+
+def _fix_pve_clone_chapter(plan, user_command=""):
+    """
+    Fix AI confusing "Clone Chapter" (in-page button) with clone_row (table action).
+
+    Two-pass approach:
+    PASS 1 — Fix book entry if AI used clone_row instead of edit_row for "Sửa ID vừa clone".
+             Also removes any wrong clone-modal update_form/save_form/wait block that follows.
+    PASS 2 — Ensure click("Clone Chapter") is followed by click("Chapter N") + save_form(save).
+             Fixes the common AI mistake of generating update_form + save_form(clone) after
+             click("Clone Chapter") instead of click("Chapter N") + save_form(save).
+    """
+    import re as _re
+
+    cmd_lower = (user_command or "").lower()
+    if "clone chapter" not in cmd_lower:
+        return plan
+
+    m = _re.search(r"chapter\s+(\d+)", cmd_lower)
+    chapter_target = f"Chapter {m.group(1)}" if m else "Chapter 1"
+
+    result = list(plan)
+
+    # ── PASS 1: Fix book entry ────────────────────────────────────────────────
+    edit_positions = [i for i, s in enumerate(result) if s.get("action") == "edit_row"]
+    clone_positions = [i for i, s in enumerate(result) if s.get("action") == "clone_row"]
+
+    if not edit_positions and clone_positions:
+        # AI used clone_row for "Sửa ID vừa clone". Convert it to edit_row and
+        # remove the wrong clone-modal block (save_form/update_form/wait) that follows.
+        first_clone = clone_positions[0]
+        clone_target = result[first_clone].get("target", "")
+        end_idx = first_clone + 1
+        while end_idx < len(result) and result[end_idx].get("action") in (
+            "save_form", "update_form", "wait"
+        ):
+            end_idx += 1
+        result = (
+            result[:first_clone]
+            + [{"action": "edit_row", "target": clone_target}, {"action": "wait"}]
+            + result[end_idx:]
+        )
+        print(
+            f"   🔧 PVE-CLONE-CHAPTER(pass1): clone_row → edit_row('{clone_target}') + wait"
+        )
+
+    elif edit_positions:
+        # If clone_row also appears AFTER the last edit_row, remove it (old Case 1).
+        last_edit = max(edit_positions)
+        clone_idx = next(
+            (i for i, s in enumerate(result) if i > last_edit and s.get("action") == "clone_row"),
+            None,
+        )
+        if clone_idx is not None:
+            end_idx = clone_idx + 1
+            while end_idx < len(result) and result[end_idx].get("action") in (
+                "update_form", "save_form"
+            ):
+                end_idx += 1
+            result = result[:clone_idx] + result[end_idx:]
+            print(f"   🔧 PVE-CLONE-CHAPTER(pass1-orig): removed spurious clone_row block inside book")
+
+    # ── PASS 2: Fix the Clone Chapter click sequence ──────────────────────────
+    edit_positions = [i for i, s in enumerate(result) if s.get("action") == "edit_row"]
+    if not edit_positions:
+        return result
+
+    last_edit = max(edit_positions)
+
+    # Remove any click("Clone Chapter") that appears BEFORE edit_row — AI hallucination
+    before_count = sum(
+        1 for i, s in enumerate(result)
+        if i < last_edit
+        and s.get("action") == "click"
+        and "clone chapter" in str(s.get("target", "")).lower()
+    )
+    if before_count:
+        result = [
+            s for i, s in enumerate(result)
+            if not (
+                i < last_edit
+                and s.get("action") == "click"
+                and "clone chapter" in str(s.get("target", "")).lower()
+            )
+        ]
+        # Recalculate positions after removal
+        edit_positions = [i for i, s in enumerate(result) if s.get("action") == "edit_row"]
+        last_edit = max(edit_positions)
+        print(f"   🔧 PVE-CLONE-CHAPTER(pass2-pre): removed {before_count} spurious click('Clone Chapter') before edit_row")
+
+    # Find click("Clone Chapter") after edit_row
+    click_clone_idx = next(
+        (
+            i for i, s in enumerate(result)
+            if i > last_edit
+            and s.get("action") == "click"
+            and "clone chapter" in str(s.get("target", "")).lower()
+        ),
+        None,
+    )
+
+    if click_clone_idx is None:
+        # No click("Clone Chapter") yet — inject full sequence after edit_row+wait
+        insert_pos = last_edit + 1
+        while insert_pos < len(result) and result[insert_pos].get("action") == "wait":
+            insert_pos += 1
+        end_idx = insert_pos
+        while end_idx < len(result) and result[end_idx].get("action") in (
+            "update_form", "save_form"
+        ):
+            end_idx += 1
+        result = (
+            result[:insert_pos]
+            + [
+                {"action": "click", "target": "Clone Chapter"},
+                {"action": "click", "target": chapter_target},
+                {"action": "save_form", "mode": "save"},
+            ]
+            + result[end_idx:]
+        )
+        print(
+            f"   🔧 PVE-CLONE-CHAPTER(pass2): injected click('Clone Chapter')"
+            f" + click('{chapter_target}') + save_form(save)"
+        )
+        return result
+
+    # click("Clone Chapter") found — check what comes right after
+    next_idx = click_clone_idx + 1
+    if (
+        next_idx < len(result)
+        and result[next_idx].get("action") == "click"
+        and chapter_target.lower() in str(result[next_idx].get("target", "")).lower()
+    ):
+        # Already has click("Chapter N") — fix save mode if wrong
+        save_idx = next_idx + 1
+        if save_idx < len(result) and result[save_idx].get("action") == "save_form":
+            result[save_idx]["mode"] = "save"
+        return result
+
+    # Wrong steps after click("Clone Chapter"): replace with correct sequence.
+    end_idx = next_idx
+    while end_idx < len(result) and result[end_idx].get("action") in (
+        "update_form", "save_form"
+    ):
+        end_idx += 1
+    result = (
+        result[:next_idx]
+        + [
+            {"action": "click", "target": chapter_target},
+            {"action": "save_form", "mode": "save"},
+        ]
+        + result[end_idx:]
+    )
+    print(
+        f"   🔧 PVE-CLONE-CHAPTER(pass2): after click('Clone Chapter') → "
+        f"click('{chapter_target}') + save_form(save)"
+    )
+    return result
+
+
+def _strip_invalid_deploy_options(plan):
+    """
+    Remove tab/section names that the AI wrongly adds to process_deployment options.
+    E.g. "Contest Superstars" is a tab inside the RBE form, not a home-screen checkbox.
+    Any option not in _VALID_DEPLOY_OPTIONS is dropped.
+    """
+    for step in plan:
+        if step.get("action") != "process_deployment":
+            continue
+        original = list(step.get("options", []))
+        valid = [opt for opt in original if opt in _VALID_DEPLOY_OPTIONS]
+        if len(valid) != len(original):
+            removed = [o for o in original if o not in _VALID_DEPLOY_OPTIONS]
+            print(f"   🔧 STRIP deploy options: removed {removed} (not valid home-screen checkboxes)")
+            step["options"] = valid
+    return plan
+
+
+def _fix_rbe_clone_field_name(plan, user_command=""):
+    """
+    RBE clone modal uses label 'Cloned Rules Based Tournament ID', but the AI
+    is taught 'New ID' (generic). Rename any generic ID key in an update_form
+    that follows a clone_row when the command is in RBE context.
+    """
+    cmd_lower = (user_command or "").lower()
+    if "rbe" not in cmd_lower:
+        return plan
+
+    # Find clone_row positions so we only rewrite update_forms after them
+    clone_positions = {i for i, s in enumerate(plan) if s.get("action") == "clone_row"}
+    if not clone_positions:
+        return plan
+
+    for i, step in enumerate(plan):
+        if step.get("action") != "update_form":
+            continue
+        # Only rewrite update_forms that come after a clone_row
+        if not any(cp < i for cp in clone_positions):
+            continue
+        data = step.get("data", {})
+        for generic_key in ("New ID", "New Event ID", "New Tournament ID"):
+            if generic_key in data:
+                data["Cloned Rules Based Tournament ID"] = data.pop(generic_key)
+                print(f"   🔧 RBE clone: renamed '{generic_key}' → 'Cloned Rules Based Tournament ID'")
+                break
+    return plan
+
+
+def _fix_id_only_update_to_edit_row(plan):
+    """
+    Detect update_form({*ID: value}) on a list page (no preceding edit_row/clone_row)
+    and convert it to edit_row(target=value).
+
+    Pattern: AI generates update_form({"Rules Based Tournament ID": "hieunm_test_..."})
+    right after navigate + checkbox steps, meaning it's actually a table-row edit, not
+    a form field fill.  Detection criteria:
+      - update_form with exactly 1 entry
+      - the key ends with " id" (case-insensitive) or is exactly "id"
+      - the value contains no spaces (looks like an ID, not free text)
+      - no edit_row or clone_row appears anywhere before this step in the plan
+    """
+    opened_form = False  # True once we've seen edit_row or clone_row
+    result = []
+    for step in plan:
+        action = step.get("action", "")
+        if action in ("edit_row", "clone_row"):
+            opened_form = True
+        if action == "update_form" and not opened_form:
+            data = step.get("data", {})
+            if len(data) == 1:
+                key, val = next(iter(data.items()))
+                key_l = str(key).lower().strip()
+                val_s = str(val).strip()
+                is_id_key = key_l == "id" or key_l.endswith(" id")
+                is_id_val = bool(val_s) and " " not in val_s
+                if is_id_key and is_id_val:
+                    print(
+                        f"   🔧 CONVERT update_form({{{key!r}: {val_s!r}}}) → "
+                        f"edit_row(target={val_s!r}) (single-ID on list page)"
+                    )
+                    result.append({"action": "edit_row", "target": val_s})
+                    opened_form = True
+                    continue
+        result.append(step)
+    return result
+
+
+def _remove_click_after_clone_save(plan):
+    """
+    Remove a 'click' step that immediately follows save_form(mode='clone').
+
+    save_form(mode='clone') already clicks the clone submit button
+    (including PVE's "Create book and Open in V2"). An extra click step
+    generated by the AI would double-fire the button, causing unexpected
+    navigation or errors.
+    """
+    _SUBMIT_KEYWORDS = ("create", "clone", "save", "submit", "confirm", "open in")
+    result = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+        if (
+            step.get("action") == "save_form"
+            and step.get("mode") == "clone"
+            and i + 1 < len(plan)
+            and plan[i + 1].get("action") == "click"
+        ):
+            next_target = str(plan[i + 1].get("target", "")).lower()
+            if any(kw in next_target for kw in _SUBMIT_KEYWORDS):
+                print(
+                    f"   🔧 Removed redundant click('{plan[i + 1].get('target')}') after save_form(mode=clone)"
+                )
+                result.append(step)
+                i += 2
+                continue
+        result.append(step)
+        i += 1
+    return result
+
+
+def _inject_missing_checkbox_before_download(plan, user_command=""):
+    """
+    When command says "Chọn N ID bất kỳ -> Export CSV" but AI skips the checkbox step,
+    inject checkbox(random_N) immediately before each download step that lacks one.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    # Parse how many rows the user wants to select (default 1)
+    n = 1
+    m = _re.search(
+        r"chọn\s+(\d+)\s+ID\s+bất\s*kỳ",
+        user_command,
+        _re.IGNORECASE,
+    )
+    if not m:
+        # No "Chọn N ID bất kỳ" in command — nothing to inject
+        return plan
+    n = int(m.group(1))
+
+    result = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+        if step.get("action") == "download":
+            # Check if the step immediately before this is a checkbox
+            preceding = result[-1] if result else None
+            if not preceding or preceding.get("action") != "checkbox":
+                print(f"   🔧 INJECT CHECKBOX: Missing checkbox before download → random_{n}")
+                result.append({
+                    "action": "checkbox",
+                    "target": "",
+                    "value": f"random_{n}",
+                })
+        result.append(step)
+        i += 1
+    return result
+
+
+def _inject_missing_initial_navigate(plan, user_command=""):
+    """
+    If plan doesn't start with navigate but command starts with 'Vào X',
+    inject navigate(X) at the beginning using NAVIGATION_PATH_MAP.
+    Handles label prefixes like "Export the Book CSV. Vào PVE -> ...".
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    # Already starts with navigate — nothing to do
+    if plan[0].get("action") == "navigate":
+        return plan
+
+    # Extract the first segment (before first "->")
+    cmd = (user_command or "").strip()
+    first_arrow = cmd.find("->")
+    first_segment = cmd[:first_arrow].strip() if first_arrow != -1 else cmd
+
+    # Match "Vào X" anywhere in the first segment
+    m = _re.search(r"vào\s+(.+?)$", first_segment, _re.IGNORECASE)
+    if not m:
+        return plan
+
+    nav_target = m.group(1).strip().rstrip(".,;:")
+    nav_key = nav_target.lower()
+
+    if nav_key not in NAVIGATION_PATH_MAP:
+        # Try partial key match (e.g. "grab bag v2" → "grab bag")
+        for k in sorted(NAVIGATION_PATH_MAP, key=len, reverse=True):
+            if k in nav_key:
+                nav_key = k
+                break
+        else:
+            return plan
+
+    nav_path = NAVIGATION_PATH_MAP[nav_key]
+    print(f"   🔧 INJECT INITIAL NAVIGATE: Plan missing first navigate → {nav_path}")
+
+    nav_step = {"action": "navigate", "path": nav_path, "target": nav_path[-1], "value": ""}
+    return [nav_step] + plan
+
 
 def fix_action_plan(plan, user_command=""):
     """
@@ -370,6 +835,40 @@ def fix_action_plan(plan, user_command=""):
         # ============================================================
 
         if action == "checkbox":
+            # ============================================================
+            # DETECT UI FILTER/TOGGLE CHECKBOXES (not table row selection)
+            # If target looks like a UI label ("Hide X", "Show X") or matches
+            # an uncheck target from the command, convert to update_form.
+            # ============================================================
+            _cb_target_raw = str(step.get("target", step.get("label", step.get("field", ""))))
+            _cb_target_lower = _cb_target_raw.lower().strip()
+            _is_ui_filter = False
+
+            # Signal 1: target starts with hide/show/enable/disable (UI toggle labels)
+            _ui_filter_prefixes = ("hide ", "show ", "enable ", "disable ", "hiển thị ", "ẩn ")
+            if any(_cb_target_lower.startswith(p) for p in _ui_filter_prefixes):
+                _is_ui_filter = True
+
+            # Signal 2: target matches any uncheck_target from the parsed command
+            if not _is_ui_filter and uncheck_targets:
+                for _ut in uncheck_targets:
+                    if _ut in _cb_target_lower or _cb_target_lower in _ut:
+                        _is_ui_filter = True
+                        break
+
+            if _is_ui_filter:
+                # Convert to update_form with "{Label} checkbox": "false"/"true"
+                _uncheck_intent = (
+                    any(kw in cmd_lower for kw in ["bỏ chọn", "bo chon", "uncheck", "untick", "bỏ tick", "deselect"])
+                    and any(_ut in _cb_target_lower or _cb_target_lower in _ut for _ut in uncheck_targets)
+                ) or any(kw in str(step.get("value", "")).lower() for kw in ["false", "off", "uncheck"])
+                _toggle_value = "false" if _uncheck_intent else "true"
+                _label_key = f"{_cb_target_raw} checkbox"
+                new_step = {"action": "update_form", "data": {_label_key: _toggle_value}}
+                print(f"   🔧 AUTO-FIX: checkbox('{_cb_target_raw}') → update_form({{'{_label_key}': '{_toggle_value}'}})")
+                fixed_plan.append(new_step)
+                continue
+
             # ============================================================
             # DETECT DEPLOYMENT-CONTEXT CHECKBOXES
             # If the checkbox target/value/field matches a deployment keyword,
@@ -585,6 +1084,15 @@ def fix_action_plan(plan, user_command=""):
                 "any id",
                 "bất kỳ id",
                 "id bất kỳ",
+                # AI-generated placeholders when "vừa clone/tạo" appears without a concrete ID
+                "cloned_item_id",
+                "last_clone_id",
+                "last_cloned_id",
+                "recently_cloned_id",
+                "cloned_id",
+                "last_created_id",
+                "vua_clone_id",
+                "new_item_id",
             }
             tgt = str(step.get("target", "")).lower().strip()
 
@@ -603,6 +1111,14 @@ def fix_action_plan(plan, user_command=""):
                 print(
                     f"   🔧 AUTO-FIX: Converted edit_row('{old_target}') → wait() because it's an Event ID after PVP"
                 )
+                # If command also has "vừa clone/tạo", AI confused the table-row edit with the Event ID.
+                # Inject edit_row("RANDOM") so the cloned row gets opened before this wait.
+                _vua_re = _re.compile(r"v[uưừữ]a\s+(clone|tạo)", _re.IGNORECASE)
+                if _vua_re.search(str(user_command)):
+                    fixed_plan.append({"action": "edit_row", "target": "RANDOM"})
+                    print(
+                        f"   🔧 AUTO-FIX: Injected edit_row('RANDOM') — 'vừa clone' in command but AI confused target with Event ID"
+                    )
             # Exact match OR contains "bất kỳ"/"random" pattern
             # Handles cases like "một Superstar bất kỳ", "Superstar bất kỳ", "random superstar"
             is_random_target = (
@@ -721,11 +1237,42 @@ def fix_action_plan(plan, user_command=""):
     fixed_plan = _resolve_navigation_paths(fixed_plan)
 
     # ============================================================
-    # STEP 3b: Merge consecutive NAVIGATE steps into path array
+    # STEP 3a': Remove spurious download before edit_row
+    # AI sometimes hallucinates an early "Export CSV" step before the
+    # edit_row + tab navigation, then generates the correct download later.
+    # Also removes the duplicate navigate that follows the spurious download.
+    # Must run after path resolution so paths can be compared.
+    # ============================================================
+    fixed_plan = _remove_download_before_edit_row(fixed_plan, user_command)
+
+    # ============================================================
+    # STEP 3b: Remove/convert navigate steps targeting in-page tabs
+    # e.g. navigate(["Contest Superstars"]) → removed (if click exists later)
+    #      or → click("Contest Superstars")
+    # Prevents navigator from deep-scanning sidebar for tab names and crashing.
+    # ============================================================
+    fixed_plan = _remove_invalid_navigate_to_tabs(fixed_plan)
+
+    # ============================================================
+    # STEP 3c: Merge consecutive NAVIGATE steps into path array
     # Pattern: navigate(A) → navigate(B) → navigate(C)
     # Should become: navigate(path=[A, B, C])
     # ============================================================
     fixed_plan = _merge_navigate_steps(fixed_plan)
+
+    # ============================================================
+    # STEP 3d: INJECT missing initial navigate
+    # If AI skipped "Vào X" and plan doesn't start with navigate,
+    # deterministically prepend it from NAVIGATION_PATH_MAP.
+    # ============================================================
+    fixed_plan = _inject_missing_initial_navigate(fixed_plan, user_command)
+
+    # ============================================================
+    # STEP 3e: INJECT missing checkbox before download
+    # If command says "Chọn N ID bất kỳ -> Export CSV" but AI skipped
+    # the checkbox step, inject checkbox(random_N) before download.
+    # ============================================================
+    fixed_plan = _inject_missing_checkbox_before_download(fixed_plan, user_command)
 
     # ============================================================
     # STEP 4: Merge consecutive process_deployment-related actions
@@ -740,7 +1287,15 @@ def fix_action_plan(plan, user_command=""):
     # STEP 5: AUTO-INFER deployment options if empty
     # If process_deployment has no options, infer from context
     # ============================================================
-    merged_plan = _auto_infer_deployment_options(merged_plan)
+    merged_plan = _auto_infer_deployment_options(merged_plan, user_command)
+
+    # ============================================================
+    # STEP 5b: STRIP invalid deployment options
+    # Remove tab names (e.g. "Contest Superstars") that AI wrongly
+    # puts in process_deployment options because they appear near
+    # the logo-click in the command.
+    # ============================================================
+    merged_plan = _strip_invalid_deploy_options(merged_plan)
 
     # ============================================================
     # STEP 6: AUTO-INJECT missing clone_row from user command
@@ -759,6 +1314,28 @@ def fix_action_plan(plan, user_command=""):
     merged_plan = _inject_clone_save(merged_plan, user_command)
 
     # ============================================================
+    # STEP 7b: RENAME RBE clone modal field name
+    # AI uses generic "New ID" but RBE modal uses
+    # "Cloned Rules Based Tournament ID".
+    # ============================================================
+    merged_plan = _fix_rbe_clone_field_name(merged_plan, user_command)
+
+    # ============================================================
+    # STEP 7c: CONVERT single-ID update_form → edit_row
+    # When AI generates update_form({*ID: value}) on a list page
+    # (no preceding edit_row/clone_row), it means "filter & edit
+    # the row whose ID = value", not "fill a form field".
+    # ============================================================
+    merged_plan = _fix_id_only_update_to_edit_row(merged_plan)
+
+    # ============================================================
+    # STEP 7d: FIX PVE "Clone Chapter" button confused with clone_row
+    # AI generates: clone_row(bookID) → update_form(New ID) → save_form(clone)
+    # Correct:      click("Clone Chapter") → click("Chapter N") → save_form(save)
+    # ============================================================
+    merged_plan = _fix_pve_clone_chapter(merged_plan, user_command)
+
+    # ============================================================
     # STEP 8: Merge consecutive update_form → save_form(save) sequences
     # Pattern: update_form(A) → save_form(save) → update_form(B) → save_form(save)
     # Becomes: update_form(A ∪ B) → save_form(save)
@@ -766,6 +1343,14 @@ def fix_action_plan(plan, user_command=""):
     # dates + Active Phase dates) are split across separate save operations.
     # ============================================================
     merged_plan = _merge_consecutive_update_save(merged_plan)
+
+    # ============================================================
+    # STEP 9: Remove redundant click step after save_form(mode=clone)
+    # Pattern: save_form(clone) → click("Create book and Open in V2")
+    # _save_form(mode="clone") already clicks the clone submit button,
+    # so the extra click is a duplicate that can cause unexpected navigation.
+    # ============================================================
+    merged_plan = _remove_click_after_clone_save(merged_plan)
 
     if len(merged_plan) != len(plan):
         print(
@@ -878,6 +1463,61 @@ def _resolve_navigation_paths(plan):
     return plan
 
 
+def _remove_invalid_navigate_to_tabs(plan):
+    """
+    Remove (or convert to click) navigate steps that target known in-page tabs/buttons.
+
+    Problem: AI sometimes generates navigate(["Contest Superstars"]) when the user says
+    "Bấm vào tab Contest Superstars". "Contest Superstars" is a tab inside the RBE form,
+    NOT a sidebar navigation item. The navigator deep-scans the sidebar, fails to find it,
+    and crashes/refreshes the page.
+
+    Fix: For each navigate step whose single-element path matches a PAGE_TAB_NAMES entry:
+    - If a later click(target=X) already exists → REMOVE the navigate (duplicate)
+    - Otherwise → CONVERT to click(target=X) so the action is still performed correctly
+    """
+    if not plan:
+        return plan
+
+    result = []
+    for i, step in enumerate(plan):
+        if step.get("action") != "navigate":
+            result.append(step)
+            continue
+
+        path = step.get("path", [])
+        if len(path) != 1:
+            result.append(step)
+            continue
+
+        tab_name = path[0].strip().lower()
+        if tab_name not in PAGE_TAB_NAMES:
+            result.append(step)
+            continue
+
+        original_name = path[0].strip()
+        # Check if a click to the same target exists later in the plan
+        later_click_exists = any(
+            s.get("action") == "click"
+            and s.get("target", "").strip().lower() == tab_name
+            for s in plan[i + 1 :]
+        )
+
+        if later_click_exists:
+            print(
+                f"   🔧 TAB-NAV-FIX: Removed navigate(['{original_name}']) — "
+                f"in-page tab, not a sidebar nav item (later click exists)"
+            )
+        else:
+            result.append({"action": "click", "target": original_name})
+            print(
+                f"   🔧 TAB-NAV-FIX: Converted navigate(['{original_name}']) → "
+                f"click('{original_name}') — in-page tab, not a sidebar nav item"
+            )
+
+    return result
+
+
 def _merge_navigate_steps(plan):
     """
     Merge consecutive navigate steps into a single navigate with path array.
@@ -961,7 +1601,7 @@ def _merge_navigate_steps(plan):
     return merged
 
 
-def _auto_infer_deployment_options(plan):
+def _auto_infer_deployment_options(plan, user_command=""):
     """
     Auto-infer deployment options from context if process_deployment has empty options.
 
@@ -969,8 +1609,24 @@ def _auto_infer_deployment_options(plan):
     1. Navigation path (e.g., "Offer" → infer "Offers")
     2. Uploaded filename (e.g., "gacha_*.csv" → infer "Gacha")
     3. Previous actions (e.g., after smart_test_cycle on table)
+
+    Only infers when the user command contains explicit deployment intent.
+    Skips inference for commands that just navigate home (e.g. search test cases).
     """
     if not plan:
+        return plan
+
+    # Only infer when the command has explicit deployment intent.
+    # Without this guard, a "search → logo click" command would auto-deploy
+    # whatever feature was last navigated to.
+    _cmd_lower = (user_command or "").lower()
+    # Deploy cases always end with "-> Process" or contain "Deploy".
+    # "Bỏ chọn checkbox" (uncheck a UI filter checkbox) must NOT trigger inference —
+    # it contains "checkbox" as a substring so we cannot use "checkbox" as a keyword.
+    _DEPLOY_INTENT_KEYWORDS = ["process", "deploy"]
+    _has_deploy_intent = any(kw in _cmd_lower for kw in _DEPLOY_INTENT_KEYWORDS)
+    if not _has_deploy_intent:
+        print("   ℹ️  AUTO-INFER skipped: no deployment intent in command")
         return plan
 
     # Mapping từ keyword → deployment option name
@@ -1884,18 +2540,26 @@ def _extract_clone_modal_fields(user_command):
 
     modal_data = {}
 
-    # --- Step 1: Find the "Clone" keyword in the command ---
-    clone_start = _re.search(r"\bclone\b", user_command, _re.IGNORECASE)
-    if not clone_start:
-        return {}
-
-    # --- Step 2: Find the first "->" after "Clone" ---
-    arrow_pos = user_command.find("->", clone_start.start())
-    if arrow_pos == -1:
-        return {}
-
-    # --- Step 3: Extract segment after first "->" up to next action boundary ---
-    remaining = user_command[arrow_pos + 2 :].strip()
+    # --- Step 1: Find the Clone ACTION step (not a testcase header like "Clone the PVE:") ---
+    # Prefer "-> Clone" pattern which marks the actual action step after navigation.
+    # Fallback to first bare "Clone" if no arrow-prefixed clone found.
+    arrow_to_clone = _re.search(r"->\s*clone\b", user_command, _re.IGNORECASE)
+    if arrow_to_clone:
+        # "remaining" is everything after the Clone step's own "->" up to the next "->"
+        # i.e. the content of "-> Clone 1 Book contain LTPVE bất kỳ -> <fields>"
+        clone_step_end = arrow_to_clone.end()          # position just after "-> clone"
+        next_arrow = user_command.find("->", clone_step_end)
+        if next_arrow == -1:
+            return {}
+        remaining = user_command[next_arrow + 2 :].strip()
+    else:
+        clone_start = _re.search(r"\bclone\b", user_command, _re.IGNORECASE)
+        if not clone_start:
+            return {}
+        arrow_pos = user_command.find("->", clone_start.start())
+        if arrow_pos == -1:
+            return {}
+        remaining = user_command[arrow_pos + 2 :].strip()
 
     # Find the boundary (next major action marker after ->)
     boundary_match = _re.search(
@@ -1967,6 +2631,16 @@ def _extract_clone_modal_fields(user_command):
         # Avoid capturing "GachaShard" if it's actually in a radio label context
         if val.lower() not in ("use", "auto", "another", "a"):
             modal_data["Currency"] = val
+
+    # --- Extract Book Name (PVE clone modal) ---
+    # Handles "Sửa Book Name: X" or "Book Name: X"
+    book_name_match = _re.search(
+        r"(?:sửa\s+)?book\s*name\s*:\s*([\w\-\.]+)",
+        segment,
+        _re.IGNORECASE,
+    )
+    if book_name_match:
+        modal_data["Book Name"] = book_name_match.group(1).strip()
 
     if modal_data:
         print(f"   ✅ Extracted clone modal fields: {modal_data}")
@@ -2074,6 +2748,7 @@ def _inject_clone_save(plan, user_command=""):
         "auto generate a new currency",
         "auto generate",
         "clone milestones",
+        "book name",          # PVE clone modal
     }
 
     # Fields that belong OUTSIDE the modal (on the new event page after cloning)
@@ -2217,8 +2892,44 @@ def _inject_clone_save(plan, user_command=""):
                         pass
                     continue
 
-                # No update_form AND no save_form(clone) after clone_row
-                # Try extracting modal fields from user command
+                # No update_form AND no save_form(clone) immediately after clone_row.
+                # NEW: Look ahead past wait steps to find update_form(s) with modal fields.
+                # Handles AI pattern: clone_row → wait → update_form({modal fields}) → save_form
+                j = i
+                ahead_waits = []
+                while j < len(plan) and plan[j].get("action") == "wait":
+                    ahead_waits.append(plan[j])
+                    j += 1
+                ahead_updates = []
+                while j < len(plan) and plan[j].get("action") == "update_form":
+                    ahead_updates.append(plan[j])
+                    j += 1
+
+                if ahead_updates:
+                    all_data = {}
+                    for uf in ahead_updates:
+                        all_data.update(uf.get("data") or {})
+                    has_modal = any(is_modal_field(k) for k in all_data)
+                    if has_modal:
+                        modal_data = {k: v for k, v in all_data.items() if is_modal_field(k)}
+                        post_clone_data = {k: v for k, v in all_data.items() if is_post_clone_field(k)}
+                        mixed_data = {k: v for k, v in all_data.items() if not is_modal_field(k) and not is_post_clone_field(k)}
+                        modal_data.update(mixed_data)
+                        result.append({"action": "update_form", "data": modal_data})
+                        result.append({"action": "save_form", "mode": "clone"})
+                        print(
+                            f"   🔧 AUTO-FIX: Pulled wait-skipped modal fields "
+                            f"{list(modal_data.keys())} before save_form(clone)"
+                        )
+                        if post_clone_data:
+                            result.append({"action": "update_form", "data": post_clone_data})
+                        # Also consume a misplaced save_form that immediately follows the update_forms
+                        if j < len(plan) and plan[j].get("action") == "save_form":
+                            j += 1
+                        i = j
+                        continue
+
+                # Fallback: extract from user command text
                 extracted = _extract_clone_modal_fields(user_command)
                 if extracted:
                     result.append({"action": "update_form", "data": extracted})
