@@ -5,6 +5,45 @@ import os
 import sys
 import io
 import re
+import glob
+
+# --- DEV HOT-RELOAD ---------------------------------------------------------
+# Streamlit rerun lại app.py mỗi lần tương tác, nhưng Python cache module đã
+# import trong sys.modules → sửa code trong ai/* hay automation/* sẽ KHÔNG được
+# nạp lại nếu không restart terminal. Block này phát hiện thay đổi (theo mtime)
+# rồi purge module + cache + instance automation cũ, để các import bên dưới đọc
+# code mới ngay trong cùng lần rerun. Tắt bằng DEV_AUTORELOAD=0 (vd: production).
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+_WATCH_DIRS = ("ai", "automation")
+
+
+def _project_code_mtime():
+    latest = 0.0
+    for d in _WATCH_DIRS:
+        for path in glob.glob(os.path.join(_PROJECT_ROOT, d, "**", "*.py"), recursive=True):
+            try:
+                latest = max(latest, os.path.getmtime(path))
+            except OSError:
+                pass
+    return latest
+
+
+if os.environ.get("DEV_AUTORELOAD", "1") == "1":
+    _sig = _project_code_mtime()
+    _last = st.session_state.get("_code_sig")
+    if _last is not None and _sig != _last:
+        _watch_prefixes = tuple(os.path.join(_PROJECT_ROOT, d) for d in _WATCH_DIRS)
+        for _name in list(sys.modules):
+            _mod = sys.modules.get(_name)
+            _f = getattr(_mod, "__file__", "") or ""
+            if _f.startswith(_watch_prefixes):
+                del sys.modules[_name]
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.session_state.pop("automation", None)  # rebuild với class mới
+    st.session_state["_code_sig"] = _sig
+# ---------------------------------------------------------------------------
+
 from ai.brain import (
     parse_command_to_json,
     save_scenario,
@@ -13,6 +52,7 @@ from ai.brain import (
 )
 import ai.brain as brain_module
 from automation.core import BrickAutomation
+from ai import plan_cache
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Brick AI Automation By HieuNM", layout="wide")
@@ -106,6 +146,10 @@ if "smoke_last_created_id_by_feature" not in st.session_state:
     # Value = last unique ID generated for a CREATE/CLONE case in that feature
     # Loaded from disk so it persists across Streamlit restarts
     st.session_state.smoke_last_created_id_by_feature = _load_smoke_ids()
+if "smoke_use_golden" not in st.session_state:
+    # Bật cache "golden plan": case nào đã PASS sạch thì lần sau chạy thẳng plan đã
+    # lưu, bỏ qua AI (nhanh + xác định). Tắt để luôn nhờ AI sinh lại plan.
+    st.session_state.smoke_use_golden = True
 if "smoke_running" not in st.session_state:
     st.session_state.smoke_running = False
 if "smoke_current_idx" not in st.session_state:
@@ -788,6 +832,26 @@ with col1:
             width='stretch',
         )
 
+        # === Golden plan cache controls ===
+        st.checkbox(
+            "♻️ Dùng Golden Plan cache (bỏ qua AI cho case đã PASS)",
+            key="smoke_use_golden",
+            help=(
+                "Case nào chạy PASS hoàn toàn sẽ được lưu lại plan. Lần sau chạy thẳng "
+                "plan đó (chỉ thay ID động), không cần AI sinh lại → nhanh & ổn định. "
+                "Nếu replay fail thì tự huỷ cache và nhờ AI sinh lại."
+            ),
+        )
+        _golden_n = plan_cache.golden_count()
+        _gc1, _gc2 = st.columns([3, 2])
+        with _gc1:
+            st.caption(f"💾 Đã lưu {_golden_n} golden plan")
+        with _gc2:
+            if st.button("🗑 Xoá golden", width='stretch', disabled=_golden_n == 0):
+                removed = plan_cache.clear_all()
+                st.success(f"Đã xoá {removed} golden plan.")
+                st.rerun()
+
 with col2:
     st.subheader("📂 Kịch bản đã lưu")
     saved_scenarios = load_scenarios()
@@ -1128,14 +1192,26 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                 live_table_box.dataframe(pd.DataFrame(smoke_records), width='stretch', hide_index=True)
                 continue
 
+            golden_used = False
             try:
-                with st.status("🧠 AI đang phân tích...", expanded=False):
-                    action_plan = parse_command_to_json(
-                        case_command,
-                        use_fast_mode=st.session_state.use_fast_mode,
-                        context_plan=None,
-                        base_command=None,
+                _golden_plan = None
+                if st.session_state.get("smoke_use_golden", True):
+                    _golden_plan = plan_cache.get_golden_plan(
+                        feature, testcase, generated_unique_id, last_created_id
                     )
+
+                if _golden_plan is not None:
+                    action_plan = _golden_plan
+                    golden_used = True
+                    print(f"   ⚡ Golden plan hit ({len(action_plan)} steps) — bỏ qua AI")
+                else:
+                    with st.status("🧠 AI đang phân tích...", expanded=False):
+                        action_plan = parse_command_to_json(
+                            case_command,
+                            use_fast_mode=st.session_state.use_fast_mode,
+                            context_plan=None,
+                            base_command=None,
+                        )
 
                 if not action_plan:
                     smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "FAIL", "Note": "Empty action plan (AI returned no steps)"})
@@ -1157,6 +1233,43 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                         logs = automation.execute_action(action_plan)
 
                 status_str, note_detail = _extract_smoke_status_from_logs(logs)
+
+                # === Golden plan cache ===
+                # Lưu khi PASS sạch (case chưa dùng golden). Nếu đang replay golden mà
+                # FAIL/CRASH (UI drift / row bị xoá) → huỷ golden + nhờ AI sinh lại ngay
+                # trong cùng lần chạy (self-heal). WARNING vẫn giữ golden, không thrash.
+                if status_str == "PASS" and not golden_used:
+                    if plan_cache.record_success(
+                        feature, testcase, action_plan,
+                        generated_unique_id, last_created_id, label=display_case,
+                    ):
+                        print(f"   💾 Golden saved: {display_case[:60]}")
+                elif golden_used and status_str in {"FAIL", "CRASH"}:
+                    print(f"   ♻️ Golden replay {status_str} → huỷ cache + retry bằng AI")
+                    plan_cache.invalidate(feature, testcase)
+                    try:
+                        with st.status("🧠 AI retry (golden fail)...", expanded=False):
+                            action_plan = parse_command_to_json(
+                                case_command,
+                                use_fast_mode=st.session_state.use_fast_mode,
+                                context_plan=None,
+                                base_command=None,
+                            )
+                        if action_plan:
+                            with st.status("🤖 Automation retry...", expanded=False):
+                                with StreamingLogCapture(exec_log_placeholder) as exec_log:
+                                    logs = automation.execute_action(action_plan)
+                            status_str, note_detail = _extract_smoke_status_from_logs(logs)
+                            if status_str == "PASS":
+                                plan_cache.record_success(
+                                    feature, testcase, action_plan,
+                                    generated_unique_id, last_created_id, label=display_case,
+                                )
+                                print(f"   💾 Golden re-saved sau AI retry: {display_case[:60]}")
+                        else:
+                            status_str, note_detail = "FAIL", "Golden fail + AI retry trả về plan rỗng"
+                    except Exception as _retry_e:
+                        status_str, note_detail = "CRASH", f"AI retry crashed: {str(_retry_e)[:200]}"
 
                 if feature and str(status_str).strip().upper() in {"PASS", "WARNING"}:
                     # Prefer the ID actually filled in the form (from action_plan update_form data)

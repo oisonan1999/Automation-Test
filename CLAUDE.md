@@ -12,14 +12,56 @@ Streamlit + Ollama LLM + Playwright QA automation for "The Brick" game ops web U
 ```
 ai/brain.py           784  — LLM pipelines, JSON cleanup, ID injection
 ai/prompts.py        1017  — Prompt templates, action-name instruction set
-ai/action_fixer.py   2298  — Deterministic post-processing/repair of AI plans
 automation/core.py    853  — Playwright dispatcher, modal safety nets
-automation/navigator.py 2132 — Menu/tab navigation, PVE accordion expansion
-automation/form_handler.py 8075 — Main field filler (LARGEST FILE)
-automation/table_handler.py 1384 — Table checkbox/edit/clone/reorder
-automation/smart_tester.py  2410 — CSV fuzz campaign, popup classification
 automation/data_handler.py   187  — CSV manipulation, download/upload wiring
 ```
+
+## REFACTOR (2026-06): monoliths split into backward-compatible packages
+The 5 largest files were split into packages. Each package's `__init__.py`
+re-exports the SAME mixin/symbol the old file did, so all imports in core.py /
+brain.py are UNCHANGED. Method resolution via `self` still works across the
+sub-mixins once composed into `BrickAutomation`.
+
+```
+ai/action_fixer/          (was action_fixer.py)  — fix_action_plan still in __init__.py
+  _constants.py           DEPLOYMENT_KEYWORDS / NAVIGATION_PATH_MAP / ACTION_NAME_MAP / VALID_ACTIONS ...
+  navigation_fixers.py    _resolve_navigation_paths, _merge_navigate_steps, _remove_invalid_navigate_to_tabs, _inject_missing_initial_navigate
+  deployment_fixers.py    _auto_infer_deployment_options, _merge_process_deployment_steps, _strip_invalid_deploy_options, _inject_missing_checkbox_before_download
+  clone_fixers.py         _inject_missing_clone_row, _extract_clone_modal_fields, _inject_clone_save, _fix_pve_clone_chapter, _fix_rbe_clone_field_name, _remove_click_after_clone_save, _remove_download_before_edit_row, _fix_id_only_update_to_edit_row
+  form_fixers.py          _merge_consecutive_update_save, _merge_pve_css_update_steps
+  __init__.py             fix_action_plan (orchestrator) + re-exports
+
+automation/form_handler/  (was form_handler.py)  — FormHandlerMixin composed in __init__.py
+  form_core.py            FormCoreMixin       — _smart_update_form (main fill loop; delegates RBE/PVE Contest-Superstar to special_panels), _main_form_scope, _safe_press_escape, _clean_key
+  field_finder.py         FieldFinderMixin    — _find_input_element, _try_section_aware_search, _find_field_in_section
+  field_filler.py         FieldFillerMixin    — _fill_element_smartly, toggle/radio/inline-edit
+  dropdown_handler.py     DropdownHandlerMixin— _handle_js_dropdown, select2 + vue-multiselect helpers
+  datetime_handler.py     DateTimeHandlerMixin— schedule/flatpickr datetime fill + format auto-fix
+  special_panels.py       SpecialPanelsMixin  — SSGroup helpers + _handle_rbe_contest_superstar (RBE: Defining-Schedules Start/End clamp to parent RBE range) + _handle_pve_contest_superstar (PVE: toggle opens Normal/Hard/Hell panels, fill SS Node1/SoftCurrency/RBE). Both mutate `data` in place, called from _smart_update_form before the main loop.
+  form_save.py            FormSaveMixin       — _save_form, _wait_after_save, error-popup + confirm dismissal, close_popup
+  tab_scanner.py          TabScannerMixin     — scan_all_tabs, check_fields_in_tabs, _switch_to_tab, _get_field_current_value
+
+automation/navigator/     (was navigator.py)  — NavigatorMixin composed in __init__.py
+  navigator_core.py       NavigatorCoreMixin  — smart_navigate, _smart_navigate_path, sidebar nav, _wait_for_long_loading, _is_sidebar_item, _handle_locked_item_popup, _safe_compile
+  click_handler.py        ClickHandlerMixin   — smart_click (multi-strategy)
+  deployment.py           DeploymentMixin     — process_deployment
+  pve_navigation.py       PveNavigationMixin  — _try_expand_pve_section
+
+automation/table_handler/ (was table_handler.py) — TableHandlerMixin composed in __init__.py
+  table_filter.py         TableFilterMixin    — _auto_filter_data, _perform_table_filter, _find_data_table, wait_for_table_data, _ensure_liveoptest_items_visible
+  table_checkbox.py       TableCheckboxMixin  — handle_checkbox, _safe_check, _find_and_tick
+  table_rows.py           TableRowsMixin      — _click_icon_in_row (edit/clone)
+  table_reorder.py        TableReorderMixin   — drag_to_reorder
+
+automation/smart_tester/  (was smart_tester.py) — SmartTesterMixin composed in __init__.py
+  tester_core.py          SmartTesterCoreMixin— smart_test_cycle, _smart_test_rbe_csv, _generate_fuzzed_data, _run_rbe_fuzz_campaign, _test_generic_csv
+  upload_handler.py       UploadHandlerMixin  — handle_upload, _upload_fast/_upload_fuzz_fast, overwrite confirm
+  popup_classifier.py     PopupClassifierMixin— _scan_for_result_popup, _classify_popup_message, _ensure_popup_closed
+  fuzz_generator.py       RBESmartTester / RBEFuzzGenerator / GenericCSVFuzzer (standalone classes, NOT mixins; re-exported)
+```
+**NOTE:** The per-method `Line` numbers in the detail tables below are LEGACY
+(pre-refactor, relative to the old monolith). Method names/purposes are still
+valid; find a method by name with grep across the package dir.
 
 ---
 
@@ -256,6 +298,17 @@ Classes: `RBESmartTester` (line 2121), `RBEFuzzGenerator` (line 2248), `GenericC
 ### Smoke Test ID Memory
 - `smoke_last_created_id_by_feature[feature]` in app.py tracks last created ID per feature
 - Prevents "random edit" drift when CSV test cases reference the previously created row
+
+### Upload Confirm Buttons Must Be Dialog-Scoped
+- In `smart_tester/upload_handler.py` `_upload_fuzz_fast`, the post-upload "confirm" loop MUST scope selectors to `.modal.show/.modal.in/.swal2-popup` — a bare `button:has-text('Import')` also matches the PAGE-LEVEL Import CSV trigger and re-clicking it reopens the OS file chooser → native dialog BLOCKS the run (gacha pool bug)
+- A `page.on("filechooser", lambda fc: fc.set_files([]))` guard (removed in `finally`) swallows any stray chooser. Never leave the listener registered — it conflicts with the next `expect_file_chooser`
+
+### Golden Plan Cache (ai/plan_cache.py)
+- Smoke runner caches a case's action plan after a full-PASS run and replays it next time, **skipping the LLM** (kills ~30-40% non-determinism). Store: `config/golden_plans.json`
+- Key = `golden_key(feature, RAW testcase cell)` (whitespace-normalized; stable since CSV is fixed). Use the RAW `testcase`, NOT `case_command` (which has concrete IDs injected)
+- Only dynamic IDs are tokenized: `generated_unique_id`→`{{UNIQUE_ID}}`, `last_created_id`→`{{LAST_ID}}` (JSON-string replace, longest-first). Static data cached verbatim
+- `get_golden_plan` returns None if a needed placeholder lacks a value → forces AI fallback. Self-heal: golden replay FAIL/CRASH → `invalidate` + AI retry in same run (app.py smoke loop). WARNING keeps golden
+- UI: `smoke_use_golden` checkbox (default on) near the Smoke run button; new dynamic value types need a new placeholder or golden will pin a stale value
 
 ---
 

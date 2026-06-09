@@ -6,6 +6,9 @@ __pycache__/
 .sixth/
 .cursor/
 .continue/
+.streamlit/
+.obsidian/
+.claude/
 *.pyc
 downloads/
 # ===== NodeJS =====
