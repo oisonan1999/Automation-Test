@@ -81,6 +81,97 @@ def _merge_consecutive_update_save(plan):
 
 
 
+def _fix_rbe_type_modal_continue(plan):
+    """
+    Replace save_form that follows a Radio-only update_form with click("Continue").
+
+    Pattern AI generates (wrong):
+        click("New Rules Based Event") → update_form({"Radio: Solo": "select"}) → save_form
+
+    Correct (the modal has a "Continue" button, not Save):
+        click("New Rules Based Event") → update_form({"Radio: Solo": "select"}) → click("Continue")
+
+    Detection: update_form whose ALL data keys start with "Radio:" or whose values are
+    "select"/"on", immediately followed by save_form with no mode or mode="save".
+    """
+    if not plan or len(plan) < 2:
+        return plan
+
+    result = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+        if (
+            step.get("action") == "update_form"
+            and isinstance(step.get("data"), dict)
+            and len(step["data"]) > 0
+            and all(str(k).strip().lower().startswith("radio:") for k in step["data"].keys())
+            and i + 1 < len(plan)
+            and plan[i + 1].get("action") == "save_form"
+            and plan[i + 1].get("mode", "save") in ("save", None, "")
+        ):
+            result.append(step)
+            result.append({"action": "click", "target": "Continue"})
+            print(
+                f"   🔧 RBE-MODAL: Replaced save_form → click('Continue') after Radio-only update_form"
+            )
+            i += 2  # skip both update_form and save_form
+        else:
+            result.append(step)
+            i += 1
+
+    return result
+
+
+def _fix_offer_filter_field(plan):
+    """
+    Normalize every page-filter field name to the canonical "ID contains".
+
+    EVERY filter page in the Brick UI (Offer, Offer Section, Drip Offer, PVE,
+    RBE, Gacha, Currency, ...) uses the SAME "ID contains" search box. The AI
+    (and older prompt rules) sometimes emit per-page labels like "Offer Name",
+    "Offer ID", "Section ID", etc. for a "Filter ... bất kỳ" command. Those
+    labels don't exist on the page → field not found.
+
+    Detection is value-based (the filter sentinel "RANDOM") so we never touch
+    real multi-value filters like Boost Result Value2 = "Red".
+    """
+    _MISNAMED_FILTER_KEYS = {
+        "offer name",
+        "offer id",
+        "section id",
+        "section name",
+        "id",
+        "name",
+        "id filter",
+        "filter id",
+        "search id",
+    }
+
+    result = []
+    for step in plan:
+        if (
+            step.get("action") == "update_form"
+            and isinstance(step.get("data"), dict)
+            and len(step["data"]) == 1
+        ):
+            (k, v), = step["data"].items()
+            is_filter_sentinel = str(v).strip().upper() == "RANDOM"
+            needs_rename = k != "ID contains" and (
+                is_filter_sentinel or k.lower().strip() in _MISNAMED_FILTER_KEYS
+            )
+            if needs_rename:
+                print(
+                    f"   🔧 FILTER-FIELD: Normalized '{k}' → 'ID contains' "
+                    f"(all filter pages use the same search box)"
+                )
+                result.append({"action": "update_form", "data": {"ID contains": v}})
+                continue
+        result.append(step)
+
+    return result
+
+
 def _merge_pve_css_update_steps(plan):
     """
     Merge consecutive update_form steps where the first contains 'Contest Superstar'

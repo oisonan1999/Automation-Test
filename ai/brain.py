@@ -27,8 +27,8 @@ _RELOAD_EVERY_N_CALLS = 15
 _formatting_call_count = 0
 
 # === CONFIGURATION ===
-MODEL_REASONING = "deepseek-r1:8b"  # 8B: 19.7 tok/s vs 14B: 11.4 tok/s trên M4. Output chỉ là analysis text → 8B đủ chất lượng
-MODEL_FORMATTING = "qwen2.5-coder:14b"  # Giữ 14B cho formatting vì cần JSON chính xác
+# MODEL_REASONING = "deepseek-r1:8b"  # Unused: dual-model pipeline disabled (Qwen alone = 100% correct)
+MODEL_FORMATTING = "qwen2.5-coder:14b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 SCENARIO_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "scenarios.json"
@@ -267,21 +267,12 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
         "num_gpu": 99,
     }
 
-    # Config tối ưu cho Careful Mode - Reasoning Phase (DeepSeek-R1:8b)
-    if careful_phase == "reasoning":
-        options = {
-            "temperature": 0.1,  # Giữ nhỏ >0 cho reasoning để không bị "tunnel vision"
-            "num_ctx": 4096,
-            "num_predict": 1200,  # ✅ Giảm từ 2000 → 1200: tiết kiệm ~40s/call, đủ cho lệnh dài 900+ chars hoàn thành think block
-            "num_gpu": 99,
-            "num_batch": 2048,
-            "flash_attn": True,
-        }
     # Config tối ưu cho Careful Mode - Formatting Phase (Qwen2.5-Coder)
-    elif careful_phase == "formatting":
+    # (Reasoning phase / DeepSeek disabled — Qwen single-model pipeline only)
+    if careful_phase == "formatting":
         options = {
             "temperature": 0.0,  # 0.0 = hoàn toàn deterministic → JSON nhất quán hơn qua nhiều lần gọi
-            "num_ctx": 12288,  # ⬆️ Tăng từ 8192: formatting prompt ~6-8k + output buffer dư ~4k
+            "num_ctx": 20480,  # ⬆️ Tăng từ 12288: prompt eval thực tế ~12258 tokens → cần buffer ~8k cho output
             "num_predict": 2048,  # ✅ Giảm từ 4096: JSON output thực tế không bao giờ vượt 1500 tokens
             "num_gpu": 99,
             "num_batch": 2048,
@@ -291,8 +282,8 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
     elif optimized:
         options = {
             "temperature": 0.0,
-            "num_ctx": 12288,  # ⬆️ Tăng từ 8192: Fast Mode prompt ~4k + output buffer dư
-            "num_predict": 1500,  # ✅ Tăng nhẹ từ 1024: đủ cho JSON phức tạp nhất mà không waste
+            "num_ctx": 6144,    # ⬇️ Từ 12288: prompt thực tế ~1750 tokens max → KV cache nhỏ hơn 2x → ~30-40% nhanh hơn
+            "num_predict": 1200, # ⬇️ Từ 1500: JSON output không bao giờ vượt 1000 tokens
             "num_gpu": 99,
             "num_batch": 2048,
             "flash_attn": True,
@@ -381,7 +372,7 @@ def ensure_clean_context():
             for m in models:
                 ctx = m.get("context_length", 0)
                 name = m.get("name", "")
-                if ctx > 16384:
+                if ctx > 24576:
                     print(
                         f"   ⚠️  Model {name} loaded với context={ctx} (quá lớn!) → Force unload..."
                     )
@@ -404,119 +395,11 @@ def _maybe_periodic_reload():
             f"(threshold={_RELOAD_EVERY_N_CALLS}) → force-unloading all models..."
         )
         unload_model(MODEL_FORMATTING)
-        unload_model(MODEL_REASONING)
         _formatting_call_count = 0
 
 
 # ============================================================================
-# COMPLEXITY DETECTION (MỚI)
-# ============================================================================
-
-
-def detect_complexity(user_command):
-    """
-    Phát hiện độ phức tạp của lệnh
-
-    Returns:
-        bool: True nếu lệnh phức tạp (cần dùng 2 models)
-    """
-    command_lower = user_command.lower()
-
-    # 1. Từ khóa logic phức tạp
-    # PHÂN LOẠI: Từ dài (>= 4 ký tự) dùng substring match, từ ngắn dùng word boundary regex
-    # để tránh false positive (ví dụ: "or" match trong "Normal", "Tournament")
-
-    # Từ khóa dài - an toàn dùng substring match
-    long_keywords = [
-        "nếu",
-        "else",
-        "otherwise",
-        "trong trường hợp",
-        "tất cả các tab",
-        "all tabs",
-        "mọi tab",
-        "every tab",
-        "với mỗi",
-        "for each",
-        "từng",
-        "each",
-        "sau đó tìm",
-        "then find",
-        "rồi tìm",
-        "hoặc",
-        "và nếu",
-        "and if",
-        "lặp lại",
-        "repeat",
-        "loop",
-    ]
-
-    # Từ khóa ngắn - PHẢI dùng word boundary regex để tránh match trong từ khác
-    # "or" match "Normal/Tournament", "if" match "notify/modify"
-    short_keyword_patterns = [
-        r"\bor\b",  # "or" nhưng KHÔNG match "Normal", "Tournament", "Leaderboard"
-        r"\bif\b",  # "if" nhưng KHÔNG match "notify", "modify", "config"
-    ]
-
-    has_long_keyword = any(kw in command_lower for kw in long_keywords)
-    has_short_keyword = any(
-        re.search(pat, command_lower) for pat in short_keyword_patterns
-    )
-    has_complex_logic = has_long_keyword or has_short_keyword
-
-    # 2. Đếm số bước (dấu -> hoặc →)
-    num_steps = command_lower.count("->") + command_lower.count("→")
-    many_steps = num_steps > 14  # ✅ Tăng từ 7: smoke test commands thường 8-12 bước → không nên escalate
-
-    # 3. Độ dài lệnh (lệnh quá dài thường phức tạp)
-    is_very_long = len(user_command) > 700  # ✅ Tăng từ 350: tránh false escalate cho commands dài nhưng linear
-
-    # 4. Có chứa nhiều actions khác nhau
-    action_keywords = [
-        "navigate",
-        "edit",
-        "clone",
-        "upload",
-        "download",
-        "scan",
-        "export",
-        "import",
-        "delete",
-        "add",
-        "update",
-    ]
-    action_count = sum(1 for kw in action_keywords if kw in command_lower)
-    many_actions = action_count > 8  # ✅ Tăng từ 6: smoke test commands thường dùng 4-6 action types
-
-    # KẾT LUẬN
-    is_complex = has_complex_logic or many_steps or is_very_long or many_actions
-
-    if is_complex:
-        # Debug: Hiển thị keyword nào trigger
-        trigger_details = []
-        if has_complex_logic:
-            matched_long = [kw for kw in long_keywords if kw in command_lower]
-            matched_short = [
-                pat for pat in short_keyword_patterns if re.search(pat, command_lower)
-            ]
-            trigger_details.append(f"logic_keywords={matched_long + matched_short}")
-        if many_steps:
-            trigger_details.append(f"steps={num_steps}")
-        if is_very_long:
-            trigger_details.append(f"len={len(user_command)}")
-        if many_actions:
-            trigger_details.append(f"actions={action_count}")
-        print(f"   🔍 Complexity Detection: COMPLEX ({', '.join(trigger_details)})")
-    else:
-        print(
-            f"   🔍 Complexity Detection: SIMPLE (steps={num_steps}, len={len(user_command)}, actions={action_count})"
-        )
-
-    return is_complex
-
-
-# ============================================================================
-# SINGLE MODEL PIPELINE (Fast Mode)
+# SINGLE MODEL PIPELINE
 # ============================================================================
 
 
@@ -534,8 +417,7 @@ def single_model_pipeline(user_command):
     prompt = get_fast_mode_prompt(user_command)
 
     json_output = call_ollama(MODEL_FORMATTING, prompt, optimized=True)
-    # ✅ KHÔNG unload sau Fast Mode: giữ model warm cho request tiếp theo
-    # (Careful Mode sẽ tự unload khi cần VRAM cho DeepSeek-R1)
+    # Keep model warm: Prompt prefix KV caching reduces prompt eval from ~84s → 1-5s next call
 
     if not json_output:
         return []
@@ -578,128 +460,11 @@ def single_model_pipeline(user_command):
                 print(f"   ✅ Fast Mode retry OK: {len(plan_retry)} bước")
                 return plan_retry
             except json.JSONDecodeError:
-                print("   ❌ Fast Mode retry cũng thất bại → fallback to Careful Mode")
+                print("   ❌ Qwen retry failed → returning empty plan")
         return []
 
 
-# ============================================================================
-# DUAL MODEL PIPELINE (Careful Mode) - GIỮ NGUYÊN CODE CŨ
-# ============================================================================
-
-
-def dual_model_pipeline(user_command):
-    """
-    Pipeline cẩn thận - Dùng 2 models (DeepSeek-R1:8b + Qwen2.5-Coder:14b)
-    """
-    print(f"   🧠 CAREFUL MODE: Dual-model pipeline")
-    pipeline_start = time.time()
-
-    # CRITICAL: Force-unload models có context lớn để tránh swap (131K ctx = 25GB!)
-    _maybe_periodic_reload()
-    ensure_clean_context()
-
-    # =========================================================================
-    # BƯỚC 1: SUY LUẬN (REASONING PHASE) - Model: DeepSeek-R1:8b
-    # =========================================================================
-    print(f"   1️⃣  DeepSeek-R1 are currently analyzing the requirements...")
-
-    reasoning_prompt = get_reasoning_prompt(user_command)
-
-    # Gọi DeepSeek-R1:8b với config tối ưu cho reasoning phase
-    raw_analysis = call_ollama(
-        MODEL_REASONING, reasoning_prompt, careful_phase="reasoning"
-    )
-    # ✅ Keep reasoning model warm: Prompt prefix caching giảm prompt eval từ ~84s → 1-5s
-
-    if not raw_analysis:
-        return []
-
-    # Lọc bỏ thẻ <think>...</think>
-    analysis_clean = re.sub(
-        r"<think>.*?</think>", "", raw_analysis, flags=re.DOTALL
-    ).strip()
-
-    # Handle truncated output: nếu </think> bị cắt (num_predict limit), analysis_clean sẽ rỗng
-    # hoặc vẫn chứa <think> tag mở. Fallback: lấy nội dung bên trong <think> block.
-    if not analysis_clean or "<think>" in analysis_clean:
-        think_match = re.search(r"<think>(.*)", raw_analysis, re.DOTALL)
-        if think_match:
-            inner = think_match.group(1).strip()
-            # Lấy 600 chars cuối (phần reasoning gần nhất với kết luận)
-            analysis_clean = inner[-600:].strip() if len(inner) > 600 else inner
-            print(f"      ⚠️  Think block truncated — dùng inner reasoning ({len(analysis_clean)} chars)")
-        else:
-            analysis_clean = raw_analysis[:600].strip()
-            print(f"      ⚠️  No think block found — dùng raw output")
-
-    print(
-        f"      📝 Analysis from DeepSeek: {analysis_clean[:100].replace(chr(10), ' ')}..."
-    )
-
-    # =========================================================================
-    # BƯỚC 2: ĐỊNH DẠNG (FORMATTING PHASE) - Model: Qwen2.5-Coder
-    # =========================================================================
-    print(f"   2️⃣  Qwen2.5-Coder is converting to JSON Action Plan...")
-
-    formatting_prompt = get_formatting_prompt(user_command, analysis_clean)
-
-    # Gọi Qwen với config tối ưu cho formatting phase
-    json_output = call_ollama(
-        MODEL_FORMATTING, formatting_prompt, careful_phase="formatting"
-    )
-    # ✅ KHÔNG unload Qwen sau Careful Mode: giữ model warm cho lần gọi tiếp theo
-    # Prompt prefix caching sẽ giảm prompt eval từ ~84s xuống ~1-5s cho lần gọi sau
-
-    if not json_output:
-        print("   ❌ Careful Mode: Qwen trả về rỗng (None). Sẽ fallback ở cấp trên.")
-        return []
-
-    # [DEBUG] Print raw Qwen output
-    print(f"\n   🔍 DEBUG - RAW QWEN OUTPUT (first 600 chars):")
-    print(f"   {json_output[:600]}...")
-
-    # Làm sạch và Parse JSON
-    final_json_str = clean_json_string(json_output)
-
-    try:
-        plan = json.loads(final_json_str)
-        pipeline_elapsed = time.time() - pipeline_start
-        print(
-            f"   ✅ Careful Mode: Đã tạo thành công {len(plan)} bước hành động ({pipeline_elapsed:.1f}s total)"
-        )
-
-        # Auto-fix: Thêm bước Upload nếu thiếu
-        if (
-            plan
-            and plan[-1].get("action") == "manipulate_csv"
-            and "Import" in user_command
-        ):
-            print("   ⚠️ Auto-fix: Adding missing Upload step.")
-            target_file = plan[-1].get("target")
-            plan.append(
-                {"action": "upload", "target": "Import CSV", "value": target_file}
-            )
-        return plan
-    except json.JSONDecodeError as e:
-        print(f"   ❌ Careful Mode Parse Error (Qwen): {e}")
-        print(f"   Raw (first 500): {json_output[:500]}...")
-
-        # Retry once: flush Qwen then re-run formatting phase only (keep DeepSeek analysis)
-        print("   🔄 Retry Careful Mode formatting phase (fresh Qwen context)...")
-        unload_model(MODEL_FORMATTING)
-        time.sleep(1)
-        json_output_retry = call_ollama(
-            MODEL_FORMATTING, formatting_prompt, careful_phase="formatting"
-        )
-        if json_output_retry:
-            retry_str = clean_json_string(json_output_retry)
-            try:
-                plan_retry = json.loads(retry_str)
-                print(f"   ✅ Careful Mode retry OK: {len(plan_retry)} bước")
-                return plan_retry
-            except json.JSONDecodeError:
-                print("   ❌ Careful Mode retry cũng thất bại → trả về []")
-        return []
+# dual_model_pipeline (DeepSeek + Qwen) removed — Qwen single-model pipeline only.
 
 
 def patch_model_pipeline(user_command, base_command, base_plan):
@@ -820,38 +585,8 @@ def parse_command_to_json(
                 has_context = False
 
     if not has_context:
-        # BƯỚC 1: Auto-detect complexity (chỉ khi dùng Fast Mode)
-        if use_fast_mode:
-            is_complex = detect_complexity(user_command)
-
-            # Nếu phát hiện phức tạp, tự động chuyển sang Careful Mode
-            if is_complex:
-                print(
-                    "   ⚠️  Command phức tạp phát hiện! Tự động chuyển sang Careful Mode..."
-                )
-                use_fast_mode = False
-
-        # BƯỚC 2: Chọn pipeline
-        if use_fast_mode:
-            last_actual_mode = "fast"
-            plan = single_model_pipeline(user_command)
-
-            # Auto-fallback: Nếu Fast Mode thất bại, tự động chuyển sang Careful Mode
-            if not plan or len(plan) == 0:
-                print("   ⚠️  Fast Mode failed! Auto-switching to Careful Mode...")
-                last_actual_mode = "careful"
-                plan = dual_model_pipeline(user_command)
-        else:
-            last_actual_mode = "careful"
-            plan = dual_model_pipeline(user_command)
-
-            # Auto-fallback: Nếu Careful Mode thất bại, thử lại bằng Fast Mode
-            if not plan or len(plan) == 0:
-                print(
-                    "   ⚠️  Careful Mode failed (returned empty plan)! Auto-fallback to Fast Mode..."
-                )
-                last_actual_mode = "fast"
-                plan = single_model_pipeline(user_command)
+        last_actual_mode = "fast"
+        plan = single_model_pipeline(user_command)
 
     # BƯỚC 3: Auto-fix nếu cần
     if (

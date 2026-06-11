@@ -137,24 +137,23 @@ def _resolve_navigation_paths(plan):
                     continue
 
         # CASE 3: Full path (3+ elements) - check if last element matches a known destination
-        # and use the canonical path from the map. Handles plural/singular mismatches.
-        # e.g. ["Data Configs", "Superstars", "Superstars"] → ["Data Configs", "Superstar", "Superstar"]
+        # and use the canonical path from the map. Handles plural/singular mismatches AND
+        # depth mismatches (e.g. AI generates ["Data Configs", "Live Events", "Rules Based Event"]
+        # but canonical is ["Live Events", "RBE"]).
         if len(path) >= 3:
             last_key = path[-1].strip().lower()
             if last_key in NAVIGATION_PATH_MAP:
                 resolved = NAVIGATION_PATH_MAP[last_key]
-                if len(resolved) == len(path):
-                    # Same depth - replace if different (fixes plural/singular mismatch)
-                    if [p.strip().lower() for p in path] != [
-                        r.lower() for r in resolved
-                    ]:
-                        step["path"] = list(resolved)
-                        if "target" in step:
-                            del step["target"]
-                        print(
-                            f"   🗺️  PATH-RESOLVE (canonical fix): {original_path} → {resolved}"
-                        )
-                        continue
+                current_lower = [p.strip().lower() for p in path]
+                resolved_lower = [r.lower() for r in resolved]
+                if current_lower != resolved_lower:
+                    step["path"] = list(resolved)
+                    if "target" in step:
+                        del step["target"]
+                    print(
+                        f"   🗺️  PATH-RESOLVE (canonical fix): {original_path} → {resolved}"
+                    )
+                    continue
 
     return plan
 

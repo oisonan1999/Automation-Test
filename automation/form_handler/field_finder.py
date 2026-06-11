@@ -19,6 +19,9 @@ class FieldFinderMixin:
             "time of reward utc": "start_time_send_daily_reward",
             "eventname": "EventName",
             "event name": "EventName",
+            # Offer Section clone modal: DOM label is "Section ID" (for='section_id')
+            # but AI generates "New Section ID" from test-case text.
+            "new section id": "section_id",
         }
 
         label_key = label_text.lower().strip()
@@ -556,6 +559,35 @@ class FieldFinderMixin:
                         return element
         except Exception as e:
             print(f"         ⚠️ Container-based search error: {e}")
+
+        # ─── BOOTSTRAP INPUT-GROUP: span.input-group-text as pseudo-label ────────────
+        # Handles: <div class="input-group">
+        #            <div class="input-group-prepend"><span class="input-group-text">Offer Name</span></div>
+        #            <input type="text" class="form-control" name="name">
+        #          </div>
+        # The span has no 'for' attr so it's missed by normal label→for flow.
+        try:
+            igt_spans = page.locator("span.input-group-text, .input-group-prepend span").all()
+            for span in igt_spans:
+                if not span.is_visible():
+                    continue
+                span_text = span.inner_text().strip().lower()
+                span_normalized = re.sub(r"[\s_-]+", "", span_text)
+                if span_text == label_lower or span_normalized == label_normalized:
+                    input_group = span.locator(
+                        "xpath=ancestor::div[contains(@class,'input-group')"
+                        " and not(contains(@class,'input-group-prepend'))"
+                        " and not(contains(@class,'input-group-append'))"
+                        " and not(contains(@class,'input-group-text'))]"
+                    ).first
+                    if input_group.count() > 0:
+                        inp = input_group.locator("input, textarea").first
+                        if inp.count() > 0 and inp.is_visible():
+                            print(f"         🎯 Bootstrap input-group match: '{span_text}' → input")
+                            return inp
+        except Exception:
+            pass
+        # ─────────────────────────────────────────────────────────────────────────────
 
         # [OLD CODE] Fallback đến label candidates search
         candidates = (

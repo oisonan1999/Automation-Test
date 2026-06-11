@@ -73,6 +73,42 @@ def _remove_download_before_edit_row(plan, user_command=""):
     return result
 
 
+def _remove_edit_row_before_checkbox(plan):
+    """
+    Remove edit_row(RANDOM) steps that appear before a checkbox step on a list page
+    with NO form action between them.
+
+    AI confuses "Chọn N ID bất kỳ" (select rows → checkbox) with
+    "Sửa [entity] bất kỳ" (edit row → edit_row).  The fixer only removes
+    edit_row(RANDOM) when checkbox appears before any update_form/save_form in
+    the remaining plan — meaning no real form was opened.
+    """
+    _FORM_BLOCKERS = ("update_form", "save_form", "scan_tabs", "check_fields")
+
+    result = []
+    for i, step in enumerate(plan):
+        action = step.get("action", "")
+        if (
+            action in ("edit_row", "clone_row")
+            and step.get("target", "").upper() == "RANDOM"
+        ):
+            # Scan forward: checkbox must appear before any form-blocker action
+            checkbox_before_form = False
+            for s in plan[i + 1:]:
+                a = s.get("action", "")
+                if a == "checkbox":
+                    checkbox_before_form = True
+                    break
+                if a in _FORM_BLOCKERS:
+                    break
+            if checkbox_before_form:
+                print(
+                    "   🔧 REMOVE spurious edit_row(RANDOM) before checkbox "
+                    "(AI confused 'Chọn N bất kỳ' with edit_row)"
+                )
+                continue
+        result.append(step)
+    return result
 
 
 
@@ -268,6 +304,33 @@ def _fix_rbe_clone_field_name(plan, user_command=""):
     return plan
 
 
+def _fix_clone_modal_new_prefix_fields(plan, user_command=""):
+    """
+    Clone modals often label fields as 'X' but the AI generates 'New X' because
+    the test-case text says "New X: ...".  Strip the known 'New ' prefixes so
+    _find_input_element gets the label text that actually exists in the DOM.
+
+    Known mappings (AI-generated key → DOM <label> text):
+      "New Section ID" → "Section ID"   (Offer Section clone modal, for='section_id')
+    """
+    _NEW_PREFIX_RENAMES = {
+        "new section id": "Section ID",
+    }
+    clone_positions = {i for i, s in enumerate(plan) if s.get("action") == "clone_row"}
+    if not clone_positions:
+        return plan
+    for i, step in enumerate(plan):
+        if step.get("action") != "update_form":
+            continue
+        if not any(cp < i for cp in clone_positions):
+            continue
+        data = step.get("data", {})
+        for k in list(data.keys()):
+            canonical = _NEW_PREFIX_RENAMES.get(k.lower().strip())
+            if canonical and k != canonical:
+                data[canonical] = data.pop(k)
+                print(f"   🔧 CLONE MODAL: renamed '{k}' → '{canonical}'")
+    return plan
 
 
 def _fix_id_only_update_to_edit_row(plan):

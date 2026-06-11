@@ -72,14 +72,6 @@ st.markdown(
         font-weight: bold;
         margin-left: 8px;
     }
-    .fast-mode {
-        background-color: #00D084;
-        color: white;
-    }
-    .careful-mode {
-        background-color: #FF6B6B;
-        color: white;
-    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -98,8 +90,6 @@ if "run_execution" not in st.session_state:
     st.session_state.run_execution = False
 if "test_logs" not in st.session_state:
     st.session_state.test_logs = []
-if "use_fast_mode" not in st.session_state:
-    st.session_state.use_fast_mode = True  # Mặc định Fast Mode
 if "last_mode_used" not in st.session_state:
     st.session_state.last_mode_used = None
 if "pending_save_dialog" not in st.session_state:
@@ -605,51 +595,6 @@ with col1:
         key="run_mode",
     )
 
-    # === Tùy chọn AI Mode (chỉ dùng khi ở AI Run) ===
-    st.markdown("### ⚙️ Tùy chọn AI Mode")
-
-    col_mode1, col_mode2 = st.columns([3, 1])
-
-    with col_mode1:
-        use_fast_mode = st.checkbox(
-            "⚡ Fast Mode (1 model - nhanh gấp 3x, phù hợp 90% lệnh)",
-            value=st.session_state.use_fast_mode,
-            key="fast_mode_checkbox",
-            help="""
-✅ Fast Mode (Khuyến nghị):
-• Chỉ dùng 1 model (Qwen2.5-Coder)
-• Thời gian: ~20-40 giây
-• Độ chính xác: 90-95% với lệnh đơn giản
-• Auto chuyển sang Careful Mode nếu phát hiện phức tạp
-
-❌ Careful Mode (Cho lệnh phức tạp):
-• Dùng 2 models (DeepSeek-R1 + Qwen2.5-Coder)
-• Thời gian: ~1-2 phút
-• Độ chính xác: 95-98%
-            """,
-        )
-        st.session_state.use_fast_mode = use_fast_mode
-
-    with col_mode2:
-        if use_fast_mode:
-            st.markdown(
-                '<span class="mode-badge fast-mode">⚡ FAST</span>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                '<span class="mode-badge careful-mode">🧠 CAREFUL</span>',
-                unsafe_allow_html=True,
-            )
-
-    # === INFO BOX ===
-    if use_fast_mode:
-        st.info(
-            "💡 Fast Mode đang BẬT. Hệ thống sẽ tự động phát hiện lệnh phức tạp và chuyển mode nếu cần."
-        )
-    else:
-        st.warning("⏳ Careful Mode đang BẬT. AI sẽ phân tích kỹ hơn (~1-2 phút).")
-
     # === BUTTONS ===
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
@@ -686,7 +631,6 @@ with col1:
         smoke_csv = st.selectbox(
             "CSV đầu vào (nếu không import file mới)",
             [
-                "downloads/smoketestBrickLive.csv",
                 "downloads/Testcasesmokelive.csv",
             ],
             index=0,
@@ -890,15 +834,7 @@ if st.session_state.current_plan:
     st.divider()
     st.subheader("📋 Kế hoạch hành động (JSON):")
 
-    # Hiển thị thông tin mode
-    col_info1, col_info2 = st.columns([1, 3])
-    with col_info1:
-        st.metric("Số bước", len(st.session_state.current_plan))
-    with col_info2:
-        if st.session_state.last_mode_used == "fast":
-            st.success("✅ Được tạo bởi: Fast Mode (1 model)")
-        elif st.session_state.last_mode_used == "careful":
-            st.warning("✅ Được tạo bởi: Careful Mode (2 models)")
+    st.metric("Số bước", len(st.session_state.current_plan))
 
     st.json(st.session_state.current_plan)
 
@@ -940,12 +876,6 @@ class StreamingLogCapture:
 # --- XỬ LÝ SỰ KIỆN CHẠY (AI BRAIN) ---
 if st.session_state.run_mode == "AI Run (theo lệnh)" and run_btn and user_input:
     with st.status("🧠 AI đang suy nghĩ...", expanded=True) as status:
-        # Hiển thị mode
-        if st.session_state.use_fast_mode:
-            st.info("⚡ Đang sử dụng Fast Mode...")
-        else:
-            st.info("🧠 Đang sử dụng Careful Mode...")
-
         # Placeholder cho real-time logs
         log_placeholder = st.empty()
 
@@ -959,7 +889,7 @@ if st.session_state.run_mode == "AI Run (theo lệnh)" and run_btn and user_inpu
         with StreamingLogCapture(log_placeholder) as ai_log:
             action_plan = parse_command_to_json(
                 processed_input,
-                use_fast_mode=st.session_state.use_fast_mode,
+                use_fast_mode=True,
                 context_plan=st.session_state.loaded_scenario_plan,
                 base_command=st.session_state.loaded_scenario_command,
             )
@@ -1171,7 +1101,7 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
 
             if last_created_id:
                 case_command = re.sub(r"Sửa\s+ID\s+bất\s+kỳ", f"Sửa ID: {last_created_id}", case_command, flags=re.IGNORECASE)
-                case_command = re.sub(r"Filter\s+một\s+ID\s+bất\s+kỳ", f"Filter ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+                # NOTE: "Filter một ID bất kỳ" means "filter any random ID" → do NOT replace with last_created_id
                 _vua = r"[vj][ưừữu]a"
                 # Broaden: match any entity word before "vừa clone/tạo" (not just "ID")
                 # e.g. "Sửa Book vừa clone", "Sửa 1 Book vừa clone", "Book vừa clone"
@@ -1208,7 +1138,7 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                     with st.status("🧠 AI đang phân tích...", expanded=False):
                         action_plan = parse_command_to_json(
                             case_command,
-                            use_fast_mode=st.session_state.use_fast_mode,
+                            use_fast_mode=True,
                             context_plan=None,
                             base_command=None,
                         )
@@ -1251,7 +1181,7 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                         with st.status("🧠 AI retry (golden fail)...", expanded=False):
                             action_plan = parse_command_to_json(
                                 case_command,
-                                use_fast_mode=st.session_state.use_fast_mode,
+                                use_fast_mode=True,
                                 context_plan=None,
                                 base_command=None,
                             )
@@ -1575,9 +1505,9 @@ st.markdown(
 <div style='text-align: center; color: #666; font-size: 12px;'>
     <p>💡 <b>Pro Tips:</b></p>
     <ul style='list-style: none; padding: 0;'>
-        <li>🔹 Lệnh đơn giản (2-4 bước) → Dùng Fast Mode</li>
-        <li>🔹 Lệnh phức tạp (>5 bước) → Hệ thống tự chuyển Careful Mode</li>
-        <li>🔹 Nếu AI hiểu sai → Bỏ tick Fast Mode và thử lại</li>
+        <li>🔹 Mô tả lệnh chi tiết, rõ ràng để AI generate đúng steps</li>
+        <li>🔹 Dùng Golden Plan Cache để bỏ qua AI với các case đã chạy PASS</li>
+        <li>🔹 Nếu AI hiểu sai → Sửa lệnh và chạy lại</li>
     </ul>
 </div>
 """,

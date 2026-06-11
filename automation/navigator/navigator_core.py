@@ -525,127 +525,72 @@ class NavigatorCoreMixin:
                 continue
         return False
 
-    def _wait_for_long_loading(self, page):
-        print("         ⏳ Checking for Loaders/Spinners...")
+    def _wait_for_long_loading(self, page, timeout_ms: int = 45000):
+        """
+        Block until ALL transient loading indicators are gone.
 
-        spinner_selectors = [
-            # NOTE: avoid false positives like cursor:progress on normal pages.
-            # Keeping only more deterministic spinners.
-            "i.fa.fa-cog.fa-spin",
-            "i.fa-cog.fa-spin",
-            ".fa-spin",
-            ".spinner-border",
-            ".spinner-grow",
-            "[role='status']",
-            "[class*='loading']",
-            "[class*='spinner']",
-            "[class*='loader']",
-            ".loading",
-            ".spinner",
-            ".loader",
-            ".swal2-loading",
-            ".blockUI",
-            "div:has-text('Loading')",
-            # PVE-specific SVG loader: three animated circles (viewBox="0 0 120 30")
-            "svg[viewBox='0 0 120 30']",
-        ]
+        Uses page.wait_for_function() — evaluates all selectors atomically in the
+        browser's own JS engine, no per-selector Playwright round-trips.
 
-        def _any_spinner_visible():
-            for sel in spinner_selectors:
-                try:
-                    if page.locator(sel).first.is_visible(timeout=200):
-                        return sel
-                except Exception:
-                    pass
-            return None
+        Specific selectors only (no .fa-spin / [class*='loading'] which also match
+        decorative/always-on elements and cause false positives).
+        """
+        print("         ⏳ Waiting for page to finish loading...")
 
-        active_spinner = None
-
-        for _ in range(4):
-            active_spinner = _any_spinner_visible()
-            if active_spinner:
-                break
-            time.sleep(0.25)
-
-        if active_spinner:
-            print(
-                f"         🔄 Spinner DETECTED: '{active_spinner}'. Waiting for it to finish..."
-            )
-            try:
-                spinner_str = str(active_spinner)
-                # Generic/always-on loaders get shorter timeout to avoid stalling
-                if "has-text('Loading')" in spinner_str or "class*='loader'" in spinner_str or ".loader" in spinner_str:
-                    wait_timeout = 8000
-                elif "svg[viewBox" in spinner_str:
-                    # PVE SVG loader: page navigation is slow, allow up to 45s
-                    wait_timeout = 45000
-                else:
-                    wait_timeout = 10000
-
-                page.locator(active_spinner).first.wait_for(
-                    state="hidden", timeout=wait_timeout
-                )
-                print("         ✅ Spinner finished (Main content loaded).")
-            except Exception:
-                # Still spinning after timeout — do a final visibility check
-                try:
-                    still_visible = page.locator(active_spinner).first.is_visible(timeout=200)
-                except Exception:
-                    still_visible = False
-                if still_visible:
-                    print(
-                        "         ⚠️ Spinner still visible after 15s — possible persistent loader, continuing anyway."
-                    )
-                else:
-                    print("         ✅ Spinner gone (detected late).")
-        else:
-            print(
-                "         ℹ️ No spinner detected immediately. Waiting for network idle just in case."
-            )
+        # JS function: returns true when NO visible transient loading element exists.
+        # Visibility = not hidden by display/visibility/opacity AND has non-zero bbox.
+        _LOADING_GONE_FN = """() => {
+            const sels = [
+                'div.loader',
+                '.spinner-border',
+                '.spinner-grow',
+                '.swal2-loading',
+                '.blockUI',
+                '.vld-overlay.is-active',
+                'svg[viewBox="0 0 120 30"]',
+                '.b-skeleton',
+                '[aria-busy="true"]',
+                '.vld-icon'
+            ];
+            for (const sel of sels) {
+                try {
+                    for (const el of document.querySelectorAll(sel)) {
+                        const s = window.getComputedStyle(el);
+                        if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 0 && r.height > 0) return false;
+                    }
+                } catch(e) {}
+            }
+            return true;
+        }"""
 
         try:
-            page.wait_for_load_state("networkidle", timeout=2000)
+            page.wait_for_function(_LOADING_GONE_FN, timeout=timeout_ms, polling=250)
+            print("         ✅ Page ready (all spinners cleared).")
+        except Exception:
+            # Recheck immediately: exception may fire as spinner just disappeared
+            try:
+                is_clear = page.evaluate(f"({_LOADING_GONE_FN})()")
+                if is_clear:
+                    print("         ✅ Page ready (spinner cleared just before timeout).")
+                else:
+                    print(
+                        f"         ⚠️ Spinner still visible after {timeout_ms // 1000}s — continuing anyway."
+                    )
+            except Exception:
+                print(
+                    f"         ⚠️ Spinner check failed after {timeout_ms // 1000}s — continuing anyway."
+                )
+
+        # Network idle: short fallback, non-fatal
+        try:
+            page.wait_for_load_state("networkidle", timeout=2500)
         except Exception:
             pass
 
-        time.sleep(1.0)
-
-        # PVE heavy render: React shows skeletons + uses aria-busy while loading.
-        # If we proceed too early, Normal Matches/Match panels are not fully interactive
-        # and select2 (SSDB -> SSGroup ID) might not exist yet.
-        try:
-            for _ in range(10):
-                try:
-                    busy_visible = (
-                        page.locator("[aria-busy='true']:visible").count() > 0
-                    )
-                except:
-                    busy_visible = False
-
-                try:
-                    skeleton_visible = page.locator(".b-skeleton:visible").count() > 0
-                except:
-                    skeleton_visible = False
-
-                # Match panels sometimes use vld-icon spinner (you provided HTML:
-                # <div class="vld-icon">...</div>)
-                try:
-                    skeleton_visible = page.locator(".b-skeleton:visible").count() > 0
-                except:
-                    skeleton_visible = False
-
-                # PVE Match panels may show vld-icon loader while React data renders
-                # (your provided HTML: <div class="vld-icon">...</div>)
-                try:
-                    vld_visible = page.locator(".vld-icon:visible").count() > 0
-                except:
-                    vld_visible = False
-
-                if not busy_visible and not skeleton_visible and not vld_visible:
-                    break
-                time.sleep(0.3)
-        except:
-            pass
+        # Brief settle for React re-renders that occur after network goes idle
+        time.sleep(0.5)
 
     def _is_sidebar_item(self, page, text):
         try:

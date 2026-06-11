@@ -837,3 +837,62 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
     return filtered
 
 
+# Phrases that mean "click the home/Brick logo" (navigate-home, no deploy).
+_LOGO_BRICK_PATTERNS = (
+    "logo the brick",
+    "logo thebrick",
+    "logo brick",
+    "the brick",
+    "bấm logo",
+    "click logo",
+    "click the brick",
+    "bấm the brick",
+)
+
+
+def _inject_missing_final_deployment(plan, user_command=""):
+    """
+    Guarantee a trailing process_deployment when the command ENDS with a
+    "Bấm vào logo The Brick" instruction.
+
+    Every smoke test case finishes by clicking the Brick logo to return home
+    (and optionally Process a deploy). The AI frequently drops this final step,
+    so the run never navigates home / never records the closing action. This
+    fixer deterministically appends {"action":"process_deployment","options":[]}
+    when:
+      * the LAST "->" segment of the command is a logo-click, AND
+      * that segment is NOT a deploy step (no "Process"/"Chọn checkbox"), AND
+      * the plan does not already end with process_deployment.
+
+    Deploy cases ("... -> Chọn checkbox X -> Process") already end with
+    process_deployment(options=[...]) and are left untouched.
+    """
+    if not isinstance(plan, list):
+        return plan
+
+    cmd = (user_command or "").strip()
+    if not cmd:
+        return plan
+
+    # Look at the final instruction segment only.
+    last_seg = cmd.split("->")[-1].strip().lower()
+    is_logo_segment = any(p in last_seg for p in _LOGO_BRICK_PATTERNS)
+    if not is_logo_segment:
+        return plan
+    # If the closing segment is actually a deploy/process step, leave it to the
+    # checkbox+process merge logic.
+    if "process" in last_seg or "checkbox" in last_seg:
+        return plan
+
+    last_action = plan[-1].get("action") if plan and isinstance(plan[-1], dict) else None
+    if last_action == "process_deployment":
+        return plan
+
+    plan.append({"action": "process_deployment", "options": []})
+    print(
+        "   🔧 INJECT: appended process_deployment(options=[]) — command ends with "
+        "'logo The Brick' but plan was missing the final navigate-home step"
+    )
+    return plan
+
+

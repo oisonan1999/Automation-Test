@@ -253,15 +253,24 @@ class BrickAutomation(
             # --- PASS 2: DNU Warning popup ---
             # "PointCurrency_XXX is currently in the DNU list" - SweetAlert2 or Bootstrap.
             # Only has an OK button; must be dismissed so subsequent actions can proceed.
-            dnu_re = re.compile(r"dnu", re.IGNORECASE)
+            #
+            # IMPORTANT: use specific phrase matching, NOT bare "dnu" — gate dropdown options
+            # in clone modals contain "DNU" gate names, causing the entire clone modal to
+            # match and btn-primary (= Clone button) to be clicked prematurely.
+            dnu_re = re.compile(
+                r"dnu\s+warning|currently in the dnu\s+(list|blacklist)|is in the dnu\s+(list|blacklist)",
+                re.IGNORECASE,
+            )
             dnu_candidates = page.locator(
                 ".modal.show, .modal.in, .swal2-popup:visible, [role='dialog']:visible"
             ).filter(has_text=dnu_re)
             if dnu_candidates.count() > 0 and dnu_candidates.first.is_visible():
                 dnu_modal = dnu_candidates.first
+                # Never use button.btn-primary — it matches Clone/Save buttons in regular modals.
+                # DNU warning modals only have an explicit OK/Confirm button.
                 ok_btn = dnu_modal.locator(
                     "button:has-text('OK'), button:has-text('Ok'), "
-                    "button.swal2-confirm, button.btn-primary"
+                    "button.swal2-confirm"
                 ).first
                 if ok_btn.count() > 0 and ok_btn.is_visible():
                     print("      🔔 DNU Warning detected; clicking OK to dismiss...")

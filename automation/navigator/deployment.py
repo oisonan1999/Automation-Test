@@ -11,6 +11,10 @@ class DeploymentMixin:
     def process_deployment(self, page, options=[]):
         print(f"   🚀 Deploy: {options}")
         try:
+            # Wait for any full-page loading overlay (e.g. vld-overlay after CSV import)
+            # before attempting to click the navbar logo or any page element.
+            self._wait_for_long_loading(page)
+
             already_home = False
             try:
                 if page.locator("text=Process Blueprints").first.is_visible(

@@ -126,10 +126,31 @@ def get_golden_plan(feature, testcase_raw, unique_id, last_id):
         return None
 
 
+_LOGO_PATTERNS = ("logo the brick", "logo thebrick", "bấm logo", "click logo")
+
+
+def _check_missing_process_deployment(template, testcase_raw: str) -> None:
+    """Warn if the command ends with logo-click but the template has no process_deployment."""
+    cmd = (testcase_raw or "").lower()
+    if not any(p in cmd for p in _LOGO_PATTERNS):
+        return
+    last_action = (
+        template[-1].get("action") if isinstance(template, list) and template else None
+    )
+    if last_action != "process_deployment":
+        print(
+            f"   ⚠️ GOLDEN WARNING: command contains 'logo the brick' but template ends "
+            f"with '{last_action}' instead of 'process_deployment'. "
+            f"Golden plan may be incomplete — add process_deployment(options=[]) manually "
+            f"in config/golden_plans.json or re-run to regenerate."
+        )
+
+
 def record_success(feature, testcase_raw, plan, unique_id, last_id, label=""):
     """Lưu plan đã chạy PASS sạch thành golden template."""
     try:
         template, uses_unique, uses_last = tokenize_plan(plan, unique_id, last_id)
+        _check_missing_process_deployment(template, testcase_raw)
         store = load_golden()
         store[golden_key(feature, testcase_raw)] = {
             "feature": feature,

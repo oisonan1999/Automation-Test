@@ -19,8 +19,9 @@ Input: "Vào Live Events -> Gacha Event -> Gacha Event -> Clone ID: EventGacha_t
 Output: [{{"action":"navigate","path":["Live Events","Gacha Event","Gacha Event"]}},{{"action":"clone_row","target":"EventGacha_test_15"}},{{"action":"update_form","data":{{"New Event ID":"test_230226_8","Gate":"r80","Use another currency":"select","Currency":"GachaShard_Feb2026_Wknd1_Main"}}}},{{"action":"save_form","mode":"clone"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Schedule in UTC":"2026-02-23 00:00:00, 2026-02-23 11:00:00","Milestones Type":"Disable"}}}},{{"action":"save_form","mode":"save"}},{{"action":"process_deployment","options":["Gacha Events"]}}]
 
 Example 2:
-Input: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID -> Export CSV test.csv"
+Input: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID bất kỳ -> Export CSV test.csv"
 Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}}]
+RULE: "Chọn N [entity] bất kỳ" = checkbox(random_N), NOT edit_row. "Chọn/Tick/Select" + table row = checkbox. Only "Sửa/Edit" = edit_row.
 
 Example 3:
 Input: "Click logo The Brick -> Chọn checkbox Offers -> Bấm Process"
@@ -136,9 +137,10 @@ Example 24 (SEARCH/FILTER - uses filter input, NOT checkbox):
 Input: "Vào PVE -> Filter 1 Book bất kỳ -> Bấm vào logo The Brick"
 Output: [{{"action":"navigate","path":["PVE"]}},{{"action":"update_form","data":{{"ID contains":"RANDOM"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"process_deployment","options":[]}}]
 RULE for Example 24: "Filter N/một [entity] bất kỳ" = type a keyword in the "ID contains" search box + click "Filter Data". Use "RANDOM" as the value — it will be resolved to an actual row ID at runtime. This is a SEARCH action, NOT checkbox row-selection. NEVER use checkbox for "Filter" — only "Chọn/Tick" means checkbox.
-Example 24b:
+Example 24b (OFFER FILTER — also uses "ID contains"):
 Input: "Vào Offer -> Filter một ID bất kỳ -> Bấm vào logo The Brick"
 Output: [{{"action":"navigate","path":["Offer"]}},{{"action":"update_form","data":{{"ID contains":"RANDOM"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"process_deployment","options":[]}}]
+RULE for Example 24b: EVERY filter page (Offer, Offer Section, Drip Offer, PVE, RBE, Gacha, Currency, etc.) uses the SAME "ID contains" search box. ALWAYS use the key "ID contains" for any "Filter ... bất kỳ" command. NEVER use "Offer Name" or any other label.
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Bấm logo The Brick" / "Click logo" ALONE (no "Chọn checkbox" and no "Process" after) → {{"action":"process_deployment","options":[]}} (navigate home only, options MUST be [])
@@ -301,14 +303,17 @@ CRITICAL RULES:
   * Common filter button names: "Filter Data", "Filter", "Apply Filter", "Search"
 
 - FILTER SINGLE ITEM (CRITICAL - NOT a checkbox):
-  * "Filter 1/một/N [entity] bất kỳ" → fill "ID contains" with "RANDOM" + click "Filter Data"
-  * Example: "Filter 1 Book bất kỳ" → update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
-  * Example: "Filter một ID bất kỳ" → update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
+  * "Filter 1/một/N [entity] bất kỳ" → fill the filter search box with "RANDOM" + click "Filter Data"
   * "RANDOM" is a sentinel resolved at runtime to an actual visible row ID in the table.
   * "Filter" ALWAYS means using the search input box — NEVER a checkbox row-selection
   * ONLY "Chọn/Tick/Select N [entity]" triggers {{"action":"checkbox"}}
+  * ⚠️ The filter field name is ALWAYS "ID contains" — EVERY page (PVE, RBE, Gacha,
+    Currency, Fight Card, Superstar, Offer, Offer Section, Drip Offer, etc.) uses the
+    same "ID contains" search box. NEVER use "Offer Name" or any per-page label.
+  * Example (PVE): "Filter 1 Book bất kỳ" → update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
+  * Example (Offer): "Filter một ID bất kỳ" on Offer page → update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
   * WRONG: {{"action":"checkbox","target":"Book","value":"random_1"}} for "Filter 1 Book bất kỳ"
-  * CORRECT: update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
+  * CORRECT (all pages): update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
 
 NOW CONVERT THIS COMMAND (use same action names as examples above):
 "{user_command}"
@@ -457,11 +462,14 @@ def get_formatting_prompt(user_command, analysis_clean):
          Example: "Tick checkbox Hide Feeders" → {{{{"action":"update_form","data":{{{{"Hide Feeders checkbox":"true"}}}}}}}}
          Rule: if the target of "checkbox" is a page filter/UI label (not a column in the table), use update_form with key "<Label> checkbox".
        - ⚠️ CRITICAL: "Filter N/một [entity] bất kỳ" is NOT a checkbox action!
-         "Filter" = search using the ID filter box → update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
+         "Filter" = search using the filter input box + click "Filter Data".
          "RANDOM" is a sentinel resolved at runtime to an actual visible row ID.
          Only "Chọn/Tick/Select N [entity]" triggers checkbox action.
+         ⚠️ Filter field name is ALWAYS "ID contains" on EVERY page
+           (Offer/Offer Section/Drip Offer/PVE/RBE/Gacha/Currency/etc.).
+           NEVER use "Offer Name" or any other label.
          WRONG: {{{{"action":"checkbox","target":"Book","value":"random_1"}}}} for "Filter 1 Book bất kỳ"
-         CORRECT: update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
+         CORRECT (all pages): update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
     3. "download": 
        - Rule: Use for "Export".
        - Format: {{{{ "action": "download", "target": "Export CSV", "value": "filename.csv" }}}}

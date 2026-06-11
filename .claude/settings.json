@@ -34,7 +34,11 @@
       "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('app.py'\\).read\\(\\)\\); print\\('app.py OK'\\)\")",
       "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('automation/smart_tester/upload_handler.py'\\).read\\(\\)\\); print\\('upload_handler.py OK'\\)\")",
       "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('ai/plan_cache.py'\\).read\\(\\)\\); print\\('plan_cache.py OK'\\)\")",
-      "Bash(.venv/bin/python -c ' *)"
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(python3 -m py_compile automation/form_handler/form_core.py)",
+      "Bash(python3 -m py_compile ai/action_fixer/clone_fixers.py)",
+      "Bash(python3 -m py_compile ai/action_fixer/__init__.py)",
+      "Bash(python3 -m py_compile automation/form_handler/field_finder.py)"
     ],
     "additionalDirectories": [
       "/tmp",

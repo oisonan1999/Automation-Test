@@ -116,31 +116,123 @@ class FormCoreMixin:
 
             # ============================
             # RANDOM FILTER RESOLVER
-            # "ID contains": "RANDOM" → pick a real row ID from the visible table
-            # so the filter actually returns results instead of being empty.
+            # Any filter/search field with value "RANDOM" → pick a real row ID from the table.
+            # Covers "ID contains" (most pages), "Offer Name" (Offer page), etc.
+            # In update_form context, RANDOM always means a filter sentinel — never a literal value.
             # ============================
-            if str(label).lower().strip() == "id contains" and str(value).strip().upper() == "RANDOM":
+            is_filter_sentinel = str(value).strip().upper() == "RANDOM"
+            if is_filter_sentinel:
                 try:
-                    resolved = page.evaluate("""
-                        () => {
-                            // Scan visible rows for a cell that looks like a game EventID:
-                            // starts with a capital letter and contains at least one underscore.
-                            // This matches "EventGacha_Jun2026_Wknd1", "RBE_something", etc.
-                            // while excluding dates, icon chars, Gate strings (lowercase), and numbers.
-                            const rows = document.querySelectorAll('tbody tr');
-                            for (const row of rows) {
-                                if (!row.offsetParent) continue;
+                    _filter_js = """
+                        (requireVisible) => {
+                            // Strict: game event ID (e.g. "RBE_Jun2026_Wknd1")
+                            const isIdLike = t => /^[A-Z][a-zA-Z]+_/.test(t);
+                            // Permissive: any non-trivial text that is not a pure number,
+                            // date string, boolean word, or very short/empty value.
+                            // Used for header-guided pass so Offer IDs like "offer_test_123"
+                            // or mixed-case names are accepted even without capital+underscore.
+                            const isUsable = t =>
+                                t.length > 2 &&
+                                !/^\\d+$/.test(t) &&
+                                !/^\\d{1,2}\\//.test(t) &&
+                                !/^(yes|no|true|false|active|inactive|none|-)$/i.test(t);
+
+                            // Find the data table that has visible tbody rows.
+                            // Scope header query to the SAME table to avoid index mismatch
+                            // when multiple tables exist on the page.
+                            let targetTable = null;
+                            let visibleRows = [];
+                            for (const tbl of document.querySelectorAll('table')) {
+                                const rows = [...tbl.querySelectorAll('tbody tr')]
+                                    .filter(r => (requireVisible ? r.offsetParent : true)
+                                        && (r.textContent || '').trim().length > 0);
+                                if (rows.length > 0) {
+                                    targetTable = tbl;
+                                    visibleRows = rows;
+                                    break;
+                                }
+                            }
+                            if (!targetTable) return null;
+
+                            // Use .th-inner text when available (fixed-header tables duplicate
+                            // content via .fht-cell div — textContent of th would include both).
+                            const getHeaderText = th => {
+                                const inner = th.querySelector('.th-inner');
+                                return ((inner ? inner.textContent : th.textContent) || '').trim();
+                            };
+
+                            const headers = [...targetTable.querySelectorAll('thead th, thead td')];
+                            const primaryCols = headers
+                                .map((th, i) => ({i, t: getHeaderText(th).toLowerCase()}))
+                                .filter(h =>
+                                    (h.t.includes('id') || h.t.includes('name')) &&
+                                    !h.t.includes('alternative') &&
+                                    !h.t.includes('cost') &&
+                                    !h.t.includes('gate') &&
+                                    !h.t.includes('type') &&
+                                    !h.t.includes('check') &&
+                                    !h.t.includes('mail') &&
+                                    !h.t.includes('promo') &&
+                                    !h.t.includes('vip')
+                                )
+                                .map(h => h.i);
+
+                            // Pass 1: header-guided — permissive match (Offer IDs may not
+                            // follow the strict capital+underscore game-event-ID format)
+                            for (const row of visibleRows) {
+                                const cells = row.querySelectorAll('td');
+                                for (const ci of primaryCols) {
+                                    const text = (cells[ci] ? cells[ci].textContent : '').trim();
+                                    if (isUsable(text)) return text.substring(0, 60);
+                                }
+                            }
+
+                            // Pass 2: cols 1-4, strict pattern (skip col 0 = checkbox)
+                            for (const row of visibleRows) {
+                                const cells = row.querySelectorAll('td');
+                                for (let i = 1; i < Math.min(cells.length, 5); i++) {
+                                    const text = (cells[i].textContent || '').trim();
+                                    if (isIdLike(text)) return text.substring(0, 60);
+                                }
+                            }
+
+                            // Pass 3: full scan fallback, strict pattern
+                            for (const row of visibleRows) {
                                 const cells = row.querySelectorAll('td');
                                 for (let i = 0; i < cells.length; i++) {
                                     const text = (cells[i].textContent || '').trim();
-                                    if (/^[A-Z][a-zA-Z]+_/.test(text)) {
-                                        return text.substring(0, 40);
-                                    }
+                                    if (isIdLike(text)) return text.substring(0, 60);
                                 }
                             }
                             return null;
                         }
-                    """)
+                    """
+                    # The data table is usually still loading (AJAX) when we
+                    # arrive from navigation. Clear spinners + wait for rows
+                    # BEFORE reading a row ID, otherwise we resolve to "".
+                    _wait_long = getattr(self, "_wait_for_long_loading", None)
+                    _wait_rows = getattr(self, "wait_for_table_data", None)
+                    if callable(_wait_long):
+                        try:
+                            _wait_long(page)
+                        except Exception:
+                            pass
+                    # Retry: alternate waiting for rows with the JS resolve.
+                    resolved = None
+                    for _attempt in range(5):
+                        if callable(_wait_rows):
+                            try:
+                                _wait_rows(page, timeout=8)
+                            except Exception:
+                                pass
+                        resolved = page.evaluate(_filter_js, True)
+                        if resolved:
+                            break
+                        page.wait_for_timeout(1500)
+                    # Last resort: read rows ignoring strict visibility (handles
+                    # tables whose rows briefly report offsetParent === null).
+                    if not resolved:
+                        resolved = page.evaluate(_filter_js, False)
                     if resolved:
                         value = resolved
                         print(f"         🎲 RANDOM filter resolved → '{value}'")
@@ -149,6 +241,22 @@ class FormCoreMixin:
                         value = ""
                 except Exception as _re:
                     print(f"         ⚠️ RANDOM filter resolve failed: {_re}")
+
+            # FILTER SENTINEL: fill the page's filter/search box directly.
+            # The box label varies per page ("ID contains", "Offer Name", ...),
+            # so find it structurally (Filter Results bar) instead of by the
+            # AI-provided label. This makes "Filter ... bất kỳ" work on every page.
+            if is_filter_sentinel:
+                try:
+                    if self._fill_page_filter_box(page, value):
+                        print(f"         ✅ Filter box filled with '{value}'")
+                        continue
+                    print(
+                        "         ⚠️ Dedicated filter box not found — "
+                        "falling back to label-based search"
+                    )
+                except Exception as _fb_err:
+                    print(f"         ⚠️ Filter box fill error: {_fb_err}")
 
             # Strip contextual location suffix added by AI:
             # "Gate in Chapter Info" → "Gate", "Gate trong Chapter Info" → "Gate"
@@ -613,6 +721,112 @@ class FormCoreMixin:
                             pass
             except Exception as e:
                 print(f"         ❌ Error filling '{label}': {e}")
+
+    def _fill_page_filter_box(self, page, value):
+        """
+        Find and fill the page's filter/search text box structurally, regardless
+        of its visible label. Every Brick list page has a "Filter Results" bar
+        with a text input (labeled "ID contains" on most pages, sometimes other
+        labels) next to a "Filter Data" / "Filter" button.
+
+        Returns True if a box was found and filled, else False.
+
+        DOM reality (Offer Section): the filter is a plain GET form where the
+        label "ID contains:" is a RAW TEXT NODE right before its <input>, and
+        the Gate <select> is enhanced to a select2/chosen widget that injects
+        its OWN search <input>. So we must (a) read preceding text nodes — not
+        just element text — to locate the "contains" input, and (b) hard-exclude
+        any input that lives inside a dropdown widget (Gate), otherwise we type
+        the row ID into the Gate search box.
+
+        Scoring (highest wins):
+          +100  preceding text / label / name / placeholder mentions "contains"
+          + 40  preceding text mentions "id" (e.g. "ID contains:")
+          + 20  shares a <form>/container with a visible "Filter" button
+        Candidates inside select2/chosen/multiselect/dropdown wrappers are
+        discarded entirely. Filled via JS input/change/keyup events.
+        """
+        sel = page.evaluate(
+            """
+            (val) => {
+                const vis = el => el && el.offsetParent !== null
+                    && !el.disabled && !el.readOnly;
+                const isText = el => el.tagName === 'INPUT'
+                    && (!el.type || /^(text|search)$/i.test(el.type));
+                // Inputs injected by dropdown widgets (the Gate select2/chosen).
+                const inDropdownWidget = el => !!el.closest(
+                    '.select2-container, .select2, .chosen-container, '
+                    + '.multiselect, .vue-treeselect, .dropdown-menu, .ts-wrapper'
+                );
+
+                // Text immediately preceding the input (incl. raw text nodes).
+                const precedingText = el => {
+                    let txt = '';
+                    let n = el.previousSibling, hops = 0;
+                    while (n && hops < 8 && txt.length < 80) {
+                        txt = ((n.textContent || '') + ' ' + txt);
+                        n = n.previousSibling; hops++;
+                    }
+                    // include any leading text of the parent if still thin
+                    if (txt.trim().length < 3 && el.parentElement) {
+                        txt = (el.parentElement.textContent || '') + ' ' + txt;
+                    }
+                    return txt.toLowerCase().replace(/\\s+/g, ' ').trim();
+                };
+
+                const mark = el => {
+                    el.setAttribute('data-autogameops-filter', '1');
+                    el.focus();
+                    el.value = val;
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'a'}));
+                    return true;
+                };
+
+                // Visible "Filter" buttons → their forms/containers (for scoring).
+                const filterBtns = [...document.querySelectorAll(
+                    'button, a.btn, input[type=button], input[type=submit]')]
+                    .filter(b => /filter/i.test((b.textContent || b.value || '')) && vis(b));
+                const sharesFilterContainer = inp => filterBtns.some(b => {
+                    const f = inp.closest('form');
+                    if (f && f.contains(b)) return true;
+                    let c = inp.parentElement;
+                    for (let h = 0; h < 4 && c; h++) { if (c.contains(b)) return true; c = c.parentElement; }
+                    return false;
+                });
+
+                let best = null, bestScore = -1;
+                for (const inp of document.querySelectorAll('input')) {
+                    if (!vis(inp) || !isText(inp) || inDropdownWidget(inp)) continue;
+                    const pre = precedingText(inp);
+                    const meta = ((inp.name || '') + ' ' + (inp.id || '')
+                        + ' ' + (inp.placeholder || '')
+                        + ' ' + (inp.getAttribute('aria-label') || '')).toLowerCase();
+                    let score = 0;
+                    if (pre.includes('contains') || meta.includes('contains')) score += 100;
+                    if (/\\bid\\b/.test(pre) || /\\bid\\b/.test(meta)) score += 40;
+                    if (sharesFilterContainer(inp)) score += 20;
+                    // A bare unlabeled box in the filter bar still beats nothing.
+                    if (score === 0 && sharesFilterContainer(inp)) score = 5;
+                    if (score > bestScore) { bestScore = score; best = inp; }
+                }
+                if (best && bestScore > 0) return mark(best);
+                return false;
+            }
+            """,
+            value,
+        )
+        if not sel:
+            return False
+        # Confirm via Playwright (keeps state coherent with the rest of the loop).
+        try:
+            loc = page.locator("[data-autogameops-filter='1']").first
+            if loc.count() > 0:
+                loc.evaluate("el => el.removeAttribute('data-autogameops-filter')")
+        except Exception:
+            pass
+        return True
 
     def _main_form_scope(self, page):
         """Main content area — excludes left sidebar nav."""

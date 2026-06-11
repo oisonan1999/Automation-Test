@@ -19,11 +19,14 @@ from .deployment_fixers import (
     _inject_missing_checkbox_before_download,
     _auto_infer_deployment_options,
     _merge_process_deployment_steps,
+    _inject_missing_final_deployment,
 )
 from .clone_fixers import (
     _remove_download_before_edit_row,
+    _remove_edit_row_before_checkbox,
     _fix_pve_clone_chapter,
     _fix_rbe_clone_field_name,
+    _fix_clone_modal_new_prefix_fields,
     _fix_id_only_update_to_edit_row,
     _remove_click_after_clone_save,
     _inject_missing_clone_row,
@@ -33,6 +36,8 @@ from .clone_fixers import (
 from .form_fixers import (
     _merge_consecutive_update_save,
     _merge_pve_css_update_steps,
+    _fix_rbe_type_modal_continue,
+    _fix_offer_filter_field,
 )
 
 
@@ -260,6 +265,21 @@ def fix_action_plan(plan, user_command=""):
             if not step.get("value") and last_filename:
                 step["value"] = last_filename
                 print(f"   🔧 AUTO-FIX: Reused filename '{last_filename}' for upload")
+            # Drop/fix spurious upload steps where value is not a real .csv filename.
+            # AI often treats the testcase phrase as a filename:
+            # e.g. "Import the Gacha Weight CSV" → value="Gacha Weight CSV" (no extension).
+            # Real filenames always end with ".csv".
+            _upload_val = str(step.get("value", "")).strip()
+            if _upload_val and not _upload_val.lower().endswith(".csv"):
+                if last_filename:
+                    # For download→upload patterns (e.g. RBE tasks), reuse the
+                    # preceding download filename instead of the AI-invented name.
+                    print(f"   🔧 AUTO-FIX: upload value '{_upload_val}' not a .csv → reused last filename '{last_filename}'")
+                    step["value"] = last_filename
+                else:
+                    # No prior download to reuse — this is a fully spurious step, drop it.
+                    print(f"   🔧 FILTER: Dropping spurious upload — value '{_upload_val}' is not a .csv filename")
+                    continue
 
         elif action == "smart_test_cycle":
             # Fix: {file: "x.csv"} → {value: "x.csv"}
@@ -415,6 +435,25 @@ def fix_action_plan(plan, user_command=""):
                         f"   🔧 AUTO-FIX: {action}('{tgt or 'empty'}') → {action}('RANDOM') (random row mode)"
                     )
 
+            # AI sometimes uses navigation page name as the clone/edit target
+            # (e.g. clone_row(target="Offer Section") when it should be RANDOM).
+            # Row IDs are never plain page-nav names → safe to normalize.
+            elif tgt and step.get("target") not in ("RANDOM", ""):
+                _nav_page_names: set = set()
+                for _prev in fixed_plan:
+                    if _prev.get("action") == "navigate":
+                        _path = _prev.get("path", [])
+                        if isinstance(_path, list):
+                            _nav_page_names.update(s.lower().strip() for s in _path)
+                        elif isinstance(_path, str):
+                            _nav_page_names.add(_path.lower().strip())
+                if tgt in _nav_page_names:
+                    old_tgt = step.get("target")
+                    step["target"] = contain_token if contain_token else "RANDOM"
+                    print(
+                        f"   🔧 AUTO-FIX: {action}('{old_tgt}') target is navigation page name → {step['target']}"
+                    )
+
         elif action == "navigate":
             # Fix: {menu: [...]} → {path: [...]}
             if "menu" in step and "path" not in step:
@@ -548,6 +587,14 @@ def fix_action_plan(plan, user_command=""):
     fixed_plan = _inject_missing_checkbox_before_download(fixed_plan, user_command)
 
     # ============================================================
+    # STEP 3f: Remove spurious edit_row(RANDOM) before checkbox
+    # Must run AFTER 3e so checkbox exists regardless of whether AI or
+    # the injector added it. AI confuses "Chọn N ID bất kỳ" (→ checkbox)
+    # with "Sửa bất kỳ" (→ edit_row).
+    # ============================================================
+    fixed_plan = _remove_edit_row_before_checkbox(fixed_plan)
+
+    # ============================================================
     # STEP 4: Merge consecutive process_deployment-related actions
     # Pattern: click_logo → select_checkbox(Offers) → click_button(Process)
     # Should become: process_deployment(options=["Offers"])
@@ -594,6 +641,13 @@ def fix_action_plan(plan, user_command=""):
     merged_plan = _fix_rbe_clone_field_name(merged_plan, user_command)
 
     # ============================================================
+    # STEP 7b2: NORMALIZE "New X" → "X" in clone modal fields
+    # AI uses "New Section ID" (matching test-case text) but the
+    # Offer Section clone modal's DOM label is just "Section ID".
+    # ============================================================
+    merged_plan = _fix_clone_modal_new_prefix_fields(merged_plan, user_command)
+
+    # ============================================================
     # STEP 7c: CONVERT single-ID update_form → edit_row
     # When AI generates update_form({*ID: value}) on a list page
     # (no preceding edit_row/clone_row), it means "filter & edit
@@ -626,12 +680,37 @@ def fix_action_plan(plan, user_command=""):
     merged_plan = _merge_pve_css_update_steps(merged_plan)
 
     # ============================================================
+    # STEP 8c: Fix RBE type-selection modal: save_form → click("Continue")
+    # Pattern: update_form({"Radio: Solo": "select"}) → save_form
+    # The modal has a "Continue" button, not Save. AI always generates save_form here.
+    # ============================================================
+    merged_plan = _fix_rbe_type_modal_continue(merged_plan)
+
+    # ============================================================
+    # STEP 8d: Normalize page-filter field name → canonical "ID contains"
+    # Every filter page (Offer, Offer Section, PVE, RBE, Gacha, ...) uses the
+    # SAME "ID contains" search box. AI sometimes emits per-page labels like
+    # "Offer Name". Value-based (RANDOM sentinel) so real multi-value filters
+    # (e.g. Boost Result Value2 = "Red") are untouched.
+    # ============================================================
+    merged_plan = _fix_offer_filter_field(merged_plan)
+
+    # ============================================================
     # STEP 9: Remove redundant click step after save_form(mode=clone)
     # Pattern: save_form(clone) → click("Create book and Open in V2")
     # _save_form(mode="clone") already clicks the clone submit button,
     # so the extra click is a duplicate that can cause unexpected navigation.
     # ============================================================
     merged_plan = _remove_click_after_clone_save(merged_plan)
+
+    # ============================================================
+    # STEP 10: INJECT missing final process_deployment
+    # Every test case ends with "Bấm vào logo The Brick". If the AI dropped it
+    # and the plan doesn't already end with process_deployment, append
+    # process_deployment(options=[]) so the run navigates home / closes cleanly.
+    # Runs LAST so it sees the fully merged plan shape.
+    # ============================================================
+    merged_plan = _inject_missing_final_deployment(merged_plan, user_command)
 
     if len(merged_plan) != len(plan):
         print(
@@ -653,9 +732,12 @@ __all__ = [
     "_inject_missing_checkbox_before_download",
     "_auto_infer_deployment_options",
     "_merge_process_deployment_steps",
+    "_inject_missing_final_deployment",
     "_remove_download_before_edit_row",
+    "_remove_edit_row_before_checkbox",
     "_fix_pve_clone_chapter",
     "_fix_rbe_clone_field_name",
+    "_fix_clone_modal_new_prefix_fields",
     "_fix_id_only_update_to_edit_row",
     "_remove_click_after_clone_save",
     "_inject_missing_clone_row",
