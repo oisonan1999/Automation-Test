@@ -71,6 +71,11 @@ Example 10:
 Input: "Export perk_test.csv -> Smart test -> Import -> Chọn checkbox Perks -> Bấm Process"
 Output: [{{"action":"download","target":"Export CSV","value":"perk_test.csv"}},{{"action":"smart_test_cycle","value":"perk_test.csv"}},{{"action":"upload","target":"Import CSV","value":"perk_test.csv"}},{{"action":"process_deployment","options":["Perks"]}}]
 
+Example 10c (STANDALONE PAGE-LEVEL IMPORT - no Export, no edit):
+Input: "Vào PVE -> Import CSV file Book_test.csv -> Bấm vào logo The Brick"
+Output: [{{"action":"navigate","path":["Live Events","PVE","Classic PVE"]}},{{"action":"upload","target":"Import CSV","value":"Book_test.csv"}},{{"action":"process_deployment","options":[]}}]
+RULE for Example 10c: "Import CSV file <name>" on a list page (no preceding Export, no edit_row) is a SINGLE page-level import → exactly ONE {{"action":"upload","target":"Import CSV","value":"<name>"}}. NEVER emit "import_csv" or "process_import" (INVALID actions). NEVER repeat the import step — emit it ONCE only.
+
 Example 11:
 Input: "Click logo The Brick -> Chọn Gacha Events -> Process"
 Output: [{{"action":"process_deployment","options":["Gacha Events"]}}]

@@ -274,6 +274,12 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
             "temperature": 0.0,  # 0.0 = hoàn toàn deterministic → JSON nhất quán hơn qua nhiều lần gọi
             "num_ctx": 20480,  # ⬆️ Tăng từ 12288: prompt eval thực tế ~12258 tokens → cần buffer ~8k cho output
             "num_predict": 2048,  # ✅ Giảm từ 4096: JSON output thực tế không bao giờ vượt 1500 tokens
+            # Anti-degeneration: greedy decoding (temp=0) can lock into an infinite
+            # repetition loop (e.g. the model emitting the same {"action":...} object
+            # 50+ times). repeat_penalty over a short window breaks the loop while
+            # leaving genuinely-varied multi-step JSON untouched.
+            "repeat_penalty": 1.2,
+            "repeat_last_n": 64,
             "num_gpu": 99,
             "num_batch": 2048,
             "flash_attn": True,
@@ -284,6 +290,10 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
             "temperature": 0.0,
             "num_ctx": 6144,    # ⬇️ Từ 12288: prompt thực tế ~1750 tokens max → KV cache nhỏ hơn 2x → ~30-40% nhanh hơn
             "num_predict": 1200, # ⬇️ Từ 1500: JSON output không bao giờ vượt 1000 tokens
+            # Anti-degeneration: see formatting-phase note above — breaks the greedy
+            # repetition loop that produced 50× duplicated import steps.
+            "repeat_penalty": 1.2,
+            "repeat_last_n": 64,
             "num_gpu": 99,
             "num_batch": 2048,
             "flash_attn": True,

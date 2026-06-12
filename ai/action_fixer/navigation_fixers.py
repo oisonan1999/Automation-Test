@@ -1,5 +1,6 @@
 # ai/action_fixer/navigation_fixers.py - split from action_fixer.py
 # Navigation path resolution / merge / inject initial navigate
+import re
 from ._constants import (
     DEPLOYMENT_KEYWORDS,
     PAGE_TAB_NAMES,
@@ -298,5 +299,79 @@ def _merge_navigate_steps(plan):
             i += 1
 
     return merged
+
+
+# Filename-with-extension token, e.g. "Book_test.csv" inside a click target.
+_FILENAME_IN_TEXT_RE = re.compile(
+    r"\b[\w\-]+\.(?:csv|xlsx|xls|json|txt)\b", re.IGNORECASE
+)
+
+
+def _remove_spurious_instruction_clicks(plan):
+    """
+    The model sometimes duplicates an import/export instruction into BOTH the
+    correct upload/download step AND a bogus click whose target is the raw
+    instruction text, e.g. {"action":"click","target":"Import CSV file Book_test.csv"}.
+    A real button label never contains a data filename (".csv"/".xlsx"/...), so
+    any click target carrying such a filename is the misparsed instruction → drop it.
+    """
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    result = []
+    for step in plan:
+        if step.get("action") == "click":
+            target = str(step.get("target") or "")
+            if _FILENAME_IN_TEXT_RE.search(target):
+                print(
+                    f"   🔧 REMOVE SPURIOUS CLICK: target '{target}' is an "
+                    f"import/export instruction, not a button"
+                )
+                continue
+        result.append(step)
+    return result
+
+
+def _remove_redundant_duplicate_navigate(plan):
+    """
+    Drop a navigate step whose path duplicates an EARLIER navigate already in the
+    plan when nothing in between left that page (no edit_row/clone_row). The model
+    occasionally re-navigates to the same list page mid-flow (e.g. after an
+    upload), which reloads the page and can discard the just-done action.
+
+    A navigate IS kept if an edit_row/clone_row occurred since the last navigate
+    to that path — that flow legitimately returns to the list view.
+    """
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    def _path_key(step):
+        path = step.get("path")
+        if isinstance(path, list):
+            segs = path
+        elif isinstance(path, str):
+            segs = [path]
+        else:
+            segs = [step.get("target", "")]
+        return tuple(str(s).strip().lower() for s in segs if str(s).strip())
+
+    result = []
+    seen_paths = set()
+    left_page_since_nav = False  # an edit_row/clone_row happened after last nav
+    for step in plan:
+        action = step.get("action")
+        if action == "navigate":
+            key = _path_key(step)
+            if key and key in seen_paths and not left_page_since_nav:
+                print(
+                    f"   🔧 REMOVE REDUNDANT NAVIGATE: already on path {list(key)}"
+                )
+                continue
+            seen_paths.add(key)
+            left_page_since_nav = False
+        elif action in ("edit_row", "clone_row"):
+            left_page_since_nav = True
+        result.append(step)
+    return result
 
 

@@ -38,6 +38,28 @@ class DeploymentMixin:
                 except Exception:
                     pass
 
+                # Close any open Bootstrap modal + leftover backdrop. An edit modal left
+                # open (e.g. Offer Section "Sửa ID vừa clone" opens a modal, URL stays on
+                # /offers/section/) sits ON TOP of the navbar logo and SWALLOWS the logo
+                # click → page never navigates Home → wait_for "Process Blueprints" times out.
+                try:
+                    page.keyboard.press("Escape")
+                    page.evaluate("""
+                        () => {
+                            document.querySelectorAll('.modal.show, .modal.in').forEach(m => {
+                                m.classList.remove('show', 'in');
+                                m.style.display = 'none';
+                            });
+                            document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+                            document.body.classList.remove('modal-open');
+                            document.body.style.overflow = '';
+                            document.body.style.paddingRight = '';
+                        }
+                    """)
+                    time.sleep(0.3)
+                except Exception:
+                    pass
+
                 print("      🏠 Navigating to Home page...")
                 logo = page.locator(".brand-link, .logo, a.navbar-brand").first
                 if not logo.is_visible():
@@ -51,7 +73,21 @@ class DeploymentMixin:
                     logo.click()
                     print("      ⏳ Waiting for Home page to load (5-10s)...")
                     time.sleep(7)
-                    page.wait_for_selector("text=Process Blueprints", timeout=10000)
+                    try:
+                        page.wait_for_selector("text=Process Blueprints", timeout=10000)
+                    except Exception:
+                        # Logo click didn't reach Home (intercepted / preventDefault /
+                        # stale form navigation). Fall back to a direct goto of the site root.
+                        print("      ↩️ Logo click didn't reach Home — navigating to site root directly...")
+                        try:
+                            origin = page.evaluate("location.origin")
+                        except Exception:
+                            origin = None
+                        if not origin:
+                            raise
+                        page.goto(origin + "/", wait_until="domcontentloaded")
+                        self._wait_for_long_loading(page)
+                        page.wait_for_selector("text=Process Blueprints", timeout=10000)
                     print("      ✅ Navigated to Home page")
                 else:
                     raise Exception("Cannot find The Brick logo to navigate home")

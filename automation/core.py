@@ -374,6 +374,7 @@ class BrickAutomation(
                     "export": "download",
                     "import_csv": "upload",
                     "import": "upload",
+                    "process_import": "upload",
                     "click_logo": "process_deployment",
                     "click_logo_the_brick": "process_deployment",
                     "click_the_brick": "process_deployment",
@@ -782,10 +783,26 @@ class BrickAutomation(
                                         btn.click()
                                     else:
                                         btn.evaluate("el=>el.click()")
+                                # Resolve the save filename robustly. The AI sometimes puts the
+                                # filename in `target` instead of `value` (e.g. download ->
+                                # "Book_test.csv" with empty value). An empty save name makes
+                                # os.path.join(DOWNLOAD_DIR, "") resolve to the directory itself →
+                                # save_as() raises "[Errno 21] Is a directory". Fall back to a
+                                # filename-shaped target, then the browser's suggested filename.
+                                _data_exts = (".csv", ".xlsx", ".xls", ".json", ".txt")
+                                save_name = (val or "").strip()
+                                if not save_name:
+                                    if str(tgt or "").strip().lower().endswith(_data_exts):
+                                        save_name = str(tgt).strip()
+                                    else:
+                                        save_name = (
+                                            dl.value.suggested_filename or "download.csv"
+                                        )
+
                                 # IMPORTANT: Some UI actions (esp. Import CSV) may trigger temp downloads
                                 # like "*_imported.csv" and "*_report_*.csv". We must NOT persist them
                                 # into DOWNLOAD_DIR, otherwise user sees "imported/report" artifacts.
-                                filename_lower = str(val or "").lower()
+                                filename_lower = save_name.lower()
                                 tgt_lower = str(tgt or "").lower()
 
                                 is_temp_artifact = any(
@@ -803,17 +820,19 @@ class BrickAutomation(
                                         {
                                             "step": "Download",
                                             "status": "SKIP",
-                                            "details": f"Discarded temp download: {val}",
+                                            "details": f"Discarded temp download: {save_name}",
                                         }
                                     )
                                     # Do not save_as into DOWNLOAD_DIR
                                 else:
-                                    dl.value.save_as(os.path.join(DOWNLOAD_DIR, val))
+                                    dl.value.save_as(
+                                        os.path.join(DOWNLOAD_DIR, save_name)
+                                    )
                                     report_logs.append(
                                         {
                                             "step": "Download",
                                             "status": "PASS",
-                                            "details": val,
+                                            "details": save_name,
                                         }
                                     )
                             else:

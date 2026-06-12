@@ -71,6 +71,66 @@ def _inject_missing_checkbox_before_download(plan, user_command=""):
     return result
 
 
+def _dedup_consecutive_identical_steps(plan):
+    """
+    Safety net against model degeneration: greedy decoding can lock into a loop
+    and emit the SAME step dozens of times (e.g. 50× upload of the same CSV →
+    50 file-chooser dialogs that block the run). Collapse runs of byte-identical
+    consecutive steps down to a single occurrence. Only EXACT duplicates are
+    removed, so legitimate repeated-but-different steps (two waits, two clicks on
+    different targets) are preserved.
+    """
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    import json as _json
+
+    result = []
+    prev_key = object()  # sentinel — never equals a real step
+    removed = 0
+    for step in plan:
+        try:
+            key = _json.dumps(step, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            key = repr(step)
+        if key == prev_key:
+            removed += 1
+            continue
+        result.append(step)
+        prev_key = key
+    if removed:
+        print(f"   🔧 DEDUP: removed {removed} duplicate consecutive step(s)")
+    return result
+
+
+def _fix_download_filename_in_target(plan):
+    """
+    Normalize download/upload steps where the AI put the data filename in
+    `target` (the button name slot) and left `value` empty — e.g.
+    {"action": "download", "target": "Book_test.csv"}. The executor saves using
+    `value`; an empty value makes save_as() resolve to the downloads/ directory →
+    "[Errno 21] Is a directory". Move the filename into `value` and default the
+    button target to Export CSV / Import CSV.
+    """
+    if not plan:
+        return plan
+
+    _exts = (".csv", ".xlsx", ".xls", ".json", ".txt")
+    for step in plan:
+        if step.get("action") not in ("download", "upload"):
+            continue
+        value = str(step.get("value") or "").strip()
+        target = str(step.get("target") or "").strip()
+        if not value and target.lower().endswith(_exts):
+            step["value"] = target
+            step["target"] = (
+                "Export CSV" if step["action"] == "download" else "Import CSV"
+            )
+            print(
+                f"   🔧 FIX DOWNLOAD FILENAME: moved '{target}' from target → value "
+                f"(target='{step['target']}')"
+            )
+    return plan
 
 
 def _auto_infer_deployment_options(plan, user_command=""):

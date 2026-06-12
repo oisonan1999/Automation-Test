@@ -13,10 +13,14 @@ from .navigation_fixers import (
     _resolve_navigation_paths,
     _remove_invalid_navigate_to_tabs,
     _merge_navigate_steps,
+    _remove_spurious_instruction_clicks,
+    _remove_redundant_duplicate_navigate,
 )
 from .deployment_fixers import (
     _strip_invalid_deploy_options,
     _inject_missing_checkbox_before_download,
+    _dedup_consecutive_identical_steps,
+    _fix_download_filename_in_target,
     _auto_infer_deployment_options,
     _merge_process_deployment_steps,
     _inject_missing_final_deployment,
@@ -52,6 +56,10 @@ def fix_action_plan(plan, user_command=""):
     """
     if not plan or not isinstance(plan, list):
         return plan
+
+    # Safety net FIRST: collapse model-degeneration loops (e.g. the same import
+    # step emitted 50×) before any other fixer reasons about the plan shape.
+    plan = _dedup_consecutive_identical_steps(plan)
 
     fixed_plan = []
     last_filename = None  # Track filename for reuse
@@ -580,11 +588,47 @@ def fix_action_plan(plan, user_command=""):
     fixed_plan = _inject_missing_initial_navigate(fixed_plan, user_command)
 
     # ============================================================
+    # STEP 3d.5: Re-normalize clone_row/edit_row targets that are navigation
+    # page names but were missed in the main loop because the navigate step
+    # was injected AFTER the loop (by _inject_missing_initial_navigate above).
+    # ============================================================
+    _post_inject_nav_names: set = set()
+    for _s in fixed_plan:
+        if _s.get("action") == "navigate":
+            _path = _s.get("path", [])
+            if isinstance(_path, list):
+                _post_inject_nav_names.update(seg.lower().strip() for seg in _path)
+            elif isinstance(_path, str):
+                _post_inject_nav_names.add(_path.lower().strip())
+    for _s in fixed_plan:
+        if _s.get("action") in ("clone_row", "edit_row"):
+            _tgt = str(_s.get("target", "")).lower().strip()
+            if _tgt and _tgt != "random" and _tgt in _post_inject_nav_names:
+                _old_tgt = _s["target"]
+                _s["target"] = contain_token if contain_token else "RANDOM"
+                print(
+                    f"   🔧 AUTO-FIX: {_s['action']}('{_old_tgt}') target is nav page name (post-inject) → {_s['target']}"
+                )
+
+    # ============================================================
+    # STEP 3d.6: Remove model-hallucinated redundant steps
+    # The model sometimes duplicates an import/export instruction into a bogus
+    # click on the raw instruction text and/or re-navigates to a page it's
+    # already on. Both run AFTER navigate resolution/merge so paths are full.
+    # ============================================================
+    fixed_plan = _remove_spurious_instruction_clicks(fixed_plan)
+    fixed_plan = _remove_redundant_duplicate_navigate(fixed_plan)
+
+    # ============================================================
     # STEP 3e: INJECT missing checkbox before download
     # If command says "Chọn N ID bất kỳ -> Export CSV" but AI skipped
     # the checkbox step, inject checkbox(random_N) before download.
     # ============================================================
     fixed_plan = _inject_missing_checkbox_before_download(fixed_plan, user_command)
+
+    # Normalize download/upload steps where the filename landed in `target`
+    # instead of `value` (empty value → save_as on the downloads/ dir crashes).
+    fixed_plan = _fix_download_filename_in_target(fixed_plan)
 
     # ============================================================
     # STEP 3f: Remove spurious edit_row(RANDOM) before checkbox
@@ -728,8 +772,12 @@ __all__ = [
     "_resolve_navigation_paths",
     "_remove_invalid_navigate_to_tabs",
     "_merge_navigate_steps",
+    "_remove_spurious_instruction_clicks",
+    "_remove_redundant_duplicate_navigate",
     "_strip_invalid_deploy_options",
     "_inject_missing_checkbox_before_download",
+    "_dedup_consecutive_identical_steps",
+    "_fix_download_filename_in_target",
     "_auto_infer_deployment_options",
     "_merge_process_deployment_steps",
     "_inject_missing_final_deployment",

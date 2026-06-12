@@ -1093,7 +1093,23 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                 )
 
             feature_key = str(feature).strip()
-            _raw_id = st.session_state.smoke_last_created_id_by_feature.get(feature_key)
+            # Prefer a more specific sub-feature key over the CSV feature column.
+            # E.g. "Edit an Offer Section" is under CSV feature "Offer", but the
+            # correct last ID lives under the "Offer Section" key. Longest case-
+            # insensitive match in the command wins.
+            _ids_dict = st.session_state.smoke_last_created_id_by_feature
+            _best_key = feature_key
+            for _k in _ids_dict:
+                if (
+                    len(_k) > len(_best_key)
+                    and _k.lower() in case_command.lower()
+                    and _ids_dict[_k]
+                ):
+                    _best_key = _k
+            if _best_key != feature_key:
+                print(f"   🔁 Sub-feature override: '{feature_key}' → '{_best_key}' (matched in command)")
+                feature_key = _best_key
+            _raw_id = _ids_dict.get(feature_key)
             if isinstance(_raw_id, list):
                 last_created_id = _raw_id[-1] if _raw_id else None
             else:

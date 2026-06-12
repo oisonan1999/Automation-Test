@@ -458,7 +458,17 @@ class TableRowsMixin:
             except Exception as e:
                 raise Exception(f"Random row selection failed: {e}")
 
+        # Uncheck "Hide LiveopsTest gate items" if present, THEN search.
+        # For AJAX-driven tables the uncheck triggers a table reload (spinners appear);
+        # _wait_for_long_loading waits until the reload settles so the target row is
+        # visible on page 1 (recently-created rows are sorted newest-first).
         self._ensure_liveoptest_items_visible(page)
+        if hasattr(self, "_wait_for_long_loading"):
+            try:
+                self._wait_for_long_loading(page)
+            except Exception:
+                pass
+
         print(f"   🔎 Tìm dòng '{target_text}' để {action_type}...")
 
         js_script = """

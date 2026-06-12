@@ -162,6 +162,20 @@ class UploadHandlerMixin:
         try:
             btn = None
 
+            # Wait for any post-Export loading spinner to clear BEFORE locating the
+            # Import control. On pages like Gacha Pool, exporting leaves a spinner up
+            # while the table re-renders; if we run now the hidden input[type='file']
+            # isn't in the DOM yet, so btn falls through to the plain "Import CSV"
+            # submit button. Clicking that opens the native OS file dialog LATE (after
+            # expect_file_chooser already timed out) → the dialog blocks the whole run.
+            # Settling first lets the file-input path (set_input_files, no native
+            # dialog) be taken instead.
+            if hasattr(self, "_wait_for_long_loading"):
+                try:
+                    self._wait_for_long_loading(page, timeout_ms=15000)
+                except Exception:
+                    pass
+
             # Chapter Import UI requires:
             # 1) Click/select file in custom-file input[type='file']
             # 2) THEN click submit button "Import CSV"
@@ -414,14 +428,25 @@ class UploadHandlerMixin:
             except Exception as e:
                 print(f"   ⚠️ JS injection failed: {e}")
 
-            # 2. Upload File (reduced timeout)
+            # 2. Upload File
             try:
                 if btn.get_attribute("type") == "file":
                     btn.set_input_files(full_path)
                 else:
-                    with page.expect_file_chooser(timeout=3000) as fc_info:
-                        btn.click()
-                    fc_info.value.set_files(full_path)
+                    # Prefer a hidden file input if one exists now (the spinner has
+                    # cleared by this point) — set_input_files never opens the native
+                    # OS dialog, so it can't time out or block the run.
+                    file_input = page.locator("input[type='file']").first
+                    if file_input.count() > 0:
+                        file_input.set_input_files(full_path)
+                    else:
+                        # Fallback: click the trigger and catch the OS file chooser.
+                        # 8s (was 3s) — clicks right after a heavy page render can take
+                        # >3s for the chooser event to fire; a too-short timeout left
+                        # the native dialog open and blocking.
+                        with page.expect_file_chooser(timeout=8000) as fc_info:
+                            btn.click()
+                        fc_info.value.set_files(full_path)
                 time.sleep(0.3)  # Reduced from 0.5s
 
                 # If this is the Chapter Import UI, click the submit button after file is set
