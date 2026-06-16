@@ -9,6 +9,7 @@ __pycache__/
 .streamlit/
 .obsidian/
 .claude/
+.vscode/
 *.pyc
 downloads/
 # ===== NodeJS =====

@@ -1066,7 +1066,19 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
             )
 
             if steps:
-                case_command = f"{label}. {exec_steps}"
+                # IMPORTANT: do NOT prepend `label` to the command sent to the AI.
+                # CSV format is "<label>: <steps>" where label is a human-readable
+                # title (e.g. "Import the Gacha Pool CSV") meant only for the UI
+                # dropdown/status display. Titles are almost always imperative verb
+                # phrases ("Import ...", "Clone ...", "Edit ..."), so when prepended
+                # they read just like another "-> step" to the LLM — it then
+                # hallucinates a SPURIOUS extra action from the title itself (e.g. an
+                # "upload: Gacha Pool CSV" step right after navigate, before the real
+                # upload step later in `steps`), which fails at runtime ("Button not
+                # found") and marks the whole case FAIL even though every real step
+                # passed. `exec_steps` already starts with its own "Vào ..." navigate,
+                # so nothing is lost by dropping the label here.
+                case_command = exec_steps
             else:
                 case_command = _build_case_command(feature, exec_steps)
 
@@ -1094,20 +1106,29 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
 
             feature_key = str(feature).strip()
             # Prefer a more specific sub-feature key over the CSV feature column.
-            # E.g. "Edit an Offer Section" is under CSV feature "Offer", but the
-            # correct last ID lives under the "Offer Section" key. Longest case-
-            # insensitive match in the command wins.
+            # E.g. "Edit an Offer Section" is under CSV feature "Offer" (because the
+            # CSV Features column is blank and forward-filled), but the correct last ID
+            # lives under the "Offer Section" key in smoke_last_ids.json.
+            # MATCH ONLY in the NAVIGATION scope — look for "Vào <key>" pattern in the
+            # testcase text. Matching anywhere in the full case_command is wrong: e.g.
+            # "Edit an Offer" contains "Offer Section: ..." as a FORM FIELD VALUE, which
+            # would incorrectly override feature_key to "Offer Section" and pull the wrong ID.
             _ids_dict = st.session_state.smoke_last_created_id_by_feature
             _best_key = feature_key
+            # Navigation scope: steps that start with "Vào" carry the actual feature target.
+            # Build a lightweight search string from "Vào X" substrings only.
+            _nav_scope = " ".join(
+                m.group(0) for m in re.finditer(r"vào\s+\S+(?:\s+\S+){0,3}", case_command, re.IGNORECASE)
+            ).lower()
             for _k in _ids_dict:
                 if (
                     len(_k) > len(_best_key)
-                    and _k.lower() in case_command.lower()
+                    and _k.lower() in _nav_scope
                     and _ids_dict[_k]
                 ):
                     _best_key = _k
             if _best_key != feature_key:
-                print(f"   🔁 Sub-feature override: '{feature_key}' → '{_best_key}' (matched in command)")
+                print(f"   🔁 Sub-feature override: '{feature_key}' → '{_best_key}' (nav-scope match)")
                 feature_key = _best_key
             _raw_id = _ids_dict.get(feature_key)
             if isinstance(_raw_id, list):

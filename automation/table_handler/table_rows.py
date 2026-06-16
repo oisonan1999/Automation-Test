@@ -523,9 +523,24 @@ class TableRowsMixin:
                     time.sleep(0.5)
         elif "Row Not Found" in result:
             if self._auto_filter_data(page, target_text):
-                result = page.evaluate(
-                    js_script, {"text": str(target_text), "action": action_type}
-                )
+                # Filtering may trigger a GET-form navigation / AJAX reload — the filtered
+                # row only appears once the table repopulates. Wait for the table and retry
+                # the icon click a few times instead of assuming the first re-eval succeeds
+                # (a single re-eval right after submit often still reads the stale list and
+                # silently returns "Row Not Found", leaving the run on the unfiltered page).
+                result = "Row Not Found"
+                for _attempt in range(6):
+                    try:
+                        if hasattr(self, "wait_for_table_data"):
+                            self.wait_for_table_data(page, timeout=3)
+                    except Exception:
+                        pass
+                    result = page.evaluate(
+                        js_script, {"text": str(target_text), "action": action_type}
+                    )
+                    if "Clicked" in result:
+                        break
+                    time.sleep(0.5)
                 # Lock check only for edit (not clone)
                 if "Clicked" in result and action_type == "edit":
                     time.sleep(1.0)
@@ -535,21 +550,40 @@ class TableRowsMixin:
                         print("      ✅ Ready to update form.")
                     else:
                         time.sleep(0.5)
+                if "Clicked" in result:
+                    return
+                # Filter applied but row still missing → fall through to the first-visible
+                # -row fallback below rather than silently returning onto the wrong page.
+                print(
+                    f"      ⚠️ Row '{target_text}' still not found after filtering."
+                )
+                if not self._fallback_first_visible_row(page, target_text, action_type):
+                    raise Exception(f"Không tìm thấy dòng '{target_text}'")
             else:
-                # Fallback: không crash job nếu không tìm thấy row target_text (đặc biệt sau khi filter/tab thay đổi).
-                # Chọn dòng visible đầu tiên và thực hiện edit/clone theo action_type.
-                try:
-                    print(
-                        f"      ⚠️ Row '{target_text}' not found. Falling back to first visible row for action='{action_type}'."
-                    )
-                    # Find first visible data row
-                    first_row = (
-                        page.locator("tbody tr")
-                        .filter(has=page.locator("button, a, [role='button']"))
-                        .first
-                    )
-                    if first_row.count() > 0 and first_row.is_visible():
-                        js_fallback = """
+                # Filter could not be applied at all → fall back to the first visible row
+                # so the job doesn't hard-crash (esp. after filter/tab changes).
+                if not self._fallback_first_visible_row(page, target_text, action_type):
+                    raise Exception(f"Không tìm thấy dòng '{target_text}'")
+
+    def _fallback_first_visible_row(self, page, target_text, action_type):
+        """Click the edit/clone action on the first visible data row.
+
+        Shared last-resort used by _click_icon_in_row when the target row can't be
+        located (filter failed, or filter applied but row still absent). Returns True
+        if a row action was clicked, False otherwise (caller raises).
+        """
+        try:
+            print(
+                f"      ⚠️ Row '{target_text}' not found. Falling back to first visible row for action='{action_type}'."
+            )
+            # Find first visible data row
+            first_row = (
+                page.locator("tbody tr")
+                .filter(has=page.locator("button, a, [role='button']"))
+                .first
+            )
+            if first_row.count() > 0 and first_row.is_visible():
+                js_fallback = """
 (e) => {
   const row = e;
   const buttons = row.querySelectorAll("button, a.btn, a[class*='btn'], [role='button']");
@@ -563,17 +597,16 @@ class TableRowsMixin:
   return false;
 }
 """
-                        ok = page.evaluate(js_fallback, first_row)
-                        if ok:
-                            time.sleep(1.0)
-                            return
-                    print(
-                        "      ⚠️ Fallback row click failed; no visible rows/actions found."
-                    )
-                except Exception as fb_e:
-                    print(f"      ❌ Fallback row click error: {fb_e}")
-                # As last resort, keep old behavior
-                raise Exception(f"Không tìm thấy dòng '{target_text}'")
+                ok = page.evaluate(js_fallback, first_row)
+                if ok:
+                    time.sleep(1.0)
+                    return True
+            print(
+                "      ⚠️ Fallback row click failed; no visible rows/actions found."
+            )
+        except Exception as fb_e:
+            print(f"      ❌ Fallback row click error: {fb_e}")
+        return False
 
     # ============================
     # TABLE HELPERS

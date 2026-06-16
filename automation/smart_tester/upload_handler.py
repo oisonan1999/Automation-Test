@@ -494,17 +494,148 @@ class UploadHandlerMixin:
                 except Exception:
                     pass
 
-                # No popup after network idle → scan once more for explicit error indicators.
-                # If none found, treat as PASS (silent-success pattern like Gacha Weight).
+                # Generic CSV-import "Warning" confirmation (Continue/Cancel).
+                # e.g. Offer CSV import: title "Warning", body lists per-line warnings
+                # ("Offer already exists and will be overridden", "Gate X is a live gate").
+                # The import is NOT actually committed until "Continue" is clicked — the
+                # page's JS only calls importOfferCsv() inside the Continue handler
+                # (Swal(o).then(e => e.value && this.importOfferCsv(t))). If we treat the
+                # mere absence of an error popup as PASS here, we report success while the
+                # real import hasn't happened yet, and the still-open modal then blocks
+                # whatever action runs next (e.g. navigate Home) — case fails downstream.
+                # Loop a few rounds: a "live gate" warning can show a SECOND confirmation
+                # (handleConfirmImportCsvFail) after the first Continue.
                 try:
-                    err = page.locator(
-                        ".swal2-error, .alert-danger, .toast-error, .swal2-icon-error, .error-message"
-                    ).first
-                    if err.is_visible(timeout=1500):
-                        err_text = err.inner_text().strip()[:100]
-                        print(f"   ❌ Error indicator found after import: {err_text}")
+                    warning_modal = (
+                        page.locator(
+                            ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+                        )
+                        .filter(has_text=re.compile(r"\bwarning\b", re.IGNORECASE))
+                        .first
+                    )
+                    for _ in range(3):
+                        if warning_modal.count() == 0 or not warning_modal.is_visible():
+                            break
+                        continue_btn = warning_modal.locator(
+                            "button:has-text('Continue'), button:has-text('Proceed')"
+                        ).first
+                        if continue_btn.count() == 0 or not continue_btn.is_visible():
+                            break
+                        print(
+                            "   🟠 Import Warning popup detected (Continue needed to actually override) -> clicking Continue..."
+                        )
+                        continue_btn.click(force=True)
+                        time.sleep(0.4)
+                        # Clicking Continue triggers the real import call; wait for it.
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=15000)
+                        except Exception:
+                            pass
+                        warning_modal = (
+                            page.locator(
+                                ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+                            )
+                            .filter(has_text=re.compile(r"\bwarning\b", re.IGNORECASE))
+                            .first
+                        )
+                except Exception:
+                    pass
+
+                # Re-check for the real result popup now that any Warning confirmation
+                # has been cleared (it may only have appeared after clicking Continue).
+                try:
+                    popup_data = page.evaluate("window.__popupResult")
+                    if popup_data:
+                        is_pass, msg = self._resolve_upload_popup_outcome(popup_data)
+                        print(
+                            f"   🎯 Popup captured after Warning confirm: {'PASS' if is_pass else 'FAIL'} — {msg[:80]}"
+                        )
+                        page.evaluate("window.__popupResult = null")
                         self._ensure_popup_closed(page)
-                        return (False, err_text, cached_selector)
+                        return (is_pass, msg, cached_selector)
+                except Exception:
+                    pass
+
+                # Wait for any post-import spinner/loading overlay to clear before
+                # judging the result. Gacha Pool fires an intermediate TOAST first
+                # ("Gacha pool has been saved, exporting pools to CSV file") that
+                # carries the same "success"-named CSS class as a real result, while
+                # the ACTUAL final result is a SEPARATE blocking SweetAlert2 modal
+                # ("Gacha pool successfully imported", OK button) that renders only
+                # after that export finishes — must wait for spinners to clear first,
+                # not just whatever success-classed element appears first.
+                if hasattr(self, "_wait_for_long_loading"):
+                    try:
+                        self._wait_for_long_loading(page, timeout_ms=20000)
+                    except Exception:
+                        pass
+
+                # Prefer a real BLOCKING modal (.swal2-popup — has a backdrop, needs an
+                # explicit click to dismiss) over a passing toast notification. A toast
+                # can carry a "success" CSS class for a merely informational/
+                # intermediate message without that being the actual final result —
+                # only the modal requires (and gets) an explicit OK/Continue click here.
+                try:
+                    modal_popup = page.locator(".swal2-popup:visible").first
+                    if modal_popup.count() > 0 and modal_popup.is_visible(timeout=2000):
+                        modal_text = modal_popup.inner_text(timeout=1000).strip()
+                        is_success_icon = (
+                            modal_popup.locator(".swal2-icon-success").count() > 0
+                        )
+                        is_error_icon = (
+                            modal_popup.locator(".swal2-icon-error").count() > 0
+                        )
+                        py_type = self._classify_popup_message(modal_text)
+                        if is_error_icon:
+                            py_type = "FAIL"
+                        elif is_success_icon and py_type != "FAIL":
+                            py_type = "PASS"
+                        confirm_btn = modal_popup.locator(
+                            "button.swal2-confirm, button:has-text('OK'), "
+                            "button:has-text('Ok'), button:has-text('Continue')"
+                        ).first
+                        if confirm_btn.count() > 0 and confirm_btn.is_visible():
+                            print(
+                                f"   🟢 Final result modal detected -> clicking OK/Continue: {modal_text[:80]}"
+                            )
+                            confirm_btn.click(force=True)
+                            time.sleep(0.4)
+                            # Dismissing this modal triggers a page reload (table
+                            # re-render) — a SECOND spinner appears after the one we
+                            # already waited out before this modal showed up. Must wait
+                            # it out too, or the caller's next step (save_form) searches
+                            # for the Save button while this reload is still in flight
+                            # and finds nothing.
+                            if hasattr(self, "_wait_for_long_loading"):
+                                try:
+                                    self._wait_for_long_loading(page, timeout_ms=20000)
+                                except Exception:
+                                    pass
+                        if py_type:
+                            self._ensure_popup_closed(page)
+                            return (
+                                py_type == "PASS",
+                                modal_text[:100],
+                                cached_selector,
+                            )
+                except Exception:
+                    pass
+
+                # No blocking modal found either → fall back to the broader scan
+                # (covers toast-only success, e.g. Gacha Weight which shows no popup
+                # at all and silently refreshes the table).
+                try:
+                    found, res_type, res_text = self._scan_for_result_popup(page)
+                    if found:
+                        print(
+                            f"   🎯 Result popup found: {res_type} — {str(res_text)[:80]}"
+                        )
+                        self._ensure_popup_closed(page)
+                        return (
+                            (res_type == "PASS"),
+                            str(res_text or "")[:100],
+                            cached_selector,
+                        )
                 except Exception:
                     pass
 

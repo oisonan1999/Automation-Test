@@ -142,12 +142,21 @@ class TableFilterMixin:
                     print(f"      👉 JS-filled event_id input: sel={sel} name={inp_name} id={inp_id}")
                     if fill_result.get("uncheckedHide"):
                         print("      🔓 Re-unchecked 'Hide LiveopsTest gate items' before filter submit")
-                    # Grab the locator for the submit button
+                    # Grab the locator for the submit button. Use the SAME robust
+                    # selectors as the visible-input path below — the RBE "Filter Data"
+                    # button is a <button>/<a> (NOT input[type=submit]/button[type=submit]),
+                    # so the old narrow list never matched it and the filter never applied.
                     _submit_clicked = False
                     for submit_sel in [
+                        "button#btn-filter",
+                        "input[type='submit'][value*='Filter']",
                         ".filterbox input[type='submit']",
+                        ".filterbox button[type='submit']",
+                        ".filterbox button:has-text('Filter')",
                         "form[method='get'] input[type='submit']",
-                        "input[type='submit'][value='Filter']",
+                        "button:has-text('Filter Data')",
+                        "button:has-text('Filter')",
+                        "a.btn:has-text('Filter')",
                         "input[type='submit']",
                         "button[type='submit']",
                     ]:
@@ -161,15 +170,22 @@ class TableFilterMixin:
                         except Exception:
                             pass
                     if not _submit_clicked:
-                        # Fallback: JS form submit
-                        page.evaluate("""
-                            () => {
-                                const form = document.querySelector(".filterbox form") ||
-                                             document.querySelector("form[action*='section']");
-                                if (form) form.submit();
-                            }
-                        """)
-                        print(f"      🔘 JS form.submit() fallback")
+                        # Fallback: submit the form that actually CONTAINS the filled
+                        # input (inp.form) — the old fallback only knew .filterbox/section
+                        # forms, so RBE's filter form (different action) was never submitted.
+                        submitted = page.evaluate(
+                            """(sel) => {
+                                const inp = document.querySelector(sel);
+                                const form = (inp && inp.form) ||
+                                             document.querySelector(".filterbox form") ||
+                                             document.querySelector("form[action*='section']") ||
+                                             document.querySelector("form[method='get']");
+                                if (form) { form.submit(); return true; }
+                                return false;
+                            }""",
+                            sel,
+                        )
+                        print(f"      🔘 JS form.submit() fallback (submitted={submitted})")
                     try:
                         page.wait_for_load_state("networkidle", timeout=8000)
                     except Exception:

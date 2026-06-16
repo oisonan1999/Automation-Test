@@ -124,10 +124,21 @@ class FormSaveMixin:
             for btn_text in priority_buttons:
                 if mode == "save" and btn_text.lower() == "save":
                     # EXACT MATCH generic "Save" nhưng KHÔNG match "Save & Continue"
-                    all_btns = scope.locator(
-                        "button, a.btn, input[type='submit']"
-                    ).all()
-                    for candidate_btn in all_btns:
+                    # CRITICAL PERF: do NOT call .all() on every button/a.btn/input on
+                    # the page and check .is_visible() one by one — on heavy pages
+                    # (Gacha Pool table with many rows) that's 2000+ elements, each
+                    # .is_visible() a separate CDP round-trip => 3+ MINUTES, which
+                    # looks exactly like the automation being "stuck" at the Save
+                    # step. Pre-filter to elements whose text contains "save" first
+                    # (one batched Playwright query) — narrows ~2500 candidates down
+                    # to a handful (~8) before the Python-side visibility/exact-match
+                    # loop, in ~1-2s instead of minutes.
+                    save_like_btns = (
+                        scope.locator("button, a.btn, input[type='submit']")
+                        .filter(has_text=re.compile(r"save", re.IGNORECASE))
+                        .all()
+                    )
+                    for candidate_btn in save_like_btns:
                         if candidate_btn.is_visible():
                             try:
                                 txt = candidate_btn.inner_text().strip()

@@ -280,6 +280,71 @@ class BrickAutomation(
         except Exception:
             pass
 
+        try:
+            # --- PASS 3: Generic CSV-import "Warning" confirmation (Continue/Cancel) ---
+            # e.g. Offer CSV import: title "Warning", body lists per-line warnings
+            # ("Offer already exists and will be overridden", "Gate X is a live gate"),
+            # buttons Continue/Cancel. The import is NOT committed until Continue is
+            # clicked. This is a safety net for when the upload step's own closer
+            # (upload_handler.py _upload_fuzz_fast) races the popup's render timing and
+            # moves on before it appears — this guard runs again right before the NEXT
+            # navigate/click/etc., so the popup never gets a chance to block that step.
+            # Scoped to require the word "warning" + an explicit Continue/Proceed button
+            # so it never matches the DNU Warning (OK-only) or unrelated modals.
+            warning_candidates = page.locator(
+                ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+            ).filter(has_text=re.compile(r"\bwarning\b", re.IGNORECASE))
+            for _ in range(3):
+                if (
+                    warning_candidates.count() == 0
+                    or not warning_candidates.first.is_visible()
+                ):
+                    break
+                warn_modal = warning_candidates.first
+                continue_btn = warn_modal.locator(
+                    "button:has-text('Continue'), button:has-text('Proceed')"
+                ).first
+                if continue_btn.count() == 0 or not continue_btn.is_visible():
+                    break
+                print(
+                    "      🟠 CSV-import Warning popup detected before next step; clicking Continue..."
+                )
+                continue_btn.click(force=True)
+                time.sleep(0.4)
+                dismissed = True
+        except Exception:
+            pass
+
+        try:
+            # --- PASS 4: Leftover success/result popup (OK-only) ---
+            # e.g. Gacha Pool CSV import: swal2-success icon, "Gacha pool successfully
+            # imported", single "OK" button. If the upload step's own result-scan
+            # (upload_handler.py _upload_fuzz_fast -> _scan_for_result_popup) loses the
+            # timing race (popup renders a beat after networkidle resolves), this is a
+            # safety net so the popup never blocks the NEXT step (e.g. save_form can't
+            # find its button because this modal is still covering the page).
+            # Scoped to an explicit success icon class so it never matches arbitrary
+            # text — does not rely on guessing keywords inside unrelated modals.
+            success_candidates = page.locator(
+                ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+            ).filter(
+                has=page.locator(".swal2-icon-success, .swal2-success, .alert-success")
+            )
+            if success_candidates.count() > 0 and success_candidates.first.is_visible():
+                ok_modal = success_candidates.first
+                ok_btn = ok_modal.locator(
+                    "button.swal2-confirm, button:has-text('OK'), button:has-text('Ok')"
+                ).first
+                if ok_btn.count() > 0 and ok_btn.is_visible():
+                    print(
+                        "      ✅ Success popup detected before next step; clicking OK..."
+                    )
+                    ok_btn.click(force=True)
+                    time.sleep(0.35)
+                    dismissed = True
+        except Exception:
+            pass
+
         return dismissed
 
     def get_existing_page(self, p):
@@ -624,6 +689,16 @@ class BrickAutomation(
                             }
                         )
                     elif act == "save_form":
+                        # Safety net: dismissing a result modal (e.g. after CSV import)
+                        # can trigger a page reload with its own spinner. If the
+                        # upload step's own wait lost that race, wait it out here too
+                        # — otherwise _save_form searches for the Save button while
+                        # the page is still mid-reload and finds nothing.
+                        try:
+                            if hasattr(self, "_wait_for_long_loading"):
+                                self._wait_for_long_loading(page, timeout_ms=20000)
+                        except Exception:
+                            pass
                         mode = step.get("mode", "save")
                         save_result = self._save_form(page, mode=mode)
                         if isinstance(save_result, str) and save_result.startswith(

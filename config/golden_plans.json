@@ -339,78 +339,6 @@
       }
     ]
   },
-  "rbe||edit an rbe (tasks, ms, lb) then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> save -> bấm vào tab milestones -> save -> bấm vào tab leaderboards -> save -> bấm vào tab rbe point currency -> save -> bấm vào tab currency -> save -> bấm vào tab contest superstars -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Edit an RBE (Tasks, MS, LB) then Save",
-    "step_count": 16,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-11T11:34:16",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Hide LiveopsTest gate items checkbox": "false"
-        }
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Tasks"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "Milestones"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "Leaderboards"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "RBE Point Currency"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "Currency"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
   "rbe||import/export tasks: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> export csv -> import csv -> save -> bấm vào logo the brick": {
     "feature": "RBE",
     "label": "Import/Export Tasks",
@@ -770,43 +698,6 @@
       {
         "action": "save_form",
         "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||import an offer from csv: vào offer -> chọn 2 id bất kỳ -> export csv file offer_test.csv -> import csv file offer_test.csv -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Import an Offer from CSV",
-    "step_count": 5,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-11T15:33:25",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "",
-        "value": "random_2"
-      },
-      {
-        "action": "download",
-        "value": "offer_test.csv",
-        "target": "Export CSV"
-      },
-      {
-        "action": "upload",
-        "value": "offer_test.csv",
-        "target": "Import CSV"
       },
       {
         "action": "process_deployment",
@@ -1338,6 +1229,277 @@
       {
         "action": "save_form",
         "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "rbe||edit an rbe (tasks, ms, lb) then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> save -> bấm vào tab milestones -> save -> bấm vào tab leaderboards -> save -> bấm vào tab rbe point currency -> save -> bấm vào tab currency -> save -> bấm vào tab contest superstars -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Edit an RBE (Tasks, MS, LB) then Save",
+    "step_count": 17,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-06-15T11:55:27",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Hide LiveopsTest gate items checkbox": "false"
+        }
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Tasks"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "click",
+        "target": "Milestones"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "click",
+        "target": "Leaderboards"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "click",
+        "target": "RBE Point Currency"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "click",
+        "target": "Currency"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "click",
+        "target": "Contest Superstars"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "rbe||import/export tasks: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> export csv file task_test.csv -> import csv -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Import/Export Tasks",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-06-15T13:50:34",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Hide LiveopsTest gate items checkbox": "false"
+        }
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Tasks"
+      },
+      {
+        "action": "download",
+        "value": "task_test.csv",
+        "target": "Export CSV"
+      },
+      {
+        "action": "upload",
+        "value": "task_test.csv",
+        "target": "Import CSV"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "offer||edit an offer (common, details, display): vào offer -> sửa id vừa clone -> đợi trang load -> sửa platform type: both, offer section: section_hieunm_0306 -> save -> bấm vào tab display info -> sửa store image name: !!button_cantuse, store image description: !!button_cantuse -> save -> bấm vào logo the brick": {
+    "feature": "Offer",
+    "label": "Edit an Offer (Common, Details, Display)",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-06-15T16:16:40",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Platform Type": "Both",
+          "Offer Section": "Section_hieunm_0306"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "click",
+        "target": "Display Info"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Store Image Name": "!!BUTTON_CANTUSE",
+          "Store Image Description": "!!BUTTON_CANTUSE"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "offer||import an offer from csv: vào offer -> chọn 2 id bất kỳ -> export csv file offer_test.csv -> import csv file offer_test.csv -> bấm vào logo the brick": {
+    "feature": "Offer",
+    "label": "Import an Offer from CSV",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-06-16T15:42:23",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "checkbox",
+        "target": "ID",
+        "value": "RANDOM"
+      },
+      {
+        "action": "upload",
+        "value": "offer_test.csv",
+        "target": "Import CSV"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV file offer_test.csv",
+        "value": "offer_test.csv"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "gacha||import the gacha pool csv: vào gacha event -> sửa id vừa clone -> đợi trang load -> bấm vào tab gacha pool -> đợi trang load -> export csv file gacha_pool_test.csv -> import csv file gacha_pool_test.csv -> save -> bấm vào logo the brick": {
+    "feature": "Gacha",
+    "label": "Import the Gacha Pool CSV",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-06-16T17:41:17",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Gacha Pool"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "download",
+        "value": "gacha_pool_test.csv",
+        "target": "Export CSV"
+      },
+      {
+        "action": "upload",
+        "value": "gacha_pool_test.csv",
+        "target": "Import CSV"
+      },
+      {
+        "action": "save_form"
       },
       {
         "action": "process_deployment",

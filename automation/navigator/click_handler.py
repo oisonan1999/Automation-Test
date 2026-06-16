@@ -770,6 +770,9 @@ class ClickHandlerMixin:
 
         # Checkbox-label strategy: find label with exact text → click its checkbox
         # Handles filter toggles like "Hide LiveopsTest gate items", "Hide Feeders", etc.
+        # IMPORTANT: require the label text to be essentially the same as the target —
+        # only trailing punctuation/asterisk allowed. A label like "Currency ID" must NOT
+        # match target "Currency" because "ID" is a distinct extra word (not punctuation).
         if not clicked:
             try:
                 lbl_candidates = (
@@ -781,8 +784,14 @@ class ClickHandlerMixin:
                     if not lbl.is_visible():
                         continue
                     lbl_text = lbl.inner_text().strip()
-                    # Only accept label whose text closely matches target (not a container label)
-                    if len(lbl_text) > len(target_clean) * 2 + 20:
+                    lbl_norm = re.sub(r"\s+", " ", lbl_text).strip()
+                    # Require label text == target (case-insensitive), optionally followed by
+                    # only whitespace / colon / asterisk (common form-label suffixes like
+                    # "Currency:" or "Hide Feeders *"). Any trailing word (e.g. "Currency ID")
+                    # means this is a different field and must be rejected.
+                    if not re.fullmatch(
+                        re.escape(target_clean) + r"[\s:*]*", lbl_norm, re.IGNORECASE
+                    ):
                         continue
                     chk = None
                     try:
