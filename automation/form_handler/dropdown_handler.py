@@ -842,10 +842,97 @@ class DropdownHandlerMixin:
                             page.keyboard.press("Enter")
                             clicked = True
                 elif not clicked:
-                    # Không có kết quả nào → thử Enter
-                    print(f"         ⚠️ No search results found, pressing Enter")
-                    page.keyboard.press("Enter")
-                    clicked = True
+                    # [FIX r80 vs LOCR80] No pre-collected results. After an AJAX search,
+                    # select2 HIGHLIGHTS the first result, so a blind Enter picks the wrong
+                    # row whenever the query is a substring of another option (searching
+                    # "r80" highlights "LOCR80"). Explicitly select the EXACT match instead,
+                    # falling back to partial, then Enter. Clone-modal-aware: programmatic
+                    # jQuery selection so Bootstrap doesn't dismiss the modal on click.
+                    if lib_type == "select2":
+                        try:
+                            sel_res = page.evaluate(
+                                """(value) => {
+                                const options = Array.from(
+                                    document.querySelectorAll('.select2-results__option')
+                                ).filter(o => o.offsetParent !== null);
+                                const norm = (s) => (s || '').toString().toLowerCase()
+                                    .replace(/_/g, ' ').replace(/-/g, ' ')
+                                    .replace(/\\s+/g, ' ').trim();
+                                const target = norm(value);
+                                const modalEl = document.querySelector('.modal.show, .modal.in');
+                                const inCloneModal = !!(modalEl &&
+                                    /Clone/i.test(modalEl.innerText || modalEl.textContent || ''));
+                                function selectOpt(opt) {
+                                    if (!inCloneModal) { opt.click(); return; }
+                                    const optText = (opt.textContent || '').trim();
+                                    let optId = optText;
+                                    try {
+                                        const d = (typeof jQuery !== 'undefined') ? jQuery(opt).data('data') : null;
+                                        if (d && d.id !== undefined) optId = String(d.id);
+                                    } catch(e) {}
+                                    if (optId === optText) {
+                                        const m = (opt.id || '').match(/select2-[^-]+-result-[^-]+-(.+)$/);
+                                        if (m && m[1]) optId = m[1];
+                                    }
+                                    const dropdownEl = opt.closest('.select2-dropdown');
+                                    let $sel = null;
+                                    if (typeof jQuery !== 'undefined') {
+                                        jQuery('select').each(function() {
+                                            const s2 = jQuery(this).data('select2');
+                                            if (s2 && s2.$dropdown && s2.$dropdown[0] === dropdownEl) {
+                                                $sel = jQuery(this); return false;
+                                            }
+                                        });
+                                        if (!$sel) jQuery('select').each(function() {
+                                            const s2 = jQuery(this).data('select2');
+                                            if (s2 && s2.$container && s2.$container.hasClass('select2-container--open')) {
+                                                $sel = jQuery(this); return false;
+                                            }
+                                        });
+                                    }
+                                    if (!$sel) { opt.click(); return; }
+                                    if (!$sel.find('option[value="' + optId + '"]').length) {
+                                        $sel.append(new Option(optText, optId, true, true));
+                                    }
+                                    $sel.val(optId).trigger('change');
+                                    try { $sel.trigger('change.select2'); } catch(e) {}
+                                    try { $sel.select2('close'); } catch(e) {}
+                                }
+                                // 1) exact match (normalized) — beats substring siblings
+                                for (const opt of options) {
+                                    if (norm(opt.textContent) === target) {
+                                        selectOpt(opt);
+                                        return {matched: true, text: opt.textContent.trim(), type: 'exact'};
+                                    }
+                                }
+                                // 2) partial match
+                                for (const opt of options) {
+                                    const t = norm(opt.textContent);
+                                    if (t && (t.includes(target) || target.includes(t))) {
+                                        selectOpt(opt);
+                                        return {matched: true, text: opt.textContent.trim(), type: 'partial'};
+                                    }
+                                }
+                                return {matched: false, count: options.length};
+                            }""",
+                                value_str,
+                            )
+                            if sel_res.get("matched"):
+                                mt = sel_res.get("type", "exact")
+                                print(
+                                    f"         ✅ [Dropdown] {mt.capitalize()} match selected: '{sel_res.get('text')}'"
+                                )
+                                clicked = True
+                            else:
+                                print(
+                                    f"         ⚠️ No exact/partial match among {sel_res.get('count', 0)} results, pressing Enter"
+                                )
+                        except Exception as e:
+                            print(f"         ⚠️ Exact-match selection error: {e}")
+                    if not clicked:
+                        print(f"         ⚠️ No search results matched, pressing Enter")
+                        page.keyboard.press("Enter")
+                        clicked = True
 
                 if clicked:
                     print(f"         ✅ [Dropdown] Đã chọn: '{value_str}'")

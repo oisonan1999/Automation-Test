@@ -55,8 +55,9 @@ class FormSaveMixin:
                 ".modal.in",
                 ".modal[aria-hidden='false']",
             ]:
-                if page.locator(modal_sel).count() > 0:
-                    scope = page.locator(modal_sel).last
+                candidate = page.locator(modal_sel)
+                if candidate.count() > 0 and candidate.last.is_visible():
+                    scope = candidate.last
                     print(f"      📍 Scope: Modal detected ({modal_sel})")
                     break
 

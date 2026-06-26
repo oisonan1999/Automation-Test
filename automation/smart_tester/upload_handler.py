@@ -494,52 +494,35 @@ class UploadHandlerMixin:
                 except Exception:
                     pass
 
-                # Generic CSV-import "Warning" confirmation (Continue/Cancel).
-                # e.g. Offer CSV import: title "Warning", body lists per-line warnings
-                # ("Offer already exists and will be overridden", "Gate X is a live gate").
-                # The import is NOT actually committed until "Continue" is clicked — the
-                # page's JS only calls importOfferCsv() inside the Continue handler
-                # (Swal(o).then(e => e.value && this.importOfferCsv(t))). If we treat the
-                # mere absence of an error popup as PASS here, we report success while the
-                # real import hasn't happened yet, and the still-open modal then blocks
-                # whatever action runs next (e.g. navigate Home) — case fails downstream.
-                # Loop a few rounds: a "live gate" warning can show a SECOND confirmation
-                # (handleConfirmImportCsvFail) after the first Continue.
+                # The Offer import shows a spinner FIRST, then the Warning swal2 popup
+                # appears only AFTER the spinner clears (client-side JS processes the
+                # server response, hides the spinner, THEN renders the Warning popup).
+                # Calling wait_for_selector before the spinner clears means the popup
+                # isn't in the DOM yet → _confirm finds nothing. Must clear spinner first.
+                if hasattr(self, "_wait_for_long_loading"):
+                    try:
+                        self._wait_for_long_loading(page, timeout_ms=20000)
+                    except Exception:
+                        pass
+
+                # Use state="attached" (DOM presence) not "visible" — swal2 plays a
+                # CSS fade-in animation; "visible" waits for the animation to finish but
+                # that takes longer than _confirm's .is_visible() timeout. Use "attached"
+                # to detect the popup the moment it's in the DOM, then sleep(0.5) so
+                # the animation completes before _confirm checks .is_visible().
                 try:
-                    warning_modal = (
-                        page.locator(
-                            ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
-                        )
-                        .filter(has_text=re.compile(r"\bwarning\b", re.IGNORECASE))
-                        .first
+                    page.wait_for_selector(
+                        "div.swal2-container .swal2-popup, .modal.show",
+                        state="attached",
+                        timeout=3000,
                     )
-                    for _ in range(3):
-                        if warning_modal.count() == 0 or not warning_modal.is_visible():
-                            break
-                        continue_btn = warning_modal.locator(
-                            "button:has-text('Continue'), button:has-text('Proceed')"
-                        ).first
-                        if continue_btn.count() == 0 or not continue_btn.is_visible():
-                            break
-                        print(
-                            "   🟠 Import Warning popup detected (Continue needed to actually override) -> clicking Continue..."
-                        )
-                        continue_btn.click(force=True)
-                        time.sleep(0.4)
-                        # Clicking Continue triggers the real import call; wait for it.
-                        try:
-                            page.wait_for_load_state("networkidle", timeout=15000)
-                        except Exception:
-                            pass
-                        warning_modal = (
-                            page.locator(
-                                ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
-                            )
-                            .filter(has_text=re.compile(r"\bwarning\b", re.IGNORECASE))
-                            .first
-                        )
+                    time.sleep(0.5)  # let swal2 fade-in animation complete
                 except Exception:
-                    pass
+                    pass  # no popup → silent import (OK to continue)
+                # Now click through any confirmation popups: swal2 "Warning" (live gate /
+                # offer override) → blue Continue, then Bootstrap modal "are you sure" → Continue.
+                # Each click waits for networkidle internally so the actual import POST is captured.
+                self._confirm_csv_overwrite_prompt_if_present(page, max_rounds=5)
 
                 # Re-check for the real result popup now that any Warning confirmation
                 # has been cleared (it may only have appeared after clicking Continue).
@@ -556,14 +539,9 @@ class UploadHandlerMixin:
                 except Exception:
                     pass
 
-                # Wait for any post-import spinner/loading overlay to clear before
-                # judging the result. Gacha Pool fires an intermediate TOAST first
-                # ("Gacha pool has been saved, exporting pools to CSV file") that
-                # carries the same "success"-named CSS class as a real result, while
-                # the ACTUAL final result is a SEPARATE blocking SweetAlert2 modal
-                # ("Gacha pool successfully imported", OK button) that renders only
-                # after that export finishes — must wait for spinners to clear first,
-                # not just whatever success-classed element appears first.
+                # Wait for any post-confirm spinner (Gacha Pool: after dismissing the
+                # OK result modal a second table-reload spinner appears; must clear it
+                # before the blocking-modal check below or it finds the toast too early).
                 if hasattr(self, "_wait_for_long_loading"):
                     try:
                         self._wait_for_long_loading(page, timeout_ms=20000)
@@ -900,51 +878,133 @@ class UploadHandlerMixin:
 
     def _confirm_csv_overwrite_prompt_if_present(self, page, max_rounds=6):
         """
-        Versus và một số tab hiển thị SweetAlert: 'Are you sure?' / 'Yes, do it!'
-        trước khi import CSV ghi đè. Phải bấm xác nhận trước khi đọc popup kết quả.
+        Click through ALL pre/mid-import confirmation popups until none remain or a
+        result popup (success/error text) appears. Handles:
+          - swal2 "Are you sure?" / "Warning" (live gate, offer override) → any blue/green btn
+          - Bootstrap modal "These offers are in a Live gate, are you sure to continue?" → Continue
+        After each click, waits for networkidle in case the click triggers the actual import.
         """
-        for _ in range(max_rounds):
+        _RESULT_KW = [
+            "success", "successfully", "hoàn thành", "imported", "thành công",
+            "error", "fail", "invalid", "duplicate", "missing", "required", "lỗi",
+        ]
+        # The Offer import shows a spinner FIRST; the Warning popup(s) only render
+        # AFTER it clears, so each round must (a) wait the spinner out, then (b) wait
+        # for a confirmation button to appear — instead of breaking the instant
+        # nothing is visible yet (the old bug: the Warning popups showed up a beat
+        # later and were never clicked, so the run jumped straight to the next step).
+        _CONFIRM_BTN_SEL = (
+            "div.swal2-container button.swal2-confirm, "
+            "div.swal2-container button:has-text('Continue'), "
+            "div.swal2-container button:has-text('Yes'), "
+            ".modal.show button:has-text('Continue'), "
+            ".modal.in button:has-text('Continue'), "
+            ".modal.show button:has-text('Yes'), "
+            ".modal.in button:has-text('Yes'), "
+            ".modal.show button:has-text('Proceed'), "
+            ".modal.in button:has-text('Proceed')"
+        )
+        for _round in range(max_rounds):
+            found = False
+
+            # Clear the import spinner, then actively wait for a confirmation popup to
+            # appear (it renders only once the spinner is gone). Break only when none
+            # shows up within the window — not on the first empty check.
+            if hasattr(self, "_wait_for_long_loading"):
+                try:
+                    self._wait_for_long_loading(page, timeout_ms=20000)
+                except Exception:
+                    pass
             try:
-                container = page.locator("div.swal2-container.swal2-shown").first
-                if not container.is_visible(timeout=300):
-                    container = page.locator(
-                        "div.swal2-container.swal2-backdrop-show"
-                    ).first
-                if not container.is_visible(timeout=200):
-                    container = (
-                        page.locator("div.swal2-container")
-                        .filter(has=page.locator("button.swal2-confirm"))
-                        .first
-                    )
-                if not container.is_visible(timeout=250):
-                    break
-                text = (container.inner_text(timeout=1000) or "").lower()
-                markers = (
-                    "are you sure",
-                    "wish to proceed",
-                    "overrides implemented data",
-                    "importing data via csv",
-                    "do you wish to proceed",
+                page.wait_for_selector(
+                    _CONFIRM_BTN_SEL, state="visible", timeout=2500
                 )
-                if not any(m in text for m in markers):
-                    break
-                btn = container.locator("button.swal2-confirm").first
-                if btn.is_visible(timeout=400):
-                    print(
-                        "   ✅ Import overwrite confirmation — clicking confirm (Yes, do it! / OK)..."
-                    )
-                    btn.click(timeout=8000)
-                    try:
-                        page.evaluate(
-                            "window.__popupResult = null; window.__popupHistory = [];"
+            except Exception:
+                break  # no (more) confirmation popups appeared
+
+            # 1. swal2 container (any visible, with a Continue/Yes/confirm button)
+            try:
+                container = (
+                    page.locator("div.swal2-container")
+                    .filter(
+                        has=page.locator(
+                            "button.swal2-confirm, button:has-text('Continue'), button:has-text('Yes')"
                         )
-                    except Exception:
-                        pass
-                    time.sleep(0.35)
-                    continue
+                    )
+                    .first
+                )
+                if container.count() > 0 and container.is_visible(timeout=350):
+                    text = (container.inner_text(timeout=1000) or "").lower()
+                    if any(k in text for k in _RESULT_KW):
+                        break  # actual result popup — stop, let result-check handle it
+                    btn = container.locator(
+                        "button.swal2-confirm, button:has-text('Continue'), "
+                        "button:has-text('Yes'), button:has-text('do it')"
+                    ).first
+                    if btn.count() > 0 and btn.is_visible(timeout=300):
+                        try:
+                            btn_label = btn.inner_text(timeout=300).strip()
+                        except Exception:
+                            btn_label = "?"
+                        print(
+                            f"   ✅ Import confirmation ({_round+1}) swal2 → clicking '{btn_label}'..."
+                        )
+                        btn.click(timeout=8000)
+                        try:
+                            page.evaluate(
+                                "window.__popupResult = null; window.__popupHistory = [];"
+                            )
+                        except Exception:
+                            pass
+                        time.sleep(0.4)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=20000)
+                        except Exception:
+                            pass
+                        found = True
+                        continue
             except Exception:
                 pass
-            break
+
+            # 2. Bootstrap modal with Continue/Yes button (e.g. "live gate" second confirmation)
+            try:
+                modal = (
+                    page.locator(".modal.show, .modal.in")
+                    .filter(
+                        has=page.locator(
+                            "button:has-text('Continue'), button:has-text('Yes'), button:has-text('Proceed')"
+                        )
+                    )
+                    .first
+                )
+                if modal.count() > 0 and modal.is_visible(timeout=300):
+                    text = (modal.inner_text(timeout=1000) or "").lower()
+                    if any(k in text for k in _RESULT_KW):
+                        break  # actual result modal — stop
+                    btn = modal.locator(
+                        "button:has-text('Continue'), button:has-text('Yes'), button:has-text('Proceed')"
+                    ).first
+                    if btn.count() > 0 and btn.is_visible(timeout=300):
+                        try:
+                            btn_label = btn.inner_text(timeout=300).strip()
+                        except Exception:
+                            btn_label = "?"
+                        print(
+                            f"   ✅ Import confirmation ({_round+1}) modal → clicking '{btn_label}'..."
+                        )
+                        btn.click(force=True)
+                        time.sleep(0.4)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=20000)
+                        except Exception:
+                            pass
+                        found = True
+                        continue
+            except Exception:
+                pass
+
+            if not found:
+                break
 
     def _upload_single_attempt(self, page, target_text, file_name):
         """Original upload for non-fuzz operations (keeps longer timeouts)"""

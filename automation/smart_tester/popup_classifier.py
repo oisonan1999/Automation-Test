@@ -105,11 +105,14 @@ class PopupClassifierMixin:
                         const results = [];
                         
                         for (const modal of modals) {
-                            // Read innerText even if modal is hidden
-                            if (modal && modal.innerText && modal.innerText.trim()) {
-                                const text = modal.innerText.trim();
-                                const isVisible = modal.offsetParent !== null;
-                                results.push({ text: text, isVisible: isVisible });
+                            // Only VISIBLE modals are real result popups. A hidden
+                            // modal-body (e.g. the Offer edit FORM that contains a
+                            // "Gate:" label) must NOT be mistaken for an import result
+                            // — that caused a false PASS while the real Warning popups
+                            // were still waiting to be confirmed.
+                            if (modal && modal.innerText && modal.innerText.trim()
+                                && modal.offsetParent !== null) {
+                                results.push({ text: modal.innerText.trim(), isVisible: true });
                             }
                         }
                         
@@ -164,7 +167,10 @@ class PopupClassifierMixin:
                     )
                 for idx, modal in enumerate(modals):
                     try:
-                        # Read text without checking visibility first
+                        # Skip hidden modals — only a visible modal is a real result
+                        # popup (a hidden edit FORM modal would otherwise false-PASS).
+                        if not modal.is_visible():
+                            continue
                         text = modal.inner_text(timeout=500).strip()
                         if text:
                             # Classify based on keywords

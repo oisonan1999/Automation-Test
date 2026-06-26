@@ -23,6 +23,11 @@ Input: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID bất kỳ -> 
 Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}}]
 RULE: "Chọn N [entity] bất kỳ" = checkbox(random_N), NOT edit_row. "Chọn/Tick/Select" + table row = checkbox. Only "Sửa/Edit" = edit_row.
 
+Example 2b (SPECIFIC ID checkbox - NOT random):
+Input: "Vào PVE -> Chọn ID "LTPVE_May2026_Wk4_Contest" -> Export CSV"
+Output: [{{"action":"navigate","path":["Live Events","PVE","Classic PVE"]}},{{"action":"checkbox","target":"ID","value":"LTPVE_May2026_Wk4_Contest"}},{{"action":"download","target":"Export CSV"}}]
+RULE: "Chọn ID 'SPECIFIC_ID'" = checkbox(target="ID", value="SPECIFIC_ID"). Use the EXACT ID string as value. NEVER use process_deployment for this. This selects a specific named row, different from "Chọn N ID bất kỳ" (random selection).
+
 Example 3:
 Input: "Click logo The Brick -> Chọn checkbox Offers -> Bấm Process"
 Output: [{{"action":"process_deployment","options":["Offers"]}}]
@@ -460,8 +465,10 @@ def get_formatting_prompt(user_command, analysis_clean):
        - NEVER generate multiple separate navigate actions
     2. "checkbox":
        - Rule: Use ONLY for selecting rows in a DATA TABLE ("Chọn", "Tick", "Select" a row/ID).
-       - Format: {{{{ "action": "checkbox", "target": "ColumnName", "value": "random_N" or "all" }}}}
-       - Example: "Chọn 2 BagID bất kỳ" -> value: "random_2", target: "BagID".
+       - Format: {{{{ "action": "checkbox", "target": "ColumnName", "value": "random_N" or "all" or "SPECIFIC_ID" }}}}
+       - Example (random): "Chọn 2 BagID bất kỳ" -> value: "random_2", target: "BagID".
+       - Example (specific ID): "Chọn ID 'LTPVE_May2026_Wk4_Contest'" -> {{{{"action":"checkbox","target":"ID","value":"LTPVE_May2026_Wk4_Contest"}}}}
+       - RULE: "Chọn ID 'X'" or "Chọn [entity] 'X'" with a NAMED ID = checkbox with value="X" (exact ID string). NOT process_deployment.
        - ⚠️ IMPORTANT: "Bỏ chọn checkbox <Label>" / "Tick checkbox <Label>" / "Un-tick <Label>" referring to a FILTER or UI toggle (NOT a table row) → use update_form instead:
          Example: "Bỏ chọn checkbox Hide LiveOpsTest gate items" → {{{{"action":"update_form","data":{{{{"Hide LiveOpsTest gate items checkbox":"false"}}}}}}}}
          Example: "Tick checkbox Hide Feeders" → {{{{"action":"update_form","data":{{{{"Hide Feeders checkbox":"true"}}}}}}}}

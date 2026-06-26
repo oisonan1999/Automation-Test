@@ -744,6 +744,11 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
             field_attr = step.get("field", "")  # 🆕 AI also uses "field" key
             option_attr = step.get("option", "")  # 🆕 AI also uses "option" key
 
+            # target="ID" → table-row checkbox, never a deployment checkbox
+            if target.lower().strip() == "id":
+                filtered.append(step)
+                continue
+
             # Check if this is a deployment option checkbox
             is_deployment_checkbox = False
             for field in [
@@ -806,6 +811,11 @@ def _merge_process_deployment_steps(plan, uncheck_targets=None):
                 checkbox_field = step.get("checkbox", "")
                 field_attr = step.get("field", "")
                 checkbox_label = step.get("checkbox_label", "")
+
+                # target="ID" means table-row checkbox (e.g. "Chọn ID 'X'") — never deployment
+                if target.lower().strip() == "id":
+                    non_deployment_indices.append(idx)
+                    continue
 
                 is_dep = False
                 opt_name = None

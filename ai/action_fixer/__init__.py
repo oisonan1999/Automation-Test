@@ -249,6 +249,20 @@ def fix_action_plan(plan, user_command=""):
                     step["value"] = "random_1"
                     print("   🔧 AUTO-FIX: checkbox value rỗng → random_1")
 
+                # Fix: target is a specific ID value (not a column header) but value is random_N.
+                # Swap: move ID to value (CASE 3 search_term = value), set target to "ID".
+                # Using "on" would trigger core.py's form-toggle routing instead of table selection.
+                _specific_id_target = str(step.get("target", "")).strip()
+                _val_str = str(step.get("value", "")).strip().lower()
+                if (
+                    _val_str.startswith("random")
+                    and len(_specific_id_target) > 10
+                    and "_" in _specific_id_target
+                ):
+                    step["value"] = _specific_id_target
+                    step["target"] = "ID"
+                    print(f"   🔧 AUTO-FIX: checkbox specific-ID swap: value='{_specific_id_target}', target='ID'")
+
         elif action == "download":
             # Fix: {filename: "x.csv"} → {target: "Export CSV", value: "x.csv"}
             if "filename" in step:

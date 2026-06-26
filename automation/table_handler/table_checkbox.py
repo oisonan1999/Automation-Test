@@ -83,6 +83,20 @@ class TableCheckboxMixin:
             print(f"   📊 Tìm thấy {total_rows} dòng dữ liệu khả dụng.")
             val_lower = str(value).lower()
 
+            # Safety net: if target looks like a specific ID value (not a column header)
+            # but value says random_N, swap them so CASE 3 searches for the exact ID.
+            # "on" must NOT be used — core.py routes "on" to form-toggle before reaching here.
+            _tgt_str = str(target_col).strip()
+            if (
+                "random" in val_lower
+                and len(_tgt_str) > 10
+                and "_" in _tgt_str
+            ):
+                print(f"   🔧 REDIRECT: checkbox target='{_tgt_str}' is specific ID, swap target↔value for CASE 3")
+                value = _tgt_str
+                target_col = "ID"
+                val_lower = value.lower()
+
             # --- CASE 1: RANDOM ---
             if "random" in val_lower:
                 num_to_select = 1
@@ -327,10 +341,42 @@ class TableCheckboxMixin:
                     else str(target_col)
                 )
 
-                # BƯỚC 1: Tìm trực tiếp
+                # BƯỚC 1: Tìm trực tiếp qua Playwright locator
                 found = self._find_and_tick(all_rows, search_term)
 
-                # BƯỚC 2: Nếu không thấy -> FILTER -> Tìm lại
+                # BƯỚC 1b: JS fallback — Playwright has_text filter can miss rows
+                # whose cell text is mixed with icon-button DOM nodes (e.g. PVE events
+                # Book column: clone icon + ID text in same td). JS textContent.includes
+                # reads the full rendered text regardless of DOM nesting.
+                if not found:
+                    try:
+                        js_found = page.evaluate(
+                            """(text) => {
+                                const term = text.toLowerCase();
+                                for (const tbl of document.querySelectorAll('table')) {
+                                    for (const row of tbl.querySelectorAll('tbody tr')) {
+                                        if (!row.textContent.toLowerCase().includes(term)) continue;
+                                        const chk = row.querySelector('input[type="checkbox"]');
+                                        if (!chk) continue;
+                                        chk.scrollIntoView({block: 'center', inline: 'nearest'});
+                                        if (!chk.checked) {
+                                            chk.click();
+                                            chk.dispatchEvent(new Event('change', {bubbles: true}));
+                                        }
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }""",
+                            search_term,
+                        )
+                        if js_found:
+                            found = True
+                            print(f"   ✅ JS DOM search: Đã tick dòng chứa '{search_term}'")
+                    except Exception as _js_err:
+                        print(f"   ⚠️ JS fallback error: {_js_err}")
+
+                # BƯỚC 2: Nếu vẫn không thấy -> FILTER -> Tìm lại
                 if not found:
                     print(
                         f"   ⚠️ Không thấy '{search_term}' trên trang hiện tại. Đang thử Filter..."
@@ -365,9 +411,13 @@ class TableCheckboxMixin:
     def _find_and_tick(self, rows_locator, text):
         """Tìm dòng chứa text và tick checkbox"""
         reg = self._safe_compile(text)
-        target_row = rows_locator.filter(has_text=reg).first
+        matched = rows_locator.filter(has_text=reg)
+        target_row = matched.first
 
-        if target_row.is_visible():
+        # count() > 0: row exists in DOM even if off-screen/below fold.
+        # is_visible() returns False for off-viewport rows → missed rows that are
+        # actually present. _safe_check already calls scrollIntoView so force works.
+        if matched.count() > 0:
             chk = target_row.locator("input[type='checkbox']").first
             if self._safe_check(chk):
                 print(f"   ✅ Đã tick dòng chứa '{text}'")

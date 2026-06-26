@@ -701,8 +701,8 @@ class BrickAutomation(
                             pass
                         mode = step.get("mode", "save")
                         save_result = self._save_form(page, mode=mode)
-                        if isinstance(save_result, str) and save_result.startswith(
-                            "Error:"
+                        if isinstance(save_result, str) and (
+                            save_result.startswith("Error:") or save_result == "Fail"
                         ):
                             report_logs.append(
                                 {
