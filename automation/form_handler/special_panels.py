@@ -625,6 +625,89 @@ class SpecialPanelsMixin:
             )
             if has_cs_keys:
                 print("         🧩 [Contest Superstar] special-case entered")
+
+                # ── FCV3: Fight Card V3 uses a different toggle name ──
+                # PVE v2 toggle: name="contest-superstar-toggle"
+                # FCV3 toggle:   name="fight-card-contest-superstar-toggle"
+                # Detect FCV3 first; if found, just enable the toggle + "Add CSS" if
+                # no CSS rows exist yet, then return — generic fill handles the rest.
+                _fcv3_toggle = page.locator(
+                    "input[name='fight-card-contest-superstar-toggle']"
+                ).first
+                if _fcv3_toggle.count() > 0:
+                    # Determine desired toggle state
+                    _fcv3_toggle_raw = next(
+                        (v for k, v in data.items()
+                         if str(k).lower().strip() == "contest superstar"),
+                        "on",
+                    )
+                    _fcv3_want_on = str(_fcv3_toggle_raw).lower().strip() in (
+                        "true", "1", "on", "yes", "enable", "enabled"
+                    )
+                    try:
+                        _fcv3_cur = _fcv3_toggle.is_checked()
+                    except Exception:
+                        _fcv3_cur = None
+
+                    if _fcv3_cur is None or _fcv3_cur != _fcv3_want_on:
+                        try:
+                            _fcv3_toggle.click(force=True)
+                        except Exception:
+                            try:
+                                _fcv3_toggle.evaluate("el => el.click()")
+                            except Exception:
+                                pass
+                        time.sleep(1.0)
+                        # Wait for the tabpanel inside the CS accordion card to expand
+                        try:
+                            _fcv3_toggle.locator(
+                                "xpath=ancestor::div[contains(@class,'card')][1]"
+                            ).locator("div[role='tabpanel']").first.wait_for(
+                                state="visible", timeout=4000
+                            )
+                        except Exception:
+                            time.sleep(0.5)
+
+                    # Pop only the "contest superstar" toggle key; leave remaining
+                    # keys (RBE Event, Contest Superstar ID, Rewards, Quantity …)
+                    # for the generic fill loop.
+                    for _k in list(data.keys()):
+                        if str(_k).lower().strip() == "contest superstar":
+                            data.pop(_k, None)
+
+                    # If the plan includes "Contest Superstar ID" fields but no CSS
+                    # rows exist yet in the panel, click "+ Add CSS" to create one.
+                    _fcv3_needs_css_row = any(
+                        "contest superstar id" in str(k).lower() for k in data.keys()
+                    )
+                    if _fcv3_needs_css_row:
+                        try:
+                            _fcv3_card = _fcv3_toggle.locator(
+                                "xpath=ancestor::div[contains(@class,'card')][1]"
+                            ).first
+                            # If no CSS-row label visible yet, click "Add CSS"
+                            if _fcv3_card.locator("text=Contest Superstar ID").count() == 0:
+                                _add_btn = _fcv3_card.locator(
+                                    "button:has-text('Add CSS')"
+                                ).first
+                                if _add_btn.count() > 0:
+                                    _add_btn.click(force=True)
+                                    time.sleep(0.6)
+                                    print(
+                                        "         🧩 [FCV3 Contest Superstar] Clicked 'Add CSS' to create row"
+                                    )
+                        except Exception as _fcv3_add_e:
+                            print(
+                                f"         ⚠️ [FCV3 Contest Superstar] Add CSS check failed: {_fcv3_add_e}"
+                            )
+
+                    print(
+                        f"         🧩 [Contest Superstar] FCV3 toggle done; "
+                        f"keys for generic fill: {list(data.keys())}"
+                    )
+                    return  # generic fill handles remaining keys for FCV3
+
+                # ── PVE v2 code unchanged below ──
                 panels = [("normal", "Normal"), ("hard", "Hard"), ("hell", "Hell")]
                 gate_skip: bool = False
 
@@ -644,11 +727,11 @@ class SpecialPanelsMixin:
                     kl_norm = re.sub(r"[^a-z0-9]+", "", kl)
                     return "softcurrency" in kl_norm
 
-                # 1) Toggle
+                # 1) Toggle — match ONLY the exact toggle key; "Contest Superstar ID" must not steal this
                 toggle_val = None
                 for k, v in list(data.items()):
                     kl = str(k).lower().strip()
-                    if kl == "contest superstar" or "contest superstar" in kl:
+                    if kl == "contest superstar":
                         toggle_val = v
                         break
 
@@ -683,6 +766,10 @@ class SpecialPanelsMixin:
 
                 def _is_rbe_key(key: str) -> bool:
                     kl = str(key).lower().strip()
+                    # "RBE Event" is a Fight Card V3 PVE Contest Superstar field — NOT a PVE v2
+                    # top-level RBE selector. Exclude it so generic fill handles it in FCV3.
+                    if re.search(r"\brbe\s+event\b", kl):
+                        return False
                     # Match generic "RBE" as well as "RBE: ..." style keys/values
                     # (AI may emit exactly "RBE" or "RBE_test_hieunm").
                     return bool(re.search(r"(^|\b)rbe(\b|$)", kl)) or ("rbe" in kl)
@@ -933,9 +1020,11 @@ class SpecialPanelsMixin:
 
                 # This guarantees we won't later process 'RBE' / 'Soft Currency' / 'Node 1' keys
                 # even if a UI operation inside panel application throws.
+                # NOTE: only pop exact "contest superstar" toggle key; "Contest Superstar ID"
+                # is a FCV3 field that must reach generic fill.
                 for k in list(data.keys()):
                     kl = str(k).lower().strip()
-                    if kl == "contest superstar" or "contest superstar" in kl:
+                    if kl == "contest superstar":
                         data.pop(k, None)
                         continue
 
@@ -1845,10 +1934,12 @@ class SpecialPanelsMixin:
                             f"         ⚠️ [Contest Superstar] Final top-level RBE guard failed: {_rbe_final_e}"
                         )
 
-                # Remove contest-superstar related keys so generic filler won't misfill
+                # Remove contest-superstar related keys so generic filler won't misfill.
+                # Only pop exact "contest superstar" toggle key; "Contest Superstar ID" is
+                # a FCV3 field — it must reach generic fill (handled above as a no-op in FCV3).
                 for k in list(data.keys()):
                     kl = str(k).lower().strip()
-                    if kl == "contest superstar" or "contest superstar" in kl:
+                    if kl == "contest superstar":
                         data.pop(k, None)
                         continue
                     if _is_soft_currency_key(k):

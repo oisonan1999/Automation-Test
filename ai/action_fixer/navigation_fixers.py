@@ -332,6 +332,167 @@ def _remove_spurious_instruction_clicks(plan):
     return result
 
 
+def _remove_redundant_click_after_navigate(plan):
+    """
+    Remove a click step that immediately follows a navigate step and targets
+    the same destination (last element of the navigate path).
+
+    Qwen2.5 sometimes duplicates the nav destination as a spurious click:
+      navigate(path=["Live Events", "Offer", "Offer Section"])
+      click(target="Offer Section")     ← removed: navigator already landed here
+
+    Only fires when the click target exactly matches the nav's last path segment.
+    Clicks targeting other labels (e.g. "Create New") are left untouched.
+    """
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    result = []
+    for step in plan:
+        if step.get("action") == "click" and result:
+            prev = result[-1]
+            if prev.get("action") == "navigate":
+                nav_path = prev.get("path", [])
+                if isinstance(nav_path, list) and nav_path:
+                    nav_dest = str(nav_path[-1]).strip().lower()
+                elif isinstance(nav_path, str):
+                    nav_dest = nav_path.strip().lower()
+                else:
+                    nav_dest = ""
+                click_target = str(step.get("target", "")).strip().lower()
+                if click_target and click_target == nav_dest:
+                    print(
+                        f"   🔧 REMOVE REDUNDANT CLICK: click('{step.get('target')}') "
+                        f"duplicates navigate destination — removed"
+                    )
+                    continue
+        result.append(step)
+    return result
+
+
+def _fix_post_deployment_missing_navigate(plan, user_command=""):
+    """
+    Pattern A: process_deployment → update_form({"ID contains": X})  [no navigate between]
+    Pattern B: process_deployment → edit_row/clone_row(X)            [no navigate between]
+
+    AI sometimes skips the "Vào X" navigate step after a logo click when moving
+    to the next feature in a multi-feature command (e.g. FCV3 -> logo -> RBE).
+    It either (a) generates a filter update_form as if searching for the row, or
+    (b) jumps straight to edit_row/clone_row on the next feature's ID, and in
+    both cases often also stuffs the next feature's name into the logo's
+    process_deployment options as if it were a deploy checkbox. This fixer:
+      1. Clears spurious options from the process_deployment (intermediate logo = no deploy)
+      2. Injects navigate (from user_command: "Vào X" after each logo marker)
+      3. Converts update_form({"ID contains": X}) → edit_row(X) (pattern A only)
+
+    Also handles optional wait steps between process_deployment and the next step.
+    """
+    import re as _re
+
+    # Extract "Vào X" targets after each logo marker in the user command
+    logo_re = _re.compile(
+        r"b[aấ]m\s+v[aà]o\s+logo|click\s+logo|logo\s+the\s+brick|b[aấ]m\s+logo",
+        _re.IGNORECASE,
+    )
+    vao_re = _re.compile(r"[>\-]+\s*v[aà]o\s+([\w\s]+?)(?:\s*->|\s*$)", _re.IGNORECASE)
+
+    nav_targets_after_logo = []
+    for m in logo_re.finditer(user_command):
+        snippet = user_command[m.end() : m.end() + 150]
+        vm = vao_re.search(snippet)
+        nav_targets_after_logo.append(vm.group(1).strip() if vm else None)
+
+    if not nav_targets_after_logo:
+        return plan
+
+    result = []
+    i = 0
+    logo_count = 0
+
+    while i < len(plan):
+        step = plan[i]
+
+        if step.get("action") == "process_deployment":
+            # Collect any wait steps that immediately follow
+            waits = []
+            j = i + 1
+            while j < len(plan) and plan[j].get("action") == "wait":
+                waits.append(plan[j])
+                j += 1
+
+            # Check if next non-wait step is update_form({"ID contains": X})
+            # (pattern A) or an edit_row/clone_row already targeting the next
+            # feature's ID but missing the navigate before it (pattern B).
+            next_step = plan[j] if j < len(plan) else None
+            is_misplaced_filter = (
+                next_step is not None
+                and next_step.get("action") == "update_form"
+                and isinstance(next_step.get("data"), dict)
+                and list(next_step["data"].keys()) == ["ID contains"]
+            )
+            is_missing_nav_before_edit = (
+                next_step is not None
+                and next_step.get("action") in ("edit_row", "clone_row")
+            )
+
+            nav_target = (
+                nav_targets_after_logo[logo_count]
+                if logo_count < len(nav_targets_after_logo)
+                else None
+            )
+
+            if nav_target and (is_misplaced_filter or is_missing_nav_before_edit):
+                # 1. Clear spurious options — an intermediate logo before the
+                # next feature's "Vào X" is never a real deploy checkpoint,
+                # even if the AI stuffed feature names into options.
+                if step.get("options"):
+                    print(
+                        f"   🔧 POST-DEPLOY: Cleared options {step['options']} → [] "
+                        f"(intermediate logo before 'Vào {nav_target}')"
+                    )
+                    step = dict(step)
+                    step["options"] = []
+                result.append(step)
+
+                # 2. Re-emit any wait steps that were before the next step
+                result.extend(waits)
+
+                # 3. Inject navigate
+                nav_lower = nav_target.strip().lower()
+                nav_path = NAVIGATION_PATH_MAP.get(nav_lower, [nav_target])
+                result.append({"action": "navigate", "path": nav_path})
+                print(
+                    f"   🔧 POST-DEPLOY: Injected navigate({nav_path}) "
+                    f"from command 'Vào {nav_target}'"
+                )
+
+                if is_misplaced_filter:
+                    # 4a. Convert update_form({"ID contains": X}) → edit_row(X)
+                    id_value = next_step["data"]["ID contains"]
+                    edit_target = id_value if id_value and id_value.upper() != "RANDOM" else "RANDOM"
+                    result.append({"action": "edit_row", "target": edit_target})
+                    print(
+                        f"   🔧 POST-DEPLOY: Converted update_form(ID contains) → "
+                        f"edit_row('{edit_target}')"
+                    )
+                    i = j + 1  # Skip both waits (already added) and the update_form
+                else:
+                    # 4b. next_step is already edit_row/clone_row with the right
+                    # target — leave it as-is, it'll be appended on the next
+                    # loop iteration right after the injected navigate.
+                    i = j
+
+                logo_count += 1
+                continue
+
+            logo_count += 1
+
+        result.append(step)
+        i += 1
+
+    return result
+
+
 def _remove_redundant_duplicate_navigate(plan):
     """
     Drop a navigate step whose path duplicates an EARLIER navigate already in the

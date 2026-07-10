@@ -15,12 +15,17 @@ from .navigation_fixers import (
     _merge_navigate_steps,
     _remove_spurious_instruction_clicks,
     _remove_redundant_duplicate_navigate,
+    _remove_redundant_click_after_navigate,
+    _fix_post_deployment_missing_navigate,
 )
 from .deployment_fixers import (
     _strip_invalid_deploy_options,
+    _fix_choose_id_misclassified_as_filter,
+    _fix_specific_id_choose_misclassified_as_edit_row,
     _inject_missing_checkbox_before_download,
     _dedup_consecutive_identical_steps,
     _fix_download_filename_in_target,
+    _fix_manipulate_csv_value_verbatim,
     _auto_infer_deployment_options,
     _merge_process_deployment_steps,
     _inject_missing_final_deployment,
@@ -40,8 +45,12 @@ from .clone_fixers import (
 from .form_fixers import (
     _merge_consecutive_update_save,
     _merge_pve_css_update_steps,
+    _inject_missing_tab_click_before_save,
+    _inject_fcv3_pve_tab_click,
     _fix_rbe_type_modal_continue,
+    _normalize_new_event_final_save,
     _fix_offer_filter_field,
+    _remove_spurious_edit_row_after_new_event,
 )
 
 
@@ -287,6 +296,12 @@ def fix_action_plan(plan, user_command=""):
             if not step.get("value") and last_filename:
                 step["value"] = last_filename
                 print(f"   🔧 AUTO-FIX: Reused filename '{last_filename}' for upload")
+            # Extract from command if still empty (e.g. "Import CSV file offer_section.csv")
+            if not step.get("value"):
+                _csv_in_cmd = _re.search(r'\b([\w\-]+\.csv)\b', user_command, _re.IGNORECASE)
+                if _csv_in_cmd:
+                    step["value"] = _csv_in_cmd.group(1)
+                    print(f"   🔧 AUTO-FIX: upload value empty → extracted '{step['value']}' from command")
             # Drop/fix spurious upload steps where value is not a real .csv filename.
             # AI often treats the testcase phrase as a filename:
             # e.g. "Import the Gacha Weight CSV" → value="Gacha Weight CSV" (no extension).
@@ -632,6 +647,23 @@ def fix_action_plan(plan, user_command=""):
     # ============================================================
     fixed_plan = _remove_spurious_instruction_clicks(fixed_plan)
     fixed_plan = _remove_redundant_duplicate_navigate(fixed_plan)
+    fixed_plan = _remove_redundant_click_after_navigate(fixed_plan)
+
+    # ============================================================
+    # STEP 3d.7: Fix "Chọn N ID bất kỳ" misread as the FILTER pattern
+    # The model can conflate checkbox-select and search-filter since both use
+    # the "RANDOM" sentinel; when it does, the download step gets dropped too.
+    # Must run BEFORE 3e so the checkbox it restores is seen by the injector.
+    # ============================================================
+    fixed_plan = _fix_choose_id_misclassified_as_filter(fixed_plan, user_command)
+
+    # ============================================================
+    # STEP 3d.8: Fix "Chọn ID: <specific_id>" misread as edit_row/clone_row
+    # Weaker models can pattern-match the "ID:" colon punctuation (shared with
+    # "Sửa ID: X" edit_row examples) instead of the "Chọn" verb, and hallucinate
+    # an edit_row target. Must run BEFORE 3e for the same reason as 3d.7.
+    # ============================================================
+    fixed_plan = _fix_specific_id_choose_misclassified_as_edit_row(fixed_plan, user_command)
 
     # ============================================================
     # STEP 3e: INJECT missing checkbox before download
@@ -643,6 +675,12 @@ def fix_action_plan(plan, user_command=""):
     # Normalize download/upload steps where the filename landed in `target`
     # instead of `value` (empty value → save_as on the downloads/ dir crashes).
     fixed_plan = _fix_download_filename_in_target(fixed_plan)
+
+    # Force manipulate_csv values back to what the command literally said —
+    # the AI sometimes over-applies update_form's "add AM/PM" datetime habit
+    # to raw CSV cell edits, which have no such format requirement and can
+    # fail CSV-import validation with the hallucinated suffix.
+    fixed_plan = _fix_manipulate_csv_value_verbatim(fixed_plan, user_command)
 
     # ============================================================
     # STEP 3f: Remove spurious edit_row(RANDOM) before checkbox
@@ -745,6 +783,23 @@ def fix_action_plan(plan, user_command=""):
     merged_plan = _fix_rbe_type_modal_continue(merged_plan)
 
     # ============================================================
+    # STEP 8c.5: Remove spurious edit_row after "New X" creation flow
+    # After click("New Rules Based Event") → radio → click("Continue"),
+    # the page is already on the new entity's edit form. AI wrongly adds
+    # edit_row(RANDOM) or edit_row(generated_id) thinking it must find the row.
+    # ============================================================
+    merged_plan = _remove_spurious_edit_row_after_new_event(merged_plan)
+
+    # ============================================================
+    # STEP 8c.7: Normalize save_form(mode="continue") → save_form(mode="save")
+    # in create-new flows. After the type-modal save is fixed to click("Continue"),
+    # any remaining save_form(continue) is the main form save (Save button, not
+    # Save & Continue). VS Tournament "save & continue" flows use edit_row not
+    # click("New X"), so this never fires for them.
+    # ============================================================
+    merged_plan = _normalize_new_event_final_save(merged_plan)
+
+    # ============================================================
     # STEP 8d: Normalize page-filter field name → canonical "ID contains"
     # Every filter page (Offer, Offer Section, PVE, RBE, Gacha, ...) uses the
     # SAME "ID contains" search box. AI sometimes emits per-page labels like
@@ -752,6 +807,31 @@ def fix_action_plan(plan, user_command=""):
     # (e.g. Boost Result Value2 = "Red") are untouched.
     # ============================================================
     merged_plan = _fix_offer_filter_field(merged_plan)
+
+    # ============================================================
+    # STEP 8d.5: INJECT missing click("PVE") before FCV3 PVE tab fields
+    # Fight Card V3 has a "PVE" tab. The AI consistently forgets to generate
+    # click("PVE") before update_form({RBE Event, Contest Superstar ID, ...}).
+    # Injected deterministically when FCV3 PVE keys are present in context.
+    # ============================================================
+    merged_plan = _inject_fcv3_pve_tab_click(merged_plan)
+
+    # ============================================================
+    # STEP 8d.6: FIX post-deployment missing navigate
+    # Pattern: process_deployment → update_form({"ID contains": X}) with no
+    # navigate between. AI forgot the "Vào X" navigate after a logo click.
+    # Fix: clear spurious options, inject navigate+edit_row, remove filter stub.
+    # Must run AFTER _inject_fcv3_pve_tab_click so FCV3 context is settled.
+    # ============================================================
+    merged_plan = _fix_post_deployment_missing_navigate(merged_plan, user_command)
+
+    # ============================================================
+    # STEP 8d.7: INJECT missing tab clicks from command
+    # Parse user_command for "Bấm vào tab X" patterns and inject click("X")
+    # before the corresponding save_form when missing from the plan.
+    # Context-aware: "Contest Superstars" only injected in RBE context.
+    # ============================================================
+    merged_plan = _inject_missing_tab_click_before_save(merged_plan, user_command)
 
     # ============================================================
     # STEP 9: Remove redundant click step after save_form(mode=clone)
@@ -788,10 +868,15 @@ __all__ = [
     "_merge_navigate_steps",
     "_remove_spurious_instruction_clicks",
     "_remove_redundant_duplicate_navigate",
+    "_remove_redundant_click_after_navigate",
+    "_fix_post_deployment_missing_navigate",
     "_strip_invalid_deploy_options",
+    "_fix_choose_id_misclassified_as_filter",
+    "_fix_specific_id_choose_misclassified_as_edit_row",
     "_inject_missing_checkbox_before_download",
     "_dedup_consecutive_identical_steps",
     "_fix_download_filename_in_target",
+    "_fix_manipulate_csv_value_verbatim",
     "_auto_infer_deployment_options",
     "_merge_process_deployment_steps",
     "_inject_missing_final_deployment",
@@ -807,4 +892,8 @@ __all__ = [
     "_inject_clone_save",
     "_merge_consecutive_update_save",
     "_merge_pve_css_update_steps",
+    "_inject_missing_tab_click_before_save",
+    "_inject_fcv3_pve_tab_click",
+    "_remove_spurious_edit_row_after_new_event",
+    "_normalize_new_event_final_save",
 ]

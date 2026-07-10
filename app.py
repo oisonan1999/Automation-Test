@@ -140,6 +140,8 @@ if "smoke_use_golden" not in st.session_state:
     # Bật cache "golden plan": case nào đã PASS sạch thì lần sau chạy thẳng plan đã
     # lưu, bỏ qua AI (nhanh + xác định). Tắt để luôn nhờ AI sinh lại plan.
     st.session_state.smoke_use_golden = True
+if "smoke_use_claude_haiku" not in st.session_state:
+    st.session_state.smoke_use_claude_haiku = False
 if "smoke_running" not in st.session_state:
     st.session_state.smoke_running = False
 if "smoke_current_idx" not in st.session_state:
@@ -156,6 +158,8 @@ if "smoke_deploy_info" not in st.session_state:
 # --- AI RUN GOLDEN STATE ---
 if "airun_use_golden" not in st.session_state:
     st.session_state.airun_use_golden = True
+if "airun_use_claude_careful" not in st.session_state:
+    st.session_state.airun_use_claude_careful = False
 if "airun_raw_input" not in st.session_state:
     st.session_state.airun_raw_input = None
 if "airun_generated_unique_id" not in st.session_state:
@@ -350,8 +354,6 @@ def _substitute_last_clone_id(command: str, smoke_ids: dict) -> tuple[str, str |
     """
     import re as _re
 
-    _vua = r"[vj][ưừữu]a"
-    # Broad trigger: also match "vua" (ASCII fallback for Unicode encoding variants)
     _vua_broad = r"(?:[vj][ưừữu]a|vua)"
     # Trigger: any word followed by "vừa clone/tạo" — covers "ID vừa clone", "Book vừa clone", etc.
     _vua_pattern = _re.compile(
@@ -366,47 +368,80 @@ def _substitute_last_clone_id(command: str, smoke_ids: dict) -> tuple[str, str |
     if not fresh_ids:
         return command, None
 
-    # Pick the best matching feature ID from fresh on-disk data
-    cmd_upper = command.upper()
-    last_id = None
-    for feature_key, fid in fresh_ids.items():
-        if fid and feature_key.upper() in cmd_upper:
-            last_id = fid[-1] if isinstance(fid, list) and fid else fid
-            break
-    # Entity-word hints: "Book" in command → PVE feature (covers "Sửa Book vừa clone")
+    # Entity-word hints: e.g. "Book" in context → use PVE feature's last ID
     _ENTITY_HINTS = {"book": "PVE", "chapter": "PVE"}
-    if not last_id:
-        cmd_lower = command.lower()
-        for _ent_word, _hint_feat in _ENTITY_HINTS.items():
-            if _ent_word in cmd_lower and _hint_feat in fresh_ids:
-                _fid = fresh_ids[_hint_feat]
-                last_id = _fid[-1] if isinstance(_fid, list) and _fid else _fid
-                if last_id:
-                    print(f"   🔁 Entity hint: '{_ent_word}' → feature '{_hint_feat}', id='{last_id}'")
-                    break
-    # Fallback: single entry in dict
-    if not last_id and len(fresh_ids) == 1:
-        _v = next(iter(fresh_ids.values()))
-        last_id = _v[-1] if isinstance(_v, list) and _v else _v
 
-    if not last_id:
+    def _get_id_for_context(context_upper: str) -> str | None:
+        """
+        Given the text before a 'vừa clone/tạo' occurrence (upper-cased), return the
+        last-created ID for the nearest (rightmost) matching feature keyword.
+        Cross-feature commands ("Vào Fight Card V3 -> ... Sửa RBE Event: ... RBE vừa clone")
+        need per-occurrence resolution instead of one global feature pick.
+        """
+        best_feat = None
+        best_pos = -1
+        for fk, fid in fresh_ids.items():
+            if not fid:
+                continue
+            p = context_upper.rfind(fk.upper())
+            if p > best_pos:
+                best_pos = p
+                best_feat = fk
+        # Entity hints as fallback
+        if not best_feat or best_pos < 0:
+            ctx_lower = context_upper.lower()
+            for ent, hint_feat in _ENTITY_HINTS.items():
+                if ent in ctx_lower and hint_feat in fresh_ids:
+                    fid = fresh_ids[hint_feat]
+                    _id = fid[-1] if isinstance(fid, list) and fid else fid
+                    if _id:
+                        print(f"   🔁 Entity hint: '{ent}' → feature '{hint_feat}', id='{_id}'")
+                        return _id
+        if best_feat is None:
+            # Fallback: single entry in dict
+            if len(fresh_ids) == 1:
+                _v = next(iter(fresh_ids.values()))
+                return _v[-1] if isinstance(_v, list) and _v else _v
+            return None
+        fid = fresh_ids[best_feat]
+        return fid[-1] if isinstance(fid, list) and fid else fid
+
+    # Order matters: most specific patterns first (Sửa/Filter before bare entity).
+    # Use finditer + right-to-left substitution so earlier match positions stay valid.
+    substitutions = [
+        # FIELD-VALUE phrasing (highest priority): "...: Hãy lấy ID RBE vừa clone" → clean bare ID
+        # (no "ID:" prefix — this is a form-field VALUE, not a row selector).
+        (rf"(?:H[ãa]y\s+)?l[ấa]y\s+ID\s+(?:c[ủu]a\s+)?\S+\s+{_vua_broad}\s+(?:clone|t[ạa]o)(?:\s+ho[ặa]c\s+(?:clone|t[ạa]o))?", "{id}"),
+        (rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", "Sửa ID: {id}"),
+        (rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", "Sửa ID: {id}"),
+        (rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", "Filter ID: {id}"),
+        (rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", "Filter ID: {id}"),
+        (rf"(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", "ID: {id}"),
+        (rf"(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", "ID: {id}"),
+    ]
+
+    primary_last_id = None  # leftmost substitution's ID (used for golden plan {{LAST_ID}} token)
+
+    for pattern, fmt in substitutions:
+        matches = list(_re.finditer(pattern, command, flags=_re.IGNORECASE))
+        if not matches:
+            continue
+        # Apply right-to-left so left-side positions remain valid during string mutation
+        for m in reversed(matches):
+            context_upper = command[: m.start()].upper()
+            mid = _get_id_for_context(context_upper)
+            if mid is None:
+                continue
+            replacement = fmt.format(id=mid)
+            print(f"   🔁 Per-occurrence sub: '{m.group(0)}' → '{replacement}' (id={mid})")
+            command = command[: m.start()] + replacement + command[m.end() :]
+            primary_last_id = mid  # right-to-left: last write = leftmost match's ID
+
+    # primary_last_id = ID of the leftmost substituted occurrence
+    if primary_last_id is None:
         return command, None
 
-    print(f"   🔁 Manual mode: substituting 'vừa clone/tạo' → '{last_id}' (from smoke_last_ids.json)")
-
-    # Order matters: most specific patterns first (Sửa/Filter before bare entity)
-    substitutions = [
-        (rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"Sửa ID: {last_id}"),
-        (rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"Sửa ID: {last_id}"),
-        (rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"Filter ID: {last_id}"),
-        (rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"Filter ID: {last_id}"),
-        (rf"(?:\d+\s+)?\S+\s+{_vua_broad}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"ID: {last_id}"),
-        (rf"(?:\d+\s+)?\S+\s+{_vua_broad}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"ID: {last_id}"),
-    ]
-    for pattern, replacement in substitutions:
-        command = _re.sub(pattern, replacement, command, flags=_re.IGNORECASE)
-
-    return command, last_id
+    return command, primary_last_id
 
 
 def _is_deploy_case(label: str, steps: str) -> bool:
@@ -650,6 +685,16 @@ with col1:
         _airun_golden_n = plan_cache.golden_count()
         st.caption(f"💾 {_airun_golden_n} golden plan đã lưu (chung với Smoke)")
 
+        st.checkbox(
+            "🧪 Careful Mode (Claude Sonnet 5 thay vì Qwen local)",
+            key="airun_use_claude_careful",
+            help=(
+                "Dùng Claude API để sinh action plan thay vì Qwen2.5-Coder qua Ollama. "
+                "Chính xác hơn với lệnh tiếng Việt phức tạp, nhưng cần ANTHROPIC_API_KEY "
+                "trong .env và tốn phí mỗi lần gọi. Tự fallback về Qwen nếu Claude lỗi."
+            ),
+        )
+
     # Smoke UI chỉ hiển thị khi đang chọn radio Smoke
     smoke_run_btn = False
     if run_mode == "Smoke Brick Live (theo CSV)":
@@ -841,6 +886,17 @@ with col1:
                 st.success(f"Đã xoá {removed} golden plan.")
                 st.rerun()
 
+        st.checkbox(
+            "🤖 Dùng Claude Haiku thay Qwen (khi không có golden)",
+            key="smoke_use_claude_haiku",
+            help=(
+                "Khi không có golden plan, dùng Claude Haiku (Anthropic API) để sinh "
+                "action plan thay vì Qwen2.5-Coder qua Ollama. Chính xác hơn với các "
+                "lệnh phức tạp, nhưng cần ANTHROPIC_API_KEY trong .env. Tự fallback "
+                "về Qwen nếu Claude lỗi hoặc thiếu API key."
+            ),
+        )
+
 with col2:
     st.subheader("📂 Kịch bản đã lưu")
     saved_scenarios = load_scenarios()
@@ -963,9 +1019,10 @@ if st.session_state.run_mode == "AI Run (theo lệnh)" and run_btn and user_inpu
             with StreamingLogCapture(log_placeholder) as ai_log:
                 action_plan = parse_command_to_json(
                     _processed_input,
-                    use_fast_mode=True,
+                    use_fast_mode=not st.session_state.get("airun_use_claude_careful", False),
                     context_plan=st.session_state.loaded_scenario_plan,
                     base_command=st.session_state.loaded_scenario_command,
+                    forced_unique_id=_unique_id_airun,
                 )
 
         # Lưu kết quả
@@ -1266,12 +1323,15 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                     golden_used = True
                     print(f"   ⚡ Golden plan hit ({len(action_plan)} steps) — bỏ qua AI")
                 else:
-                    with st.status("🧠 AI đang phân tích...", expanded=False):
+                    _smoke_use_haiku = st.session_state.get("smoke_use_claude_haiku", False)
+                    _smoke_mode_label = "Claude Haiku" if _smoke_use_haiku else "Qwen (Fast)"
+                    with st.status(f"🧠 AI đang phân tích ({_smoke_mode_label})...", expanded=False):
                         action_plan = parse_command_to_json(
                             case_command,
-                            use_fast_mode=True,
+                            use_fast_mode=not _smoke_use_haiku,
                             context_plan=None,
                             base_command=None,
+                            forced_unique_id=generated_unique_id,
                         )
 
                 if not action_plan:
@@ -1309,12 +1369,15 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                     print(f"   ♻️ Golden replay {status_str} → huỷ cache + retry bằng AI")
                     plan_cache.invalidate(feature, testcase)
                     try:
-                        with st.status("🧠 AI retry (golden fail)...", expanded=False):
+                        _smoke_use_haiku = st.session_state.get("smoke_use_claude_haiku", False)
+                        _smoke_mode_label = "Claude Haiku" if _smoke_use_haiku else "Qwen (Fast)"
+                        with st.status(f"🧠 AI retry ({_smoke_mode_label}, golden fail)...", expanded=False):
                             action_plan = parse_command_to_json(
                                 case_command,
-                                use_fast_mode=True,
+                                use_fast_mode=not _smoke_use_haiku,
                                 context_plan=None,
                                 base_command=None,
+                                forced_unique_id=generated_unique_id,
                             )
                         if action_plan:
                             with st.status("🤖 Automation retry...", expanded=False):

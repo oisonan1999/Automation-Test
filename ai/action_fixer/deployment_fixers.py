@@ -30,6 +30,142 @@ def _strip_invalid_deploy_options(plan):
 
 
 
+def _fix_choose_id_misclassified_as_filter(plan, user_command=""):
+    """
+    "Chọn N ID bất kỳ -> Export CSV file X.csv" is sometimes misread by the
+    model as the FILTER pattern (update_form({"ID contains": "RANDOM"}) +
+    click "Filter Data") instead of the CHECKBOX pattern — both use the same
+    "RANDOM" sentinel, so the model conflates them. When that happens the
+    trailing download step is usually dropped too, since the model no longer
+    thinks a row was selected.
+
+    The Vietnamese verb disambiguates them: "Chọn" (select/tick a row) means
+    checkbox; "Filter"/"Lọc" means the search box. If the command uses "Chọn"
+    and the plan contains the filter-pair signature with no checkbox step
+    anywhere, convert it back to checkbox(random_N) and inject the missing
+    download if the command names an export filename.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    cmd_lower = user_command.lower()
+    if "filter" in cmd_lower or "lọc" in cmd_lower:
+        return plan
+
+    m = _re.search(r"chọn\s+(\d+|một)\s+id\s+bất\s*k[yỳ]", user_command, _re.IGNORECASE)
+    if not m:
+        return plan
+    n = 1 if m.group(1).lower() == "một" else int(m.group(1))
+
+    if any(s.get("action") == "checkbox" for s in plan):
+        return plan
+
+    result = []
+    i = 0
+    replaced = False
+    while i < len(plan):
+        step = plan[i]
+        nxt = plan[i + 1] if i + 1 < len(plan) else None
+        is_filter_pair = (
+            not replaced
+            and step.get("action") == "update_form"
+            and isinstance(step.get("data"), dict)
+            and len(step["data"]) == 1
+            and str(next(iter(step["data"].values()))).strip().upper() == "RANDOM"
+            and nxt is not None
+            and nxt.get("action") == "click"
+            and "filter" in str(nxt.get("target", "")).lower()
+        )
+        if is_filter_pair:
+            print(
+                f"   🔧 FIX MISCLASSIFIED FILTER: 'Chọn {n} ID bất kỳ' → "
+                f"checkbox(random_{n}), removed filter pair"
+            )
+            result.append({"action": "checkbox", "target": "ID", "value": f"random_{n}"})
+            replaced = True
+            i += 2
+            continue
+        result.append(step)
+        i += 1
+
+    if not replaced:
+        return plan
+
+    if not any(s.get("action") == "download" for s in result):
+        fm = _re.search(r"export\s+csv(?:\s+file)?\s+([\w\-]+\.csv)", user_command, _re.IGNORECASE)
+        if fm:
+            filename = fm.group(1)
+            checkbox_idx = next(i for i, s in enumerate(result) if s.get("action") == "checkbox")
+            print(f"   🔧 INJECT DOWNLOAD: Missing download after checkbox → {filename}")
+            result.insert(
+                checkbox_idx + 1,
+                {"action": "download", "target": "Export CSV", "value": filename},
+            )
+
+    return result
+
+
+def _fix_specific_id_choose_misclassified_as_edit_row(plan, user_command=""):
+    """
+    "Chọn ID: <specific_id> -> Export CSV" is sometimes misread by weaker models
+    (e.g. Qwen) as the EDIT pattern (edit_row/clone_row with a hallucinated
+    target ID) instead of the CHECKBOX pattern (checkbox(target="ID",
+    value="<specific_id>")). Unlike the "Chọn N ID bất kỳ" RANDOM case, the
+    model here often invents a plausible-looking but wrong ID (memorized from
+    an unrelated few-shot example) rather than "RANDOM", so
+    `_remove_edit_row_before_checkbox` (which only strips edit_row("RANDOM"))
+    never catches it — there is no checkbox step anywhere to trigger it.
+
+    The Vietnamese verb still disambiguates regardless of colon/quote
+    punctuation: "Chọn ID" (select a row by ID) always means checkbox; only
+    "Sửa/Edit ID" means edit_row. If the command names a specific (non-random)
+    ID right after "Chọn ID" and the plan's first edit_row/clone_row step
+    fires before any checkbox exists, convert it into
+    checkbox(target="ID", value=<the ID from the command>) and make sure the
+    matching download step (if named in the command) survives right after it.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    m = _re.search(r"chọn\s+id\s*:?\s*[\"']?([^\s\"'>]+)", user_command, _re.IGNORECASE)
+    if not m:
+        return plan
+
+    target_id = m.group(1).strip().rstrip("\"',.")
+    if not target_id or target_id.lower() in ("bất", "bat", "random", "ngẫu", "nhiên"):
+        # "Chọn ... bất kỳ" (random selection) — handled by other fixers, not this one.
+        return plan
+
+    if any(s.get("action") == "checkbox" for s in plan):
+        return plan
+
+    edit_positions = [i for i, s in enumerate(plan) if s.get("action") in ("edit_row", "clone_row")]
+    if not edit_positions:
+        return plan
+
+    idx = edit_positions[0]
+    old_target = plan[idx].get("target", "")
+    print(
+        f"   🔧 FIX MISCLASSIFIED EDIT_ROW: 'Chọn ID: {target_id}' → "
+        f"checkbox(target=\"ID\", value=\"{target_id}\") (was {plan[idx].get('action')}('{old_target}'))"
+    )
+    result = list(plan)
+    result[idx] = {"action": "checkbox", "target": "ID", "value": target_id}
+
+    if not any(s.get("action") == "download" for s in result):
+        fm = _re.search(r"export\s+csv(?:\s+file)?\s+([\w\-]+\.csv)", user_command, _re.IGNORECASE)
+        if fm:
+            filename = fm.group(1)
+            print(f"   🔧 INJECT DOWNLOAD: Missing download after checkbox → {filename}")
+            result.insert(idx + 1, {"action": "download", "target": "Export CSV", "value": filename})
+
+    return result
+
+
 def _inject_missing_checkbox_before_download(plan, user_command=""):
     """
     When command says "Chọn N ID bất kỳ -> Export CSV" but AI skips the checkbox step,
@@ -41,16 +177,15 @@ def _inject_missing_checkbox_before_download(plan, user_command=""):
         return plan
 
     # Parse how many rows the user wants to select (default 1)
-    n = 1
     m = _re.search(
-        r"chọn\s+(\d+)\s+ID\s+bất\s*kỳ",
+        r"chọn\s+(\d+|một)\s+ID\s+bất\s*k[yỳ]",
         user_command,
         _re.IGNORECASE,
     )
     if not m:
         # No "Chọn N ID bất kỳ" in command — nothing to inject
         return plan
-    n = int(m.group(1))
+    n = 1 if m.group(1).lower() == "một" else int(m.group(1))
 
     result = []
     i = 0
@@ -130,6 +265,61 @@ def _fix_download_filename_in_target(plan):
                 f"   🔧 FIX DOWNLOAD FILENAME: moved '{target}' from target → value "
                 f"(target='{step['target']}')"
             )
+    return plan
+
+
+def _fix_manipulate_csv_value_verbatim(plan, user_command=""):
+    """
+    Force manipulate_csv `data` values to match the user command VERBATIM.
+
+    manipulate_csv writes straight into a raw CSV cell (see
+    automation/data_handler.py `_process_csv_manipulation`, operation="set") —
+    there is no datetime/format normalization on the way in, unlike
+    update_form which fills a UI widget that often expects "HH:MM AM/PM".
+    The prompt has dozens of update_form examples showing that AM/PM
+    format, and the AI sometimes over-generalizes that habit onto
+    manipulate_csv values too — e.g. "Sửa cột End Times: 07/31/2026, 11:00"
+    (no AM/PM in the command) gets rewritten to "...11:00 AM" in the plan.
+    That hallucinated suffix then lands in the CSV cell unchanged and can
+    fail the game's CSV-import validation (wrong format for that column).
+
+    Fix: for each manipulate_csv(operation="set", data="Col=Value") step,
+    find the matching "Sửa [cột] Col: <literal>" clause in the user command
+    and force Value back to that literal text if the AI's value doesn't
+    match. Steps whose column can't be found in the command are left alone
+    (nothing to compare against).
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    for step in plan:
+        if step.get("action") != "manipulate_csv" or step.get("operation") != "set":
+            continue
+        data = step.get("data")
+        if not isinstance(data, str) or "=" not in data:
+            continue
+        col, val = data.split("=", 1)
+        col = col.strip()
+        val = val.strip()
+
+        m = _re.search(
+            r"sửa\s+(?:cột\s+)?" + _re.escape(col) + r"\s*:\s*(.+?)(?:\s*->|$)",
+            user_command,
+            _re.IGNORECASE,
+        )
+        if not m:
+            continue
+
+        literal_val = m.group(1).strip()
+        if literal_val and literal_val != val:
+            print(
+                f"   🔧 CSV-VERBATIM: '{col}' value '{val}' → '{literal_val}' "
+                f"(AI reformatted a value the command gave verbatim)"
+            )
+            step["data"] = f"{col}={literal_val}"
+
     return plan
 
 

@@ -1126,82 +1126,6 @@
       }
     ]
   },
-  "rbe||edit an rbe (tasks, ms, lb) then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> save -> bấm vào tab milestones -> save -> bấm vào tab leaderboards -> save -> bấm vào tab rbe point currency -> save -> bấm vào tab currency -> save -> bấm vào tab contest superstars -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Edit an RBE (Tasks, MS, LB) then Save",
-    "step_count": 17,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-15T11:55:27",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Hide LiveopsTest gate items checkbox": "false"
-        }
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Tasks"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "Milestones"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "Leaderboards"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "RBE Point Currency"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "Currency"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "Contest Superstars"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
   "rbe||import/export tasks: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> export csv file task_test.csv -> import csv -> save -> bấm vào logo the brick": {
     "feature": "RBE",
     "label": "Import/Export Tasks",
@@ -1301,46 +1225,6 @@
       {
         "action": "save_form",
         "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||import an offer from csv: vào offer -> chọn 2 id bất kỳ -> export csv file offer_test.csv -> import csv file offer_test.csv -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Import an Offer from CSV",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-16T15:42:23",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "RANDOM"
-      },
-      {
-        "action": "upload",
-        "value": "offer_test.csv",
-        "target": "Import CSV"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV file offer_test.csv",
-        "value": "offer_test.csv"
       },
       {
         "action": "process_deployment",
@@ -1982,6 +1866,665 @@
         "options": [
           "Offers"
         ]
+      }
+    ]
+  },
+  "currency||search for a currency: vào currency -> filter 1 id bất kỳ -> bấm vào logo the brick": {
+    "feature": "Currency",
+    "label": "Search for a Currency",
+    "step_count": 5,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-01T10:58:26",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Data Configs",
+          "Inventory",
+          "Currency"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "ID contains": "RANDOM"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Filter Data"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "manual||vào offer -> import csv file offer_test.csv": {
+    "feature": "manual",
+    "label": "Vào Offer -> Import CSV file offer_test.csv",
+    "step_count": 2,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-01T11:57:25",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "offer_test.csv"
+      }
+    ]
+  },
+  "currency||create a new currency by manual: vào currency -> bấm vào nút add new currency -> đợi trang load -> sửa gate: liveopstest, currency id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, currencyname: !!button_cantuse, description: !!button_cantuse, currency category: gacha token, icon texture: currency_lootcoin_pc_may2026, hard currency value: 199.0000 -> bấm vào nút create -> bấm vào logo the brick": {
+    "feature": "Currency",
+    "label": "Create a new Currency by manual",
+    "step_count": 6,
+    "uses_unique": true,
+    "uses_last": false,
+    "saved_at": "2026-07-01T16:07:40",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Data Configs",
+          "Inventory",
+          "Currency"
+        ]
+      },
+      {
+        "action": "click",
+        "target": "Add New Currency"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Gate": "LiveOpsTest",
+          "Currency ID": "{{UNIQUE_ID}}",
+          "CurrencyName": "!!BUTTON_CANTUSE",
+          "Description": "!!BUTTON_CANTUSE",
+          "Currency Category": "Gacha Token",
+          "Icon Texture": "Currency_Lootcoin_PC_May2026",
+          "Hard Currency Value": "199.0000"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Create"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "manual||vào offer -> chọn 1 id bất kỳ -> export csv file offer_test.csv": {
+    "feature": "manual",
+    "label": "Vào Offer -> Chọn 1 ID bất kỳ -> Export CSV file offer_test.csv",
+    "step_count": 3,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-02T11:03:35",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "checkbox",
+        "target": "ID",
+        "value": "random_1"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "offer_test.csv"
+      }
+    ]
+  },
+  "manual||vào offer -> chọn 1 id bất kỳ -> export csv file offer_data.csv": {
+    "feature": "manual",
+    "label": "Vào Offer -> Chọn 1 ID bất kỳ -> Export CSV file offer_data.csv",
+    "step_count": 3,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-02T11:05:30",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "checkbox",
+        "target": "ID",
+        "value": "random_1"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "offer_data.csv"
+      }
+    ]
+  },
+  "manual||sửa file offer_data.csv -> sửa cột gate: r80 -> sửa cột weight: 100 -> vào offer -> import csv file offer_data.csv": {
+    "feature": "manual",
+    "label": "Sửa file offer_data.csv -> Sửa cột gate: r80 -> Sửa cột Weight: 100 -> Vào Offer -> Import CSV file offer_data.csv",
+    "step_count": 4,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-02T11:11:25",
+    "template": [
+      {
+        "action": "manipulate_csv",
+        "target": "offer_data.csv",
+        "operation": "set",
+        "data": "gate=r80"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_data.csv",
+        "operation": "set",
+        "data": "Weight=100"
+      },
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "upload",
+        "value": "offer_data.csv",
+        "target": "Import CSV"
+      }
+    ]
+  },
+  "manual||vào offer -> chọn id: nov2024_wk3_webpp_wcs_strap_130gem_show -> export csv file offer_test.csv -> sửa cột gate: r80 -> sửa cột flagship: true -> sửa cột weight: 100000 -> sửa cột end times: 07/31/2026, 11:00 -> sửa cột repeat weekly: false -> import csv": {
+    "feature": "manual",
+    "label": "Vào Offer -> Chọn ID: nov2024_wk3_webpp_wcs_strap_130gem_show -> Export CSV file offer_test.csv -> Sửa cột gate: r80 -> ",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-02T11:21:53",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ]
+      },
+      {
+        "action": "checkbox",
+        "target": "ID",
+        "value": "nov2024_wk3_webpp_wcs_strap_130gem_show"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "offer_test.csv"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_test.csv",
+        "operation": "set",
+        "data": "gate=r80"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_test.csv",
+        "operation": "set",
+        "data": "Flagship=TRUE"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_test.csv",
+        "operation": "set",
+        "data": "Weight=100000"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_test.csv",
+        "operation": "set",
+        "data": "End Times=07/31/2026, 11:00"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_test.csv",
+        "operation": "set",
+        "data": "Repeat Weekly=FALSE"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "offer_test.csv"
+      }
+    ]
+  },
+  "manual||vào offer section -> chọn 1 id bất kỳ -> export csv offer_section.csv -> sửa cột sectionid: section_hieunm_0207 -> sửa cột gate: r80 -> sửa cột weight: 99 -> sửa cột enddate: 07/02/2026,11:00 -> import csv offer_section.csv": {
+    "feature": "manual",
+    "label": "Vào Offer Section -> Chọn 1 ID bất kỳ -> Export CSV offer_section.csv -> Sửa cột SectionID: Section_hieunm_0207 -> Sửa c",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-02T14:40:48",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer Section"
+        ],
+        "target": "Offer Section",
+        "value": ""
+      },
+      {
+        "action": "click",
+        "target": "Offer Section"
+      },
+      {
+        "action": "checkbox",
+        "target": "",
+        "value": "random_1"
+      },
+      {
+        "action": "download",
+        "value": "offer_section.csv",
+        "target": "Export CSV"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_section.csv",
+        "operation": "set",
+        "data": "SectionID=Section_hieunm_0207"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_section.csv",
+        "operation": "set",
+        "data": "gate=r80"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_section.csv",
+        "operation": "set",
+        "data": "weight=99"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "offer_section.csv",
+        "operation": "set",
+        "data": "EndDate=07/02/2026,11:00"
+      },
+      {
+        "action": "upload",
+        "value": "offer_section.csv",
+        "target": "Import CSV"
+      }
+    ]
+  },
+  "manual||vào offer section -> import csv file offer_section.csv": {
+    "feature": "manual",
+    "label": "Vào Offer Section -> Import CSV file offer_section.csv",
+    "step_count": 2,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-02T15:01:16",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer Section"
+        ]
+      },
+      {
+        "action": "upload",
+        "file_path": "offer_section.csv",
+        "target": "Import CSV",
+        "value": "offer_section.csv"
+      }
+    ]
+  },
+  "manual||sửa file offer_section.csv -> sửa cột startdate: 07/02/2026,01:00 -> vào offer section -> import csv file offer_section.csv": {
+    "feature": "manual",
+    "label": "Sửa file offer_section.csv -> Sửa cột StartDate: 07/02/2026,01:00 -> Vào Offer Section -> Import CSV file offer_section.",
+    "step_count": 3,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-02T15:04:31",
+    "template": [
+      {
+        "action": "manipulate_csv",
+        "target": "offer_section.csv",
+        "operation": "set",
+        "data": "StartDate=07/02/2026,01:00"
+      },
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer Section"
+        ]
+      },
+      {
+        "action": "upload",
+        "file_name": "offer_section.csv",
+        "target": "Import CSV",
+        "value": "offer_section.csv"
+      }
+    ]
+  },
+  "rbe||deploy and view diff: bấm vào logo the brick -> chọn checkbox rbe-> process": {
+    "feature": "RBE",
+    "label": "Deploy and view diff",
+    "step_count": 1,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-07T13:57:48",
+    "template": [
+      {
+        "action": "process_deployment",
+        "options": [
+          "RBE"
+        ]
+      }
+    ]
+  },
+  "manual||vào rbe -> bấm vào nút new rules based event -> radio: solo -> save -> đợi trang load -> sửa rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest, event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, {{today_iso}} 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
+    "feature": "manual",
+    "label": "Vào RBE -> Bấm vào nút New Rules Based Event -> Radio: Solo -> Save -> Đợi trang load -> Sửa Rules Based Tournament ID: ",
+    "step_count": 8,
+    "uses_unique": true,
+    "uses_last": false,
+    "saved_at": "2026-07-08T11:54:01",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE"
+        ],
+        "target": "RBE",
+        "value": ""
+      },
+      {
+        "action": "click",
+        "target": "New Rules Based Event"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Solo": "select"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Continue"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Rules Based Tournament ID": "{{UNIQUE_ID}}",
+          "Gate": "LiveOpsTest",
+          "Event Name": "!!BUTTON_CANCEL",
+          "Event Description": "!!BUTTON_CANCEL",
+          "Event Marquee Text": "!!BUTTON_CANCEL",
+          "Schedule in UTC": "2026-05-22 00:00, 2026-07-08 11:00",
+          "Preview Time": "3600",
+          "Expired Time": "3600",
+          "Event Icon": "RBE_Icon_Generic",
+          "Event Hub Banner Texture": "RBE_Fac_Wrapper_Wknd3_May2026",
+          "Event Sidebar Icon": "RBE_Icon_Generic",
+          "Gradient Image": "RBE_banner_1_purple",
+          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "manual||vào rbe -> clone rbe contain solo bất kỳ -> cloned rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest -> đợi trang load -> sửa event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, {{today_iso}} 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
+    "feature": "manual",
+    "label": "Vào RBE -> Clone RBE contain Solo bất kỳ -> Cloned Rules Based Tournament ID: hãy tự generate một ID duy nhất bắt đầu bằ",
+    "step_count": 8,
+    "uses_unique": true,
+    "uses_last": false,
+    "saved_at": "2026-07-08T12:02:28",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "solo"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Cloned Rules Based Tournament ID": "{{UNIQUE_ID}}",
+          "Gate": "LiveOpsTest"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Event Name": "!!BUTTON_CANCEL",
+          "Event Description": "!!BUTTON_CANCEL",
+          "Event Marquee Text": "!!BUTTON_CANCEL",
+          "Schedule in UTC": "2026-05-22 00:00, 2026-07-08 11:00",
+          "Preview Time": "3600",
+          "Expired Time": "3600",
+          "Event Icon": "RBE_Icon_Generic",
+          "Event Hub Banner Texture": "RBE_Fac_Wrapper_Wknd3_May2026",
+          "Event Sidebar Icon": "RBE_Icon_Generic",
+          "Gradient Image": "RBE_banner_1_purple",
+          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "manual||vào fight card v3 -> sửa id fightcard_feb2026_weeklong_champ -> đợi trang load -> bấm vào tab pve -> contest superstar: on -> sửa rbe event: hãy lấy id rbe vừa clone, contest superstar id: ss_oosbourne_ozzy, rewards: softcurrency, quantity: 100 -> save -> bấm vào logo the brick -> vào rbe -> sửa id vừa clone -> đợi trang load -> bấm vào tab contest superstars -> save -> bấm vào logo the brick": {
+    "feature": "manual",
+    "label": "Vào Fight Card V3 -> Sửa ID FightCard_Feb2026_weeklong_champ -> Đợi trang load -> Bấm vào tab PVE -> Contest Superstar: ",
+    "step_count": 13,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-08T17:47:11",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Fight Card",
+          "Fight Card V3"
+        ],
+        "target": "Fight Card V3",
+        "value": ""
+      },
+      {
+        "action": "edit_row",
+        "target": "FightCard_Feb2026_weeklong_champ"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "PVE"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "RBE Event": "{{LAST_ID}}",
+          "Contest Superstar ID": "SS_OOsbourne_Ozzy",
+          "Rewards": "SoftCurrency",
+          "Quantity": "100"
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      },
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Contest Superstars"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "manual||vào localization -> chọn 2 id bất kỳ -> export to csv file loc.csv -> sửa giá trị cột gate: deprecatedloc -> import csv file loc.csv": {
+    "feature": "manual",
+    "label": "Vào localization -> Chọn 2 ID bất kỳ -> Export To CSV file LOC.csv -> Sửa giá trị cột gate: deprecatedLOC -> Import CSV ",
+    "step_count": 5,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-09T14:16:47",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Data Configs",
+          "Localizations",
+          "Localizations"
+        ]
+      },
+      {
+        "action": "checkbox",
+        "target": "",
+        "value": "random_2"
+      },
+      {
+        "action": "download",
+        "value": "LOC.csv",
+        "target": "Export CSV"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "LOC.csv",
+        "operation": "set",
+        "data": "gate=deprecatedLOC"
+      },
+      {
+        "action": "upload",
+        "value": "LOC.csv",
+        "target": "Import CSV"
+      }
+    ]
+  },
+  "manual||vào offer -> sửa id jun2026_ml_pw_finale_shard_splusextra_mid -> đợi trang load -> bấm vào tab display info -> sửa store image name: !!t6_skillplate_jun2026_hof_desc": {
+    "feature": "manual",
+    "label": "Vào Offer -> Sửa ID jun2026_ml_pw_finale_shard_splusextra_mid -> Đợi trang load -> Bấm vào tab Display Info -> Sửa Store",
+    "step_count": 5,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-09T14:21:33",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Offer",
+          "Offer"
+        ],
+        "target": "Offer",
+        "value": ""
+      },
+      {
+        "action": "edit_row",
+        "target": "jun2026_ml_pw_finale_shard_splusextra_mid"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Display Info"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Store Image Name": "!!T6_SKILLPLATE_JUN2026_HOF_DESC"
+        }
       }
     ]
   }

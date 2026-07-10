@@ -103,17 +103,25 @@ class PopupClassifierMixin:
                     () => {
                         const modals = document.querySelectorAll('.modal .modal-body');
                         const results = [];
-                        
+
                         for (const modal of modals) {
                             // Only VISIBLE modals are real result popups. A hidden
                             // modal-body (e.g. the Offer edit FORM that contains a
                             // "Gate:" label) must NOT be mistaken for an import result
                             // — that caused a false PASS while the real Warning popups
                             // were still waiting to be confirmed.
-                            if (modal && modal.innerText && modal.innerText.trim()
-                                && modal.offsetParent !== null) {
-                                results.push({ text: modal.innerText.trim(), isVisible: true });
-                            }
+                            if (!(modal && modal.innerText && modal.innerText.trim()
+                                && modal.offsetParent !== null)) continue;
+                            // A genuine result/confirmation popup is just message text
+                            // + buttons — it never contains fillable form controls. A
+                            // visible modal WITH inputs/selects is a data-entry FORM
+                            // (e.g. Clone/Add Currency) that happens to be open for an
+                            // unrelated reason; its field labels/help text ("Currency ID
+                            // ... Only alpha-numeric ... allowed", a Gate <select>'s
+                            // default option) can read exactly like a validation error
+                            // and must not be mistaken for the actual import result.
+                            if (modal.querySelector('input:not([type=hidden]), select, textarea')) continue;
+                            results.push({ text: modal.innerText.trim(), isVisible: true });
                         }
                         
                         // Also check popup history if available
@@ -135,26 +143,24 @@ class PopupClassifierMixin:
                             print(f"   🔍 DEBUG: Retrieved from history: {result_type}")
                             return True, result_type, text[:200]
 
-                        # Otherwise classify based on keywords
-                        error_keywords = [
-                            "error",
-                            "fail",
-                            "invalid",
-                            "lỗi",
-                            "không hợp lệ",
-                            "không thành công",
-                        ]
-                        is_error = any(kw in text.lower() for kw in error_keywords)
+                        # Otherwise classify with the shared keyword set (broader than a
+                        # bare error-word list — catches validation phrasing like "Only
+                        # alpha-numeric ... allowed. No spaces allowed." that names no
+                        # literal "error"/"invalid"/"fail" word). A visible modal that
+                        # matches neither PASS nor FAIL keywords defaults to FAIL: a
+                        # genuine success confirmation always uses positive language
+                        # (success/thành công/completed/imported), so unrecognized text
+                        # is far more likely an unanticipated validation/error dialog.
+                        classified = self._classify_popup_message(text)
+                        result_type = classified or "FAIL"
 
                         is_visible = dom_result.get("isVisible", False)
                         print(
                             f"   🔍 DEBUG: Modal found (visible={is_visible}): {text[:80]}..."
                         )
-                        print(
-                            f"   🔍 DEBUG: Classified as: {'FAIL' if is_error else 'PASS'}"
-                        )
+                        print(f"   🔍 DEBUG: Classified as: {result_type}")
 
-                        return True, ("FAIL" if is_error else "PASS"), text[:200]
+                        return True, result_type, text[:200]
             except Exception as e:
                 print(f"   🔍 DEBUG: DOM modal check failed ({type(e).__name__})")
 
@@ -171,27 +177,31 @@ class PopupClassifierMixin:
                         # popup (a hidden edit FORM modal would otherwise false-PASS).
                         if not modal.is_visible():
                             continue
+                        # Same form-vs-result-popup filter as the DOM path above: a
+                        # visible modal with fillable controls is a data-entry FORM
+                        # (e.g. Clone/Add Currency) open for an unrelated reason, not
+                        # the actual import result — its field hints can read exactly
+                        # like a validation error.
+                        if (
+                            modal.locator(
+                                "input:not([type='hidden']), select, textarea"
+                            ).count()
+                            > 0
+                        ):
+                            continue
                         text = modal.inner_text(timeout=500).strip()
                         if text:
-                            # Classify based on keywords
-                            error_keywords = [
-                                "error",
-                                "fail",
-                                "invalid",
-                                "lỗi",
-                                "không hợp lệ",
-                                "không thành công",
-                            ]
-                            is_error = any(kw in text.lower() for kw in error_keywords)
+                            # Same shared-keyword classification as the DOM path above,
+                            # defaulting ambiguous text to FAIL rather than PASS.
+                            classified = self._classify_popup_message(text)
+                            result_type = classified or "FAIL"
 
                             print(f"   🔍 DEBUG: Modal {idx+1} content: {text[:80]}...")
-                            print(
-                                f"   🔍 DEBUG: Classified as: {'FAIL' if is_error else 'PASS'}"
-                            )
+                            print(f"   🔍 DEBUG: Classified as: {result_type}")
 
                             return (
                                 True,
-                                ("FAIL" if is_error else "PASS"),
+                                result_type,
                                 text[:200],
                             )
                     except:

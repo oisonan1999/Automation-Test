@@ -665,6 +665,40 @@ class FieldFillerMixin:
 
     def _fill_element_smartly(self, page, element, value):
         try:
+            # --- 0. MULTI-VALUE (list) for multiselect fields ---
+            # AI emits a JSON list (e.g. ["SS_A", "SS_B"]) for vue-multiselect / select2
+            # multiselect fields that accept >1 value. Each item must be selected in turn
+            # so every value is added as a separate tag. A single-element list is unwrapped.
+            # NOTE: datetime/schedule fields join lists into a string BEFORE reaching here,
+            # so a list arriving at this point is a genuine multi-value dropdown intent.
+            if isinstance(value, list):
+                items = [
+                    re.sub(r"[\[\]'\"]", "", str(v)).strip()
+                    for v in value
+                    if v is not None and str(v).strip()
+                ]
+                if len(items) == 0:
+                    return True
+                if len(items) == 1:
+                    value = items[0]  # unwrap → fall through to normal single-value flow
+                else:
+                    print(
+                        f"         🧷 Multi-value multiselect: {len(items)} values {items}"
+                    )
+                    all_ok = True
+                    for _idx, _item in enumerate(items, 1):
+                        try:
+                            ok_i = self._fill_element_smartly(page, element, _item)
+                        except Exception as _mv_e:
+                            print(
+                                f"         ⚠️ Multi-value item {_idx}/{len(items)} '{_item}' error: {_mv_e}"
+                            )
+                            ok_i = False
+                        all_ok = all_ok and bool(ok_i)
+                        # Let Vue re-render the tag list before selecting the next value
+                        time.sleep(0.6)
+                    return all_ok
+
             tag_name = element.evaluate("el => el.tagName").lower()
             el_type = element.get_attribute("type")
             class_attr = element.get_attribute("class") or ""

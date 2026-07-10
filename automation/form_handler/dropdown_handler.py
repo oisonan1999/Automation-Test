@@ -563,7 +563,20 @@ class DropdownHandlerMixin:
                             /Clone/i.test(modalEl.innerText || modalEl.textContent || ''));
 
                         function selectOpt(opt) {
-                            if (!inCloneModal) { opt.click(); return; }
+                            if (!inCloneModal) {
+                                // Some Select2 result widgets (e.g. the "select2-input-loc"
+                                // localization picker) listen for a genuine mousedown+mouseup
+                                // sequence rather than the bare 'click' event a single
+                                // el.click() synthesizes — same quirk already handled for the
+                                // "chosen" library above. A lone .click() reports success here
+                                // (the option text matches) but the underlying <select> value
+                                // never actually updates. Dispatch the full sequence instead.
+                                const mkEvt = (type) => new MouseEvent(type, {bubbles: true, cancelable: true, view: window});
+                                opt.dispatchEvent(mkEvt('mousedown'));
+                                opt.dispatchEvent(mkEvt('mouseup'));
+                                opt.dispatchEvent(mkEvt('click'));
+                                return;
+                            }
                             const optText = (opt.textContent || '').trim();
                             let optId = optText;
                             try {
@@ -863,7 +876,16 @@ class DropdownHandlerMixin:
                                 const inCloneModal = !!(modalEl &&
                                     /Clone/i.test(modalEl.innerText || modalEl.textContent || ''));
                                 function selectOpt(opt) {
-                                    if (!inCloneModal) { opt.click(); return; }
+                                    if (!inCloneModal) {
+                                        // See the matching comment in the sibling selectOpt()
+                                        // above: this widget needs a real mousedown+mouseup
+                                        // sequence, not a bare synthetic click.
+                                        const mkEvt = (type) => new MouseEvent(type, {bubbles: true, cancelable: true, view: window});
+                                        opt.dispatchEvent(mkEvt('mousedown'));
+                                        opt.dispatchEvent(mkEvt('mouseup'));
+                                        opt.dispatchEvent(mkEvt('click'));
+                                        return;
+                                    }
                                     const optText = (opt.textContent || '').trim();
                                     let optId = optText;
                                     try {

@@ -127,32 +127,6 @@ class FormCoreMixin:
                         (requireVisible) => {
                             // Strict: game event ID (e.g. "RBE_Jun2026_Wknd1")
                             const isIdLike = t => /^[A-Z][a-zA-Z]+_/.test(t);
-                            // Permissive: any non-trivial text that is not a pure number,
-                            // date string, boolean word, or very short/empty value.
-                            // Used for header-guided pass so Offer IDs like "offer_test_123"
-                            // or mixed-case names are accepted even without capital+underscore.
-                            const isUsable = t =>
-                                t.length > 2 &&
-                                !/^\\d+$/.test(t) &&
-                                !/^\\d{1,2}\\//.test(t) &&
-                                !/^(yes|no|true|false|active|inactive|none|-)$/i.test(t);
-
-                            // Find the data table that has visible tbody rows.
-                            // Scope header query to the SAME table to avoid index mismatch
-                            // when multiple tables exist on the page.
-                            let targetTable = null;
-                            let visibleRows = [];
-                            for (const tbl of document.querySelectorAll('table')) {
-                                const rows = [...tbl.querySelectorAll('tbody tr')]
-                                    .filter(r => (requireVisible ? r.offsetParent : true)
-                                        && (r.textContent || '').trim().length > 0);
-                                if (rows.length > 0) {
-                                    targetTable = tbl;
-                                    visibleRows = rows;
-                                    break;
-                                }
-                            }
-                            if (!targetTable) return null;
 
                             // Use .th-inner text when available (fixed-header tables duplicate
                             // content via .fht-cell div — textContent of th would include both).
@@ -161,47 +135,112 @@ class FormCoreMixin:
                                 return ((inner ? inner.textContent : th.textContent) || '').trim();
                             };
 
-                            const headers = [...targetTable.querySelectorAll('thead th, thead td')];
-                            const primaryCols = headers
-                                .map((th, i) => ({i, t: getHeaderText(th).toLowerCase()}))
-                                .filter(h =>
-                                    (h.t.includes('id') || h.t.includes('name')) &&
-                                    !h.t.includes('alternative') &&
-                                    !h.t.includes('cost') &&
-                                    !h.t.includes('gate') &&
-                                    !h.t.includes('type') &&
-                                    !h.t.includes('check') &&
-                                    !h.t.includes('mail') &&
-                                    !h.t.includes('promo') &&
-                                    !h.t.includes('vip')
-                                )
-                                .map(h => h.i);
+                            // ---------------------------------------------------------------
+                            // VALUE-BASED COLUMN SCORING, evaluated across EVERY candidate
+                            // table on the page (not just the first one found). Committing to
+                            // the FIRST table with any non-empty tbody text is unsafe — many
+                            // Brick pages have unrelated layout/nav/widget tables earlier in
+                            // the DOM than the real data grid, so that table could win with
+                            // zero viable ID columns and the resolver would return null even
+                            // though the real data table (later in the DOM) has a perfectly
+                            // good ID column (Currency-page failure). Instead, score every
+                            // column of every table and pick the single best table+column
+                            // combo globally.
+                            // ---------------------------------------------------------------
+                            const isDateish = t =>
+                                /\\d{4}-\\d{1,2}-\\d{1,2}/.test(t) ||          // 2026-06-29
+                                /\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(t) ||    // 06/29/2026
+                                /\\d{1,2}:\\d{2}/.test(t) ||                   // 02:14
+                                /\\b(AM|PM)\\b/.test(t);                       // AM/PM
+                            const isDash = t => !t || /^[-—–]+$/.test(t);
+                            const isControlWord = t =>
+                                /^(edit|clone|delete|copy|view|remove|select|action)$/i.test(t);
 
-                            // Pass 1: header-guided — permissive match (Offer IDs may not
-                            // follow the strict capital+underscore game-event-ID format)
-                            for (const row of visibleRows) {
-                                const cells = row.querySelectorAll('td');
-                                for (const ci of primaryCols) {
-                                    const text = (cells[ci] ? cells[ci].textContent : '').trim();
-                                    if (isUsable(text)) return text.substring(0, 60);
+                            // Score how much a single cell value looks like a row ID.
+                            const scoreVal = t => {
+                                if (isDash(t) || isDateish(t) || isControlWord(t)) return -100;
+                                if (/^\\d+$/.test(t)) return t.length >= 3 ? 2 : -50;  // numeric ID
+                                let s = 0;
+                                if (/^[A-Za-z][\\w]*_[\\w]/.test(t)) s += 5;   // has an underscore token
+                                if (/^[A-Z][a-zA-Z]+_/.test(t)) s += 3;        // strict game-event ID
+                                if (/[a-z]/.test(t) && /[A-Z]/.test(t)) s += 2; // mixed case
+                                if (/^!!/.test(t)) s -= 4;                      // localization key (Name/Desc)
+                                if (/\\s/.test(t)) s -= 2;                      // has spaces (e.g. "Gacha Token")
+                                if (t.length < 3) s -= 3;
+                                return s;
+                            };
+
+                            let best = null;  // { score, col, rows }
+                            for (const tbl of document.querySelectorAll('table')) {
+                                const rows = [...tbl.querySelectorAll('tbody tr')]
+                                    .filter(r => (requireVisible ? r.offsetParent : true)
+                                        && (r.textContent || '').trim().length > 0);
+                                if (rows.length === 0) continue;
+
+                                const sampleRows = rows.slice(0, 8);
+                                const maxCols = Math.max(
+                                    0, ...sampleRows.map(r => r.querySelectorAll('td').length));
+                                if (maxCols === 0) continue;
+
+                                // Only trust THIS table's own thead for the ID-header bonus
+                                // (guaranteed aligned to its own <td>s); a borrowed header from
+                                // a different (e.g. fixedHeader clone) table can't be trusted
+                                // to align 1:1, so we never cross-reference other tables here.
+                                const ownHeaders = [...tbl.querySelectorAll('thead th, thead td')];
+                                const headersAligned =
+                                    ownHeaders.some(h => getHeaderText(h)) &&
+                                    Math.abs(ownHeaders.length - maxCols) <= 1;
+                                const headerHasId = i => {
+                                    if (!headersAligned) return false;
+                                    const h = ownHeaders[i];
+                                    if (!h) return false;
+                                    const t = getHeaderText(h).toLowerCase();
+                                    return (/\\bid\\b/.test(t) || t.endsWith('id')) &&
+                                        !t.includes('modified') && !t.includes('valid');
+                                };
+
+                                for (let c = 0; c < maxCols; c++) {
+                                    let colScore = 0, valid = 0, hasControl = false;
+                                    for (const r of sampleRows) {
+                                        const cell = r.querySelectorAll('td')[c];
+                                        if (!cell) continue;
+                                        if (cell.querySelector('input, button, select, a.btn')) {
+                                            hasControl = true; break;  // checkbox / action column
+                                        }
+                                        const sv = scoreVal((cell.textContent || '').trim());
+                                        colScore += sv;
+                                        if (sv > 0) valid++;
+                                    }
+                                    if (hasControl || valid === 0) continue;
+                                    // Normalize by sample size so tables aren't compared unfairly
+                                    // just because one has more sampled rows than another.
+                                    let avg = colScore / sampleRows.length;
+                                    if (headerHasId(c)) avg += 100;  // header confirms ID column
+                                    if (!best || avg > best.score) {
+                                        best = {score: avg, col: c, rows};
+                                    }
                                 }
                             }
 
-                            // Pass 2: cols 1-4, strict pattern (skip col 0 = checkbox)
-                            for (const row of visibleRows) {
-                                const cells = row.querySelectorAll('td');
-                                for (let i = 1; i < Math.min(cells.length, 5); i++) {
-                                    const text = (cells[i].textContent || '').trim();
-                                    if (isIdLike(text)) return text.substring(0, 60);
+                            if (best) {
+                                for (const r of best.rows) {
+                                    const cell = r.querySelectorAll('td')[best.col];
+                                    if (!cell) continue;
+                                    const t = (cell.textContent || '').trim();
+                                    if (scoreVal(t) > 0) return t.substring(0, 60);
                                 }
                             }
 
-                            // Pass 3: full scan fallback, strict pattern
-                            for (const row of visibleRows) {
-                                const cells = row.querySelectorAll('td');
-                                for (let i = 0; i < cells.length; i++) {
-                                    const text = (cells[i].textContent || '').trim();
-                                    if (isIdLike(text)) return text.substring(0, 60);
+                            // Last resort: strict game-event-ID pattern anywhere on the page.
+                            for (const tbl of document.querySelectorAll('table')) {
+                                const rows = [...tbl.querySelectorAll('tbody tr')]
+                                    .filter(r => (requireVisible ? r.offsetParent : true));
+                                for (const row of rows) {
+                                    const cells = row.querySelectorAll('td');
+                                    for (let i = 0; i < cells.length; i++) {
+                                        const text = (cells[i].textContent || '').trim();
+                                        if (isIdLike(text)) return text.substring(0, 60);
+                                    }
                                 }
                             }
                             return null;

@@ -156,11 +156,124 @@ class UploadHandlerMixin:
         self._ensure_popup_closed(page)  # Đảm bảo popup đã đóng sau tất cả retry
         return False, "Max retries exceeded"
 
+    def _try_upload_via_import_from_csv_modal(self, page, file_path):
+        """
+        Currency (and any other page sharing this exact UI shape) uses a
+        two-step "Import From CSV" pattern the generic path below can't
+        handle: a page-level trigger button labeled "Import From CSV" opens
+        a Bootstrap modal (title "Import from CSV") containing a plain
+        native <input type="file"> and a modal-scoped submit button labeled
+        just "Import" — no "CSV" in it (confirmed via live CDP DOM dump:
+        `<div id="csv_upload">...<input type="file" id="csv_file">...
+        <button class="btn btn-primary import-csv">Import</button>`).
+
+        The generic logic in this function fails on this shape for two
+        reasons:
+        1. It searches page-wide for `input[type='file']` and finds this
+           modal's input while the modal is still hidden (`.modal.hide`),
+           setting the file directly on it. The modal is a shared reusable
+           component (Currency's page also has a near-identical sibling
+           "Scan Currencies" modal with its own file input) — if opening it
+           resets the form, the selection is silently lost. This matches
+           the observed symptom: the run reported "uploaded" yet the
+           re-opened modal still showed "No file chosen".
+        2. Its submit-button search requires the literal text "Import CSV";
+           this modal's button just says "Import", so it's never clicked
+           and the form is never actually submitted.
+
+        Detection is purely DOM-based (trigger text "Import From CSV" +
+        the modal that appears containing an `input[type=file]`), gated on
+        the trigger containing the word "From" — no other feature's "Import
+        CSV" trigger uses that wording, so this cannot misfire on the
+        ordinary direct-file-chooser pattern used everywhere else.
+
+        Returns (success, msg, None) if this pattern was found and handled
+        to completion, or None if the pattern isn't present at all (caller
+        falls back to the generic upload logic below, completely unchanged).
+        """
+        try:
+            trigger = (
+                page.locator("button, a, [role='button']")
+                .filter(has_text=re.compile(r"import\s+from\s+csv", re.IGNORECASE))
+                .first
+            )
+            if trigger.count() == 0 or not trigger.is_visible(timeout=500):
+                return None
+
+            trigger.scroll_into_view_if_needed()
+            trigger.click(force=True)
+
+            modal = (
+                page.locator(".modal")
+                .filter(has=page.locator("input[type='file']"))
+                .filter(has_text=re.compile(r"import from csv", re.IGNORECASE))
+                .first
+            )
+            modal.wait_for(state="visible", timeout=5000)
+
+            file_input = modal.locator("input[type='file']").first
+            file_input.set_input_files(file_path)
+            print("   🧾 [Import-From-CSV modal] File set on modal-scoped input")
+
+            submit_btn = (
+                modal.locator("button, a, [role='button']")
+                .filter(has_text=re.compile(r"^\s*Import\s*$", re.IGNORECASE))
+                .first
+            )
+            submit_btn.wait_for(state="visible", timeout=2000)
+            submit_btn.click(force=True)
+            print("   🧾 [Import-From-CSV modal] Clicked modal 'Import' submit button")
+        except Exception as e:
+            print(f"   ℹ️ [Import-From-CSV modal] pattern not detected/failed to handle: {e}")
+            return None
+
+        # Shared post-submit result detection — same building blocks the
+        # generic path below uses (network idle, confirmation prompts, then
+        # the result-popup scanner), so classification stays consistent.
+        try:
+            page.wait_for_load_state("networkidle", timeout=60000)
+        except Exception:
+            pass
+        try:
+            self._confirm_csv_overwrite_prompt_if_present(page, max_rounds=5)
+        except Exception:
+            pass
+        if hasattr(self, "_wait_for_long_loading"):
+            try:
+                self._wait_for_long_loading(page, timeout_ms=20000)
+            except Exception:
+                pass
+
+        found, res_type, res_text = self._scan_for_result_popup(page)
+        self._ensure_popup_closed(page)
+        if found:
+            return (res_type == "PASS", str(res_text or "")[:100], None)
+
+        # No popup at all — this UI style dismisses its own modal on a
+        # successful ajax submit, so a still-open modal signals the submit
+        # failed silently (client-side validation, network error, etc.)
+        # rather than being a silent success.
+        try:
+            still_open = modal.is_visible(timeout=500)
+        except Exception:
+            still_open = False
+        if still_open:
+            return (False, "Import modal still open after submit — likely failed", None)
+        return (True, "Import completed (modal closed, no popup)", None)
+
     def _upload_fuzz_fast(self, page, target_text, file_name, cached_selector=None):
         """Optimized upload for fuzzing: 15s timeout, cached selector. Returns (success, msg, selector)"""
         full_path = os.path.join(DOWNLOAD_DIR, file_name)
         try:
             btn = None
+
+            # Currency-style "Import From CSV" -> separate modal pattern (see
+            # docstring of _try_upload_via_import_from_csv_modal). Detected
+            # purely from the DOM, so pages using the ordinary single-click
+            # file-chooser pattern fall through to the logic below unchanged.
+            _modal_result = self._try_upload_via_import_from_csv_modal(page, full_path)
+            if _modal_result is not None:
+                return _modal_result
 
             # Wait for any post-Export loading spinner to clear BEFORE locating the
             # Import control. On pages like Gacha Pool, exporting leaves a spinner up
@@ -1017,6 +1130,9 @@ class UploadHandlerMixin:
             real_file_name = file_name
             if not real_file_name or real_file_name.lower().strip() == "file.csv":
                 real_file_name = self.memory.get("LAST_FUZZED_FILE", file_name)
+
+            if not str(real_file_name or "").strip():
+                return [{"step": "Upload", "status": "FAIL", "details": "Upload filename is empty — check the action plan (upload.value)"}]
 
             file_path = os.path.join(DOWNLOAD_DIR, real_file_name)
             if not os.path.exists(file_path):

@@ -9,7 +9,11 @@
     "hieunm_test_20260611_112442_56a1ca",
     "hieunm_test_20260615_112625_5630d3",
     "hieunm_test_20260615_112915_f3c8b2",
-    "hieunm_test_0618145423_94a4"
+    "hieunm_test_0618145423_94a4",
+    "hieunm_test_20260707_134535_9c9e96",
+    "hieunm_test_20260707_134826_6ac2ee",
+    "hieunm_test_20260708_115722_f344b7",
+    "hieunm_test_20260708_115948_531530"
   ],
   "Offer": [
     "hieunm_test_20260603_135356_f4475e",
@@ -46,5 +50,9 @@
   ],
   "Faction Feud": [
     "FF_hieunm_test_20260625_114028_7dd790"
+  ],
+  "Currency": [
+    "hieunm_test_20260701_160447_e55d12",
+    "hieunm_test_20260701_160751_e8c452"
   ]
 }

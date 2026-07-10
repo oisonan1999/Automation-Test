@@ -9,6 +9,11 @@ from copy import deepcopy
 import requests
 from dotenv import load_dotenv
 
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
 from ai.prompts import (
     get_fast_mode_prompt,
     get_reasoning_prompt,
@@ -30,6 +35,10 @@ _formatting_call_count = 0
 # MODEL_REASONING = "deepseek-r1:8b"  # Unused: dual-model pipeline disabled (Qwen alone = 100% correct)
 MODEL_FORMATTING = "qwen2.5-coder:14b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+
+# Careful Mode (Claude API) — opt-in alternative to the Ollama fast pipeline
+MODEL_CLAUDE_CAREFUL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 SCENARIO_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "scenarios.json"
 )
@@ -474,7 +483,105 @@ def single_model_pipeline(user_command):
         return []
 
 
-# dual_model_pipeline (DeepSeek + Qwen) removed — Qwen single-model pipeline only.
+# ============================================================================
+# CAREFUL MODE PIPELINE (Claude API)
+# ============================================================================
+
+
+def call_claude(prompt, model_name=None):
+    """
+    Gọi Claude API (Anthropic) cho Careful Mode.
+    Trả về response text, hoặc None nếu thiếu SDK/API key hoặc lỗi request.
+    """
+    if anthropic is None:
+        print(
+            "   ❌ Careful Mode (Claude): package 'anthropic' chưa được cài. "
+            "Chạy: pip install anthropic"
+        )
+        return None
+    if not ANTHROPIC_API_KEY:
+        print(
+            "   ❌ Careful Mode (Claude): thiếu ANTHROPIC_API_KEY trong .env"
+        )
+        return None
+
+    model_name = model_name or MODEL_CLAUDE_CAREFUL
+    wall_start = time.time()
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # "effort" 400s on Haiku 4.5 (only Fable 5 / Opus / Sonnet 5 / Sonnet 4.6
+        # support it) and Haiku isn't built for deep adaptive thinking — only
+        # send these on the larger models that actually support them.
+        kwargs = {}
+        if "haiku" not in model_name:
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": "high"}
+        response = client.messages.create(
+            model=model_name,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+            **kwargs,
+        )
+        wall_elapsed = time.time() - wall_start
+        text = next((b.text for b in response.content if b.type == "text"), "")
+
+        usage = response.usage
+        print(f"\n   ⏱️  TIMING [{model_name}] (careful/claude):")
+        print(f"      Total (wall):  {wall_elapsed:6.2f}s")
+        print(
+            f"      Tokens: in={usage.input_tokens} out={usage.output_tokens} "
+            f"cache_read={getattr(usage, 'cache_read_input_tokens', 0)}"
+        )
+        return text
+    except Exception as e:
+        print(f"❌ Claude API Error ({model_name}): {e}")
+        return None
+
+
+def claude_careful_pipeline(user_command):
+    """
+    Careful Mode - Dùng Claude (Anthropic API) thay cho Qwen để tăng độ chính xác
+    khi hiểu lệnh tiếng Việt phức tạp và format JSON đúng schema.
+    Fallback về Fast Mode (Qwen) nếu Claude lỗi (thiếu key, network, parse fail 2 lần).
+    """
+    print(f"   🧪 CAREFUL MODE (Claude): {MODEL_CLAUDE_CAREFUL}")
+    pipeline_start = time.time()
+
+    prompt = get_fast_mode_prompt(user_command)
+    raw_output = call_claude(prompt)
+
+    if not raw_output:
+        print("   ⚠️  Careful Mode (Claude) không khả dụng → fallback Fast Mode (Qwen2.5-Coder).")
+        return single_model_pipeline(user_command)
+
+    print(f"\n   🔍 DEBUG - RAW CLAUDE OUTPUT (first 800 chars):")
+    print(f"   {raw_output[:800]}...")
+
+    final_json_str = clean_json_string(raw_output)
+    try:
+        plan = json.loads(final_json_str)
+        pipeline_elapsed = time.time() - pipeline_start
+        print(
+            f"   ✅ Careful Mode (Claude): Tạo thành công {len(plan)} bước ({pipeline_elapsed:.1f}s total)"
+        )
+        return plan
+    except json.JSONDecodeError as e:
+        print(f"   ❌ Careful Mode (Claude) Parse Error: {e}")
+        print(f"   Raw (first 500): {raw_output[:500]}...")
+
+        print("   🔄 Retry Careful Mode (Claude)...")
+        retry_output = call_claude(prompt)
+        if retry_output:
+            retry_str = clean_json_string(retry_output)
+            try:
+                plan_retry = json.loads(retry_str)
+                print(f"   ✅ Careful Mode (Claude) retry OK: {len(plan_retry)} bước")
+                return plan_retry
+            except json.JSONDecodeError:
+                print("   ❌ Careful Mode (Claude) retry cũng fail.")
+
+        print("   ⚠️  Falling back to Fast Mode (Qwen2.5-Coder).")
+        return single_model_pipeline(user_command)
 
 
 def patch_model_pipeline(user_command, base_command, base_plan):
@@ -518,11 +625,37 @@ def patch_model_pipeline(user_command, base_command, base_plan):
 # ============================================================================
 
 
-def _inject_generated_ids(user_command: str) -> str:
+def _inject_current_date(user_command: str) -> str:
+    """
+    Replace date placeholders with today's date before the AI pipeline sees the command.
+    Used in smoke-test CSV files so end-time dates are always "current day", not stale.
+
+    Tokens:
+      {{TODAY_ISO}}  → YYYY-MM-DD   (for RBE / Gacha: "2026-07-08 11:00")
+      {{TODAY_MDY}}  → MM/DD/YYYY   (for Offer / PVE / SD / FF / Grabbag: "07/08/2026 11:00 AM")
+    """
+    import datetime as _dt
+
+    if "{{TODAY" not in user_command:
+        return user_command
+    today = _dt.date.today()
+    user_command = user_command.replace("{{TODAY_ISO}}", today.strftime("%Y-%m-%d"))
+    user_command = user_command.replace("{{TODAY_MDY}}", today.strftime("%m/%d/%Y"))
+    return user_command
+
+
+def _inject_generated_ids(user_command: str, forced_id: str | None = None) -> str:
     """
     Preprocessing: replace 'hãy tự generate một ID duy nhất bắt đầu bằng <prefix>'
     with '<prefix>_<timestamp>_<random>' before the AI pipeline sees the command.
     Prevents the AI from reusing previously-seen IDs from its context window.
+
+    If `forced_id` is given, use it verbatim instead of generating a fresh one.
+    Callers (app.py) pre-generate an ID up front to look up/tokenize the golden
+    plan cache; without this, brain.py would silently mint its OWN different ID
+    here, the plan would end up with that (different) ID baked in, and golden
+    tokenization would fail to find the caller's ID to replace with {{UNIQUE_ID}}
+    — permanently freezing a stale, already-used ID into the golden template.
     """
     import datetime as _dt
     import uuid as _uuid
@@ -538,6 +671,8 @@ def _inject_generated_ids(user_command: str) -> str:
         m = re.match(r"^(.*?)([.,;]*)$", token)
         prefix = m.group(1) if m else token
         trailing = m.group(2) if m else ""
+        if forced_id:
+            return f"{forced_id}{trailing}"
         ts = _dt.datetime.now().strftime("%m%d%H%M%S")
         rnd = _uuid.uuid4().hex[:4]
         return f"{prefix}_{ts}_{rnd}{trailing}"
@@ -549,24 +684,33 @@ def _inject_generated_ids(user_command: str) -> str:
 
 
 def parse_command_to_json(
-    user_command, use_fast_mode=True, context_plan=None, base_command=None
+    user_command,
+    use_fast_mode=True,
+    context_plan=None,
+    base_command=None,
+    forced_unique_id=None,
 ):
     """
     Main function - Chuyển đổi lệnh thành JSON Action Plan
 
     Args:
         user_command: Lệnh từ user (tiếng Việt hoặc English)
-        use_fast_mode: True = Fast (1 model), False = Careful (2 models)
+        use_fast_mode: True = Fast Mode (Qwen local qua Ollama),
+            False = Careful Mode (Claude API, fallback về Qwen nếu Claude lỗi)
         context_plan: Kế hoạch trước đó (nếu có)
         base_command: Câu lệnh gốc của scenario đã load (nếu có)
+        forced_unique_id: ID caller đã pre-generate (vd để golden-cache lookup) —
+            dùng ID này thay vì để _inject_generated_ids tự sinh ID khác, tránh
+            lệch giữa ID thực trong plan và ID dùng để tokenize golden.
 
     Returns:
         List[dict]: JSON Action Plan
     """
     global last_actual_mode
 
-    # Preprocess: inject unique IDs before AI sees the command
-    user_command = _inject_generated_ids(user_command)
+    # Preprocess: replace date placeholders ({{TODAY_ISO}}/{{TODAY_MDY}}) then unique IDs
+    user_command = _inject_current_date(user_command)
+    user_command = _inject_generated_ids(user_command, forced_id=forced_unique_id)
 
     print("\n🧠 AI Pipeline Started...")
     print(
@@ -595,8 +739,12 @@ def parse_command_to_json(
                 has_context = False
 
     if not has_context:
-        last_actual_mode = "fast"
-        plan = single_model_pipeline(user_command)
+        if use_fast_mode:
+            last_actual_mode = "fast"
+            plan = single_model_pipeline(user_command)
+        else:
+            last_actual_mode = "careful_claude"
+            plan = claude_careful_pipeline(user_command)
 
     # BƯỚC 3: Auto-fix nếu cần
     if (

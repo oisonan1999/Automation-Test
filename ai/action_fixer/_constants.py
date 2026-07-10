@@ -143,7 +143,7 @@ NAVIGATION_PATH_MAP = {
     "mission": ["Live Events", "Mission", "Mission"],
     # Fight Card
     "fight card": ["Live Events", "Fight Card", "Fight Card"],
-    "fight card V3": ["Live Events", "Fight Card", "Fight Card V3"],
+    "fight card v3": ["Live Events", "Fight Card", "Fight Card V3"],
     "fight card slot": ["Live Events", "Fight Card", "Fight Card Slot"],
     # Cash Contract
     "cash contract": ["Live Events", "Cash Contract", "Cash Contract"],

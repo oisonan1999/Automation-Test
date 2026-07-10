@@ -28,6 +28,11 @@ Input: "Vào PVE -> Chọn ID "LTPVE_May2026_Wk4_Contest" -> Export CSV"
 Output: [{{"action":"navigate","path":["Live Events","PVE","Classic PVE"]}},{{"action":"checkbox","target":"ID","value":"LTPVE_May2026_Wk4_Contest"}},{{"action":"download","target":"Export CSV"}}]
 RULE: "Chọn ID 'SPECIFIC_ID'" = checkbox(target="ID", value="SPECIFIC_ID"). Use the EXACT ID string as value. NEVER use process_deployment for this. This selects a specific named row, different from "Chọn N ID bất kỳ" (random selection).
 
+Example 2c (SPECIFIC ID checkbox, COLON format — do NOT confuse with edit_row):
+Input: "Vào Offer -> Chọn ID: nov2024_wk3_webpp_wcs_strap_130gem_show -> Export CSV file offer_test.csv"
+Output: [{{"action":"navigate","path":["Live Events","Offer","Offer"]}},{{"action":"checkbox","target":"ID","value":"nov2024_wk3_webpp_wcs_strap_130gem_show"}},{{"action":"download","target":"Export CSV","value":"offer_test.csv"}}]
+RULE: "Chọn ID: X" (WITH a colon, no quotes) is STILL checkbox, exactly like "Chọn ID 'X'". The verb "Chọn" (select/tick) is what decides the action — checkbox — regardless of whether the ID after it is quoted, has a colon, or neither. Only the verb "Sửa"/"Edit" before "ID:" triggers edit_row (see "Sửa" CONTEXT DETECTION below, e.g. "Sửa ID: FF_ABC" = edit_row). NEVER invent or reuse an unrelated ID from a different example as the edit_row target — "Chọn ID: X" never becomes edit_row.
+
 Example 3:
 Input: "Click logo The Brick -> Chọn checkbox Offers -> Bấm Process"
 Output: [{{"action":"process_deployment","options":["Offers"]}}]
@@ -177,6 +182,36 @@ CRITICAL RULES:
   * CORRECT data order: {{"New Event ID": "...", "Gate": "...", "Use another currency": "select", "Currency": "..."}}
   * WRONG: {{"New Event ID": "...", "Gate": "...", "Currency": "..."}} (missing radio!)
 
+- MULTISELECT MULTIPLE VALUES (list fields like "Contest Superstar ID"):
+  * When a field value is wrapped in square brackets with multiple items, output a JSON LIST.
+  * Command syntax: "Contest Superstar ID: [SS_A, SS_B]" → {{"Contest Superstar ID": ["SS_A", "SS_B"]}}
+  * A SINGLE value stays a plain string: "Contest Superstar ID: SS_A" → {{"Contest Superstar ID": "SS_A"}}
+  * Only bracketed values become lists. Never turn a datetime pair (e.g. "Schedule: 2026-02-23 00:00:00, 2026-02-23 11:00:00") into a list — those stay a comma-separated STRING.
+  * Example: "Sửa RBE Event: RBE_x, Contest Superstar ID: [SS_A, SS_B], Rewards: SoftCurrency, Quantity: 100"
+    → {{"action":"update_form","data":{{"RBE Event":"RBE_x","Contest Superstar ID":["SS_A","SS_B"],"Rewards":"SoftCurrency","Quantity":"100"}}}}
+
+- FIGHT CARD V3 — PVE TAB (CRITICAL — NEVER SKIP):
+  * Fight Card V3 has multiple tabs. PVE fields (RBE Event, Contest Superstar ID, Rewards, Quantity) are ONLY accessible after clicking the "PVE" tab.
+  * "Bấm vào tab PVE" / "Click tab PVE" → MUST generate {{"action":"click","target":"PVE"}} BEFORE any update_form with PVE fields.
+  * "Bật toggle Contest Superstar" → include {{"Contest Superstar": "on"}} as the FIRST key in the update_form data dict (before RBE Event, Contest Superstar ID, Rewards, Quantity).
+  * CORRECT (with toggle): edit_row(ID) → wait → click("PVE") → update_form({{"Contest Superstar":"on","RBE Event":...,"Contest Superstar ID":...,"Rewards":...,"Quantity":...}}) → save_form
+  * CORRECT (without toggle): edit_row(RANDOM) → wait → click("PVE") → update_form({{"RBE Event":...,"Contest Superstar ID":...,"Rewards":...,"Quantity":...}}) → save_form
+  * WRONG: edit_row(RANDOM) → wait → update_form({{"RBE Event":...}}) ← missing click("PVE") means fields will NOT be found!
+
+- MULTI-FEATURE COMMANDS (CRITICAL — NEVER SKIP NAVIGATE):
+  * When command touches multiple features (e.g. FCV3 then RBE), EACH feature section MUST start with its own navigate.
+  * "Bấm vào logo The Brick" between features = {{"action":"process_deployment","options":[]}} ONLY — NEVER add options unless explicit "Chọn checkbox X -> Process" follows.
+  * After each logo click, "Vào X" ALWAYS generates navigate(X) + edit_row(RANDOM/ID) — NEVER use update_form(ID contains) as a substitute.
+  * "Bấm vào tab X" ALWAYS generates click("X") immediately BEFORE the save_form in that feature's section.
+  * CORRECT multi-feature flow example:
+    "Vào FCV3 -> Sửa ... -> tab PVE -> Sửa ... -> Save -> logo -> Vào RBE -> Sửa ... -> tab Contest Superstars -> Save -> logo"
+    → navigate(FCV3) → edit_row(RANDOM) → wait → click("PVE") → update_form({{PVE fields}}) → save_form
+    → process_deployment(options=[])
+    → navigate(RBE) → edit_row(RANDOM) → wait → click("Contest Superstars") → save_form
+    → process_deployment(options=[])
+  * WRONG: navigate(FCV3)→...→save_form→process_deployment(["PVE","RBE"])→update_form({{"ID contains":X}})→save_form
+    ← TWO errors: (1) wrong options, (2) missing navigate(RBE)+edit_row, (3) missing click("Contest Superstars")
+
 - CLONE MODAL SUBMIT + POST-CLONE EDITING (CRITICAL):
   * After filling the Clone modal (New ID, Gate, radio, Currency), ALWAYS add {{"action":"save_form","mode":"clone"}} to click the Clone button
   * Fields that come AFTER the Clone button (e.g., Schedule, other edits) go in a SEPARATE update_form AFTER save_form(clone)
@@ -218,6 +253,8 @@ CRITICAL RULES:
   * manipulate_csv schema: {{"action":"manipulate_csv","target":"<filename>","operation":"set","data":"<ColumnName>=<Value>"}}
   * The target filename MUST match the previously downloaded file. Separate multiple CSV column edits with separate manipulate_csv steps.
   * Example: "Export perk.csv → Sửa Event Type: PVE_STIPULATION → Import perk.csv" = download + manipulate_csv(set,Event Type=PVE_STIPULATION) + upload. NEVER update_form here.
+  * ⚠️ manipulate_csv values are written into the raw CSV cell VERBATIM — copy the value EXACTLY as typed after the colon, character for character. Do NOT add/remove "AM"/"PM", do NOT reformat dates, do NOT add trailing punctuation. This is DIFFERENT from update_form datetime fields (which DO need "AM/PM" for the UI picker widget) — manipulate_csv has no such requirement.
+  * Example: "Sửa cột End Times: 07/31/2026, 11:00" (between Export and Import) → manipulate_csv(set,"End Times=07/31/2026, 11:00") — NOT "...11:00 AM". The command has no AM/PM, so the CSV value has none either.
   * Example: "Sửa FF ID: FF_ABC -> Đợi trang load -> sửa Gate: r80" = edit_row("FF_ABC") + wait + update_form({{"Gate":"r80"}}) + save_form
   * WRONG: update_form({{"FF ID":"FF_ABC","Gate":"r80"}})
   * RANDOM ROW: "Sửa FF ID bất kỳ", "Sửa một dòng bất kỳ", "Edit any row", "Sửa bất kỳ" → edit_row("RANDOM")

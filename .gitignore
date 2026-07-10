@@ -10,6 +10,7 @@ __pycache__/
 .obsidian/
 .claude/
 .vscode/
+.env
 *.pyc
 downloads/
 # ===== NodeJS =====

@@ -179,6 +179,27 @@ class DataHandlerMixin:
             if b.is_visible()
             and not any(x in b.inner_text().lower() for x in ["import", "upload"])
         ]
+
+        # Disambiguate look-alike buttons (e.g. "Export LOC" vs "Export To CSV")
+        # that both match the generic "Export"/"Download" fallback keyword above.
+        # Prefer buttons whose text also contains the significant (non-generic)
+        # words of specific_name, e.g. "csv" in target "Export CSV".
+        if specific_name and v:
+            generic_words = {"export", "download", "the", "to", "a", "an", "file"}
+            sig_words = [
+                w
+                for w in re.findall(r"\w+", specific_name.lower())
+                if w not in generic_words
+            ]
+            if sig_words:
+                exact = [
+                    b
+                    for b in v
+                    if all(w in b.inner_text().lower() for w in sig_words)
+                ]
+                if exact:
+                    v = exact
+
         if v:
             for b in v:
                 if b.is_enabled():
