@@ -33,7 +33,7 @@ _formatting_call_count = 0
 
 # === CONFIGURATION ===
 # MODEL_REASONING = "deepseek-r1:8b"  # Unused: dual-model pipeline disabled (Qwen alone = 100% correct)
-MODEL_FORMATTING = "qwen2.5-coder:14b"
+MODEL_FORMATTING = "qwen3:8b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 
 # Careful Mode (Claude API) — opt-in alternative to the Ollama fast pipeline
@@ -154,6 +154,18 @@ def clean_json_string(text):
 
     # Pattern match: 'any text' (single quoted strings)
     text = re.sub(r"'([^'\\]*(\\.[^'\\]*)*)'", replace_single_quotes, text)
+
+    # 6b. [NEW] Quote bare/unquoted object keys (Fix lỗi LLM đôi khi "quên" quote key
+    # khi copy một object tương tự object trước đó trong cùng list, ví dụ:
+    # {"action":"manipulate_csv",...} rồi tới {action:"manipulate_csv",...} (thiếu quote).
+    # Chỉ match khi key đứng ngay sau { hoặc , VÀ theo sau : là một JSON value hợp lệ
+    # (", [, {, số, true/false/null) — tránh việc quote nhầm nội dung text tự do
+    # bên trong một string value (vd "Attempt: 10000" không bị đụng tới).
+    text = re.sub(
+        r'([{,])(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:\s*)(?=["\[{]|-?\d|true\b|false\b|null\b)',
+        r'\1\2"\3"\4',
+        text,
+    )
 
     # 7. [NEW] Fix LLM merging two fields: "val1 - Key2":"val2" → "val1","Key2":"val2"
     # Xảy ra khi LLM viết nhầm: "Start Time UTC":"07:00 - End Time UTC":"07:15"
@@ -276,7 +288,7 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
         "num_gpu": 99,
     }
 
-    # Config tối ưu cho Careful Mode - Formatting Phase (Qwen2.5-Coder)
+    # Config tối ưu cho Careful Mode - Formatting Phase (Qwen3)
     # (Reasoning phase / DeepSeek disabled — Qwen single-model pipeline only)
     if careful_phase == "formatting":
         options = {
@@ -317,6 +329,12 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
         # Lần gọi đầu: prompt eval ~84s (full 7715 tokens)
         # Lần gọi sau: prompt eval ~1-5s (chỉ eval phần user command mới)
         "keep_alive": "10m",
+        # think=False: Qwen3 has a "thinking" mode that emits a <think>...</think>
+        # reasoning block before the answer. We need raw JSON only — the chain-of-
+        # thought would break clean_json_string's parsing AND add latency for no
+        # benefit on this deterministic template-filling task. Ignored harmlessly
+        # by models without "thinking" capability (e.g. qwen2.5-coder).
+        "think": False,
     }
 
     wall_start = time.time()
@@ -424,7 +442,7 @@ def _maybe_periodic_reload():
 
 def single_model_pipeline(user_command):
     """
-    Pipeline nhanh - Chỉ dùng 1 model (Qwen2.5-Coder)
+    Pipeline nhanh - Chỉ dùng 1 model (Qwen3)
     """
     print(f"   ⚡ FAST MODE: Single-model pipeline")
     pipeline_start = time.time()
@@ -551,7 +569,7 @@ def claude_careful_pipeline(user_command):
     raw_output = call_claude(prompt)
 
     if not raw_output:
-        print("   ⚠️  Careful Mode (Claude) không khả dụng → fallback Fast Mode (Qwen2.5-Coder).")
+        print("   ⚠️  Careful Mode (Claude) không khả dụng → fallback Fast Mode (Qwen3).")
         return single_model_pipeline(user_command)
 
     print(f"\n   🔍 DEBUG - RAW CLAUDE OUTPUT (first 800 chars):")
@@ -580,7 +598,7 @@ def claude_careful_pipeline(user_command):
             except json.JSONDecodeError:
                 print("   ❌ Careful Mode (Claude) retry cũng fail.")
 
-        print("   ⚠️  Falling back to Fast Mode (Qwen2.5-Coder).")
+        print("   ⚠️  Falling back to Fast Mode (Qwen3).")
         return single_model_pipeline(user_command)
 
 

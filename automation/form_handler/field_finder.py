@@ -66,6 +66,37 @@ class FieldFinderMixin:
         # Tạo version không space/underscore để fuzzy match
         label_normalized = re.sub(r"[\s_-]+", "", label_lower)
 
+        # Known LABEL TEXT aliases: the AI sometimes generates a key with an
+        # extra/missing word vs. the real on-page label (e.g. "RBE Event ID"
+        # when the actual field is labeled just "RBE Event *" — Fight Card V3
+        # Contest Superstar panel). Every search strategy below matches by
+        # substring-in-element-text, so an extra word means 0 candidates no
+        # matter how many fallbacks run. Rewrite to the real label up front.
+        _label_text_aliases = {
+            "rbe event id": "RBE Event",
+        }
+        if label_lower in _label_text_aliases:
+            label_text = _label_text_aliases[label_lower]
+            label_lower = label_text.lower().strip()
+            label_normalized = re.sub(r"[\s_-]+", "", label_lower)
+            print(f"         🔀 Label alias: rewrote to '{label_text}'")
+
+        # ─── SPECIAL CASE: data-mode inputs (Affiliation War Contribution's
+        # "Mode | Value" table: PvE/Showdown/Feud/Contest Task/Titan TakeOver/
+        # Gacha/Upgrades). Row labels are bare <td> text that collides with
+        # OTHER things on the page (e.g. "Showdown" is also a sidebar nav item
+        # for a different RBE feature), so the generic label/container search
+        # below picks the wrong element entirely. The app itself disambiguates
+        # rows via data-mode="<Mode>" on the value <input> — use that directly
+        # before any ambiguous text matching. ────────────────────────────────
+        try:
+            data_mode_input = page.locator(f"input[data-mode='{label_text}' i]").first
+            if data_mode_input.count() > 0 and data_mode_input.is_visible():
+                print(f"         🎯 Found input via data-mode='{label_text}'")
+                return data_mode_input
+        except Exception:
+            pass
+
         # ─── SPECIAL CASE: Condition <select> (Win / Win against any rarity) ─────
         # Tránh việc chọn nhầm select khác trong cùng row/container (VD: event_id/background).
         # HTML thực tế thường là: <select class="condition" ...>

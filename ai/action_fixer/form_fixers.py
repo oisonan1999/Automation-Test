@@ -455,16 +455,28 @@ def _inject_fcv3_pve_tab_click(plan):
 
 def _merge_pve_css_update_steps(plan):
     """
-    Merge consecutive update_form steps where the first contains 'Contest Superstar'
-    and the next contains CSS panel fields (Normal Node 1, Hard Node 1, Hell Node 1,
-    RBE, SoftCurrency).
+    Merge ALL consecutive update_form steps where the first contains 'Contest Superstar'
+    and the following ones contain CSS panel fields (Normal Node 1, Hard Node 1,
+    Hell Node 1, RBE, SoftCurrency) into a single update_form.
 
-    Problem: AI splits PVE CSS setup into two separate update_form steps:
-      Step 1: update_form({'Contest Superstar': 'on'})  <- triggers special-case, no panel data
-      Step 2: update_form({'RBE': ..., 'Normal Node 1': ..., 'SoftCurrency': ...})
-              <- does NOT trigger special-case -> generic finder fails (0 visible labels)
+    Problem: AI splits PVE CSS setup into one update_form PER FIELD instead of one
+    combined call, e.g.:
+      update_form({'Contest Superstar': 'on', 'RBE': ...})
+      update_form({'Normal Node 1': ...})
+      update_form({'SoftCurrency': ...})
+      update_form({'Hard Node 1': ...})
+      update_form({'SoftCurrency': ...})
+      update_form({'Hell Node 1': ...})
+      update_form({'SoftCurrency': ...})
+    Only the FIRST of these triggers the special-case handler (it requires a
+    'contest superstar' key); every subsequent standalone call falls through to
+    the generic field finder, which searches literally for a label like
+    "Hard Node 1" that doesn't exist in the DOM (real labels are just "Node 1"
+    grouped under a "Hard" section header) -> 0 candidates found -> hangs/retries.
 
-    Fix: Merge into one step so the special-case handler processes toggle + panel data together.
+    Fix: Keep merging every following update_form step as long as ITS keys match
+    the CSS panel pattern (not just the immediate next one), so the special-case
+    handler processes the toggle + all panel data together in one call.
     """
     import re
 
@@ -485,25 +497,35 @@ def _merge_pve_css_update_steps(plan):
             )
         ):
             combined_data = dict(step["data"])
-            merged_any = False
+            merged_count = 1
             j = i + 1
-            # Skip over bare wait steps (no data)
-            while j < len(plan) and plan[j].get("action") == "wait" and not plan[j].get("data"):
-                j += 1
-            if j < len(plan) and plan[j].get("action") == "update_form":
+            while True:
+                # Skip over bare wait steps (no data)
+                while (
+                    j < len(plan)
+                    and plan[j].get("action") == "wait"
+                    and not plan[j].get("data")
+                ):
+                    j += 1
+
+                if j >= len(plan) or plan[j].get("action") != "update_form":
+                    break
+
                 nxt_data = plan[j].get("data") or {}
                 has_panel_keys = any(
                     _CSS_PANEL_KEY_RE.search(str(k)) for k in nxt_data.keys()
                 )
-                if has_panel_keys:
-                    combined_data.update(nxt_data)
-                    merged_any = True
-                    j += 1
+                if not has_panel_keys:
+                    break
 
-            if merged_any:
+                combined_data.update(nxt_data)
+                merged_count += 1
+                j += 1
+
+            if merged_count > 1:
                 print(
-                    f"   🔧 MERGE PVE-CSS: Combined 'Contest Superstar' toggle + panel data "
-                    f"into one update_form (keys: {list(combined_data.keys())})"
+                    f"   🔧 MERGE PVE-CSS: Combined {merged_count} update_form steps "
+                    f"into one (keys: {list(combined_data.keys())})"
                 )
                 merged.append({"action": "update_form", "data": combined_data})
                 i = j

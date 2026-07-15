@@ -316,3 +316,15 @@ Classes: `RBESmartTester` (line 2121), `RBEFuzzGenerator` (line 2248), `GenericC
 Features covered: RBE, Offer, PVE, Gacha, Currency, Fight Card, Fight Card Slots, Localization, Showdown, Faction Feud, Grabbag, SuperStar, Faction Boss, Moment Poster, Perk/Perk Slot, Boost
 
 All create/clone cases contain `hãy tự generate một ID duy nhất bắt đầu bằng <prefix>` — handled by `_inject_generated_ids`.
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (created lazily, not yet present). See `docs/agents/domain.md`.

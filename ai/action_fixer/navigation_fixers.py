@@ -307,25 +307,50 @@ _FILENAME_IN_TEXT_RE = re.compile(
 )
 
 
-def _remove_spurious_instruction_clicks(plan):
+def _remove_spurious_instruction_clicks(plan, user_command=""):
     """
     The model sometimes duplicates an import/export instruction into BOTH the
     correct upload/download step AND a bogus click whose target is the raw
     instruction text, e.g. {"action":"click","target":"Import CSV file Book_test.csv"}.
     A real button label never contains a data filename (".csv"/".xlsx"/...), so
     any click target carrying such a filename is the misparsed instruction → drop it.
+
+    Also catches a subtler variant with no filename in the click itself: the
+    model echoes an "Export/Import <...qualifier...>" clause almost verbatim as
+    a click target, e.g. click("Export Chapter theo BookID") lifted straight out
+    of "Export Chapter theo BookID file chapter_test.csv". Real button/tab labels
+    in this app are short (1-3 words, e.g. "Import/Export Chapters", "Export CSV");
+    a 4+-word target starting with Export/Import that also appears verbatim in the
+    command is the instruction text, not a button — drop it. (Seen concretely with
+    PVE's "Export Chapter" download, which core.py already handles end-to-end
+    internally — see automation/core.py's download dispatcher — so no manual click
+    is needed or wanted before it.)
     """
     if not plan or not isinstance(plan, list):
         return plan
 
+    cmd_lower = (user_command or "").lower()
     result = []
     for step in plan:
         if step.get("action") == "click":
             target = str(step.get("target") or "")
+            target_lower = target.strip().lower()
             if _FILENAME_IN_TEXT_RE.search(target):
                 print(
                     f"   🔧 REMOVE SPURIOUS CLICK: target '{target}' is an "
                     f"import/export instruction, not a button"
+                )
+                continue
+            if (
+                target_lower
+                and re.match(r"^(export|import)\b", target_lower)
+                and len(target_lower.split()) >= 4
+                and cmd_lower
+                and target_lower in cmd_lower
+            ):
+                print(
+                    f"   🔧 REMOVE SPURIOUS CLICK: target '{target}' is a verbose "
+                    f"instruction clause copied verbatim from the command, not a button"
                 )
                 continue
         result.append(step)
@@ -335,14 +360,19 @@ def _remove_spurious_instruction_clicks(plan):
 def _remove_redundant_click_after_navigate(plan):
     """
     Remove a click step that immediately follows a navigate step and targets
-    the same destination (last element of the navigate path).
+    a destination the navigate step already visited (any segment of its path,
+    not just the last one).
 
-    Qwen2.5 sometimes duplicates the nav destination as a spurious click:
+    Qwen2.5 sometimes duplicates a nav destination as a spurious click:
       navigate(path=["Live Events", "Offer", "Offer Section"])
       click(target="Offer Section")     ← removed: navigator already landed here
 
-    Only fires when the click target exactly matches the nav's last path segment.
-    Clicks targeting other labels (e.g. "Create New") are left untouched.
+    It can also duplicate a MIDDLE segment instead of the final one, e.g.
+      navigate(path=["Live Events", "PVE", "Classic PVE"])
+      click(target="PVE")               ← also removed: already passed through here
+
+    Only fires when the click target exactly matches one of the nav path's
+    segments. Clicks targeting other labels (e.g. "Create New") are untouched.
     """
     if not plan or not isinstance(plan, list):
         return plan
@@ -353,17 +383,17 @@ def _remove_redundant_click_after_navigate(plan):
             prev = result[-1]
             if prev.get("action") == "navigate":
                 nav_path = prev.get("path", [])
-                if isinstance(nav_path, list) and nav_path:
-                    nav_dest = str(nav_path[-1]).strip().lower()
+                if isinstance(nav_path, list):
+                    nav_segments = {str(seg).strip().lower() for seg in nav_path}
                 elif isinstance(nav_path, str):
-                    nav_dest = nav_path.strip().lower()
+                    nav_segments = {nav_path.strip().lower()}
                 else:
-                    nav_dest = ""
+                    nav_segments = set()
                 click_target = str(step.get("target", "")).strip().lower()
-                if click_target and click_target == nav_dest:
+                if click_target and click_target in nav_segments:
                     print(
                         f"   🔧 REMOVE REDUNDANT CLICK: click('{step.get('target')}') "
-                        f"duplicates navigate destination — removed"
+                        f"duplicates a segment navigate already visited — removed"
                     )
                     continue
         result.append(step)

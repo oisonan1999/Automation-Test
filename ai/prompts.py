@@ -4,7 +4,7 @@
 
 def get_fast_mode_prompt(user_command):
     """
-    Prompt cho Fast Mode (Single Model Pipeline - Qwen2.5-Coder)
+    Prompt cho Fast Mode (Single Model Pipeline - Qwen3)
     Sử dụng Few-Shot Learning với 14 examples.
     """
     return f"""You are a strict JSON converter. You MUST use action names from examples below.
@@ -85,6 +85,11 @@ Example 10c (STANDALONE PAGE-LEVEL IMPORT - no Export, no edit):
 Input: "Vào PVE -> Import CSV file Book_test.csv -> Bấm vào logo The Brick"
 Output: [{{"action":"navigate","path":["Live Events","PVE","Classic PVE"]}},{{"action":"upload","target":"Import CSV","value":"Book_test.csv"}},{{"action":"process_deployment","options":[]}}]
 RULE for Example 10c: "Import CSV file <name>" on a list page (no preceding Export, no edit_row) is a SINGLE page-level import → exactly ONE {{"action":"upload","target":"Import CSV","value":"<name>"}}. NEVER emit "import_csv" or "process_import" (INVALID actions). NEVER repeat the import step — emit it ONCE only.
+
+Example 10d (NON-STANDARD EXPORT BUTTON LABEL — STILL A DOWNLOAD, NO RE-IMPORT):
+Input: "Vào PVE -> Sửa ID: LTPVE_test_123 -> Đợi trang load -> Bấm vào tab Import/Export Chapters -> Export Chapter theo BookID file chapter_test.csv -> Xóa tất cả giá trị trong cột SS1 Entry Req -> Xóa tất cả giá trị trong cột SS2 Entry Req -> Save -> Bấm vào logo The Brick"
+Output: [{{"action":"navigate","path":["Live Events","PVE","Classic PVE"]}},{{"action":"edit_row","target":"LTPVE_test_123"}},{{"action":"wait"}},{{"action":"click","target":"Import/Export Chapters"}},{{"action":"download","target":"Export Chapter","value":"chapter_test.csv"}},{{"action":"manipulate_csv","target":"chapter_test.csv","operation":"set","data":"SS1 Entry Req="}},{{"action":"manipulate_csv","target":"chapter_test.csv","operation":"set","data":"SS2 Entry Req="}},{{"action":"save_form"}},{{"action":"process_deployment","options":[]}}]
+RULE for Example 10d: "Export <AnyWord> ... file <name.csv>" is ALWAYS a download step — not only the literal phrase "Export CSV". Take the button target from the word right after "Export" (e.g. "Export Chapter"); ignore filler qualifiers in between like "theo BookID". NEVER drop the download just because the wording doesn't match the generic "Export CSV" phrasing — a manipulate_csv on a file that was never downloaded FAILS ("File not found"). Also note: unlike Example 10b, this command has NO "Import CSV" mention anywhere — do NOT invent an upload/re-import step the command didn't ask for; go straight from the manipulate_csv edits to Save.
 
 Example 11:
 Input: "Click logo The Brick -> Chọn Gacha Events -> Process"
@@ -197,6 +202,14 @@ CRITICAL RULES:
   * CORRECT (with toggle): edit_row(ID) → wait → click("PVE") → update_form({{"Contest Superstar":"on","RBE Event":...,"Contest Superstar ID":...,"Rewards":...,"Quantity":...}}) → save_form
   * CORRECT (without toggle): edit_row(RANDOM) → wait → click("PVE") → update_form({{"RBE Event":...,"Contest Superstar ID":...,"Rewards":...,"Quantity":...}}) → save_form
   * WRONG: edit_row(RANDOM) → wait → update_form({{"RBE Event":...}}) ← missing click("PVE") means fields will NOT be found!
+
+- CLASSIC PVE (v2) — CONTEST SUPERSTAR NORMAL/HARD/HELL PANELS (CRITICAL — NEVER SPLIT):
+  * Classic PVE's Contest Superstar toggle opens THREE panels (Normal, Hard, Hell), each with its own "Node 1"/"Node 2" and Soft Currency fields, plus one top-level RBE selector shared by all three.
+  * ALL of these fields — the toggle, RBE, and every panel's Node 1 / SoftCurrency — MUST go in ONE SINGLE update_form data dict. NEVER emit one update_form per field/panel; the toggle+panel special-case handler only runs when "Contest Superstar" is present in the SAME call as the panel fields, so splitting them makes every later call silently fail (field not found, looks stuck).
+  * Command syntax: "Contest Superstar: on -> RBE: X, Normal Node 1: Y, SoftCurrency: N, Hard Node 1: Y, SoftCurrency: N, Hell Node 1: Y, SoftCurrency: N"
+  * CORRECT: edit_row(ID) → wait → update_form({{"Contest Superstar":"on","RBE":"X","Normal Node 1":"Y","SoftCurrency":"N","Hard Node 1":"Y","Hell Node 1":"Y"}}) → save_form
+    (SoftCurrency only needs to appear once when the amount is the same across Normal/Hard/Hell — it applies to all three panels.)
+  * WRONG: update_form({{"Contest Superstar":"on","RBE":"X"}}) → update_form({{"Normal Node 1":"Y"}}) → update_form({{"SoftCurrency":"N"}}) → update_form({{"Hard Node 1":"Y"}}) → ... (one call per field — breaks the special-case handler)
 
 - MULTI-FEATURE COMMANDS (CRITICAL — NEVER SKIP NAVIGATE):
   * When command touches multiple features (e.g. FCV3 then RBE), EACH feature section MUST start with its own navigate.
@@ -480,7 +493,7 @@ def get_reasoning_prompt(user_command):
 
 def get_formatting_prompt(user_command, analysis_clean):
     """
-    Prompt cho Formatting Phase (Qwen2.5-Coder) trong Careful Mode.
+    Prompt cho Formatting Phase (Qwen3) trong Careful Mode.
     Chuyển đổi analysis thành JSON Action Plan.
     """
     return f"""

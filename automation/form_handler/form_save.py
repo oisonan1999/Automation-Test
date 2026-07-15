@@ -64,7 +64,18 @@ class FormSaveMixin:
             target_btn = None
 
             # Detect PVE Match 1 context (multiselect input exists only there)
-            is_pve_match_page = page.locator("#searchSSGroupId").count() > 0
+            # Fight Card V3's PVE tab reuses the same PVE-v2 Book Info + Chapter
+            # panel layout (own "Save Book Info" up top, own "Save"/"Save & Continue"
+            # bar at the bottom of the Chapter panel — that's where Contest Superstar
+            # lives), but has no #searchSSGroupId since there's no Match/SSDB search
+            # box here. Without this, mode="save" falls into the non-PVE branch which
+            # prioritizes "Save Book Info" — wrong button, doesn't persist the CS panel.
+            is_pve_match_page = (
+                page.locator("#searchSSGroupId").count() > 0
+                or page.locator(
+                    "input[name='fight-card-contest-superstar-toggle']"
+                ).count() > 0
+            )
 
             # =========================================================
             # CHIẾN THUẬT 1: TÌM NÚT THEO THỨ TỰ ƯU TIÊN CAO
@@ -74,6 +85,7 @@ class FormSaveMixin:
                 # Mode "clone": Bấm nút Clone trong modal (ưu tiên tuyệt đối)
                 priority_buttons = [
                     "Create book and Open in V2",  # PVE clone submit button
+                    "Save Changes",  # Affiliation War Contribution clone form (full page, not modal)
                     "Clone",
                     "Submit",
                     "Confirm",
@@ -100,6 +112,7 @@ class FormSaveMixin:
                         "Save Book Info",
                         "Save Book",
                         "Save Book Information",
+                        "Save Changes",  # Affiliation War Contribution (custom UI, not Bootstrap)
                         "Save",  # fallback generic (exact match)
                         "Update",
                         "Submit",
@@ -112,6 +125,7 @@ class FormSaveMixin:
                     "Save & Continue",
                     "Save and Continue",
                     "Continue",
+                    "Save Changes",  # Affiliation War Contribution (custom UI, not Bootstrap)
                     "Save",
                     "Update",
                     "Clone",
@@ -189,6 +203,7 @@ class FormSaveMixin:
                     "button.btn-primary",
                     "button.btn-success",
                     "button.btn-info",
+                    "button.awc-btn--primary",  # Affiliation War Contribution custom UI
                     "input[type='submit']",
                 ]
                 for sel in class_selectors:

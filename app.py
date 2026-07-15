@@ -689,7 +689,7 @@ with col1:
             "🧪 Careful Mode (Claude Sonnet 5 thay vì Qwen local)",
             key="airun_use_claude_careful",
             help=(
-                "Dùng Claude API để sinh action plan thay vì Qwen2.5-Coder qua Ollama. "
+                "Dùng Claude API để sinh action plan thay vì Qwen3 qua Ollama. "
                 "Chính xác hơn với lệnh tiếng Việt phức tạp, nhưng cần ANTHROPIC_API_KEY "
                 "trong .env và tốn phí mỗi lần gọi. Tự fallback về Qwen nếu Claude lỗi."
             ),
@@ -891,7 +891,7 @@ with col1:
             key="smoke_use_claude_haiku",
             help=(
                 "Khi không có golden plan, dùng Claude Haiku (Anthropic API) để sinh "
-                "action plan thay vì Qwen2.5-Coder qua Ollama. Chính xác hơn với các "
+                "action plan thay vì Qwen3 qua Ollama. Chính xác hơn với các "
                 "lệnh phức tạp, nhưng cần ANTHROPIC_API_KEY trong .env. Tự fallback "
                 "về Qwen nếu Claude lỗi hoặc thiếu API key."
             ),
@@ -1290,18 +1290,20 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
             if last_created_id:
                 case_command = re.sub(r"Sửa\s+ID\s+bất\s+kỳ", f"Sửa ID: {last_created_id}", case_command, flags=re.IGNORECASE)
                 # NOTE: "Filter một ID bất kỳ" means "filter any random ID" → do NOT replace with last_created_id
-                _vua = r"[vj][ưừữu]a"
-                # Broaden: match any entity word before "vừa clone/tạo" (not just "ID")
-                # e.g. "Sửa Book vừa clone", "Sửa 1 Book vừa clone", "Book vừa clone"
-                case_command = re.sub(rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"Sửa ID: {last_created_id}", case_command, flags=re.IGNORECASE)
-                case_command = re.sub(rf"S[ửu]a\s+(?:\d+\s+)?\S+\s+{_vua}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"Sửa ID: {last_created_id}", case_command, flags=re.IGNORECASE)
-                case_command = re.sub(rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua}\s+clone(?:\s+ho[ặa]c\s+t[ạa]o)?", f"Filter ID: {last_created_id}", case_command, flags=re.IGNORECASE)
-                case_command = re.sub(rf"Filter\s+(?:\d+\s+)?\S+\s+{_vua}\s+t[ạa]o(?:\s+ho[ặa]c\s+clone)?", f"Filter ID: {last_created_id}", case_command, flags=re.IGNORECASE)
-                case_command = re.sub(rf"(?:\d+\s+)?\S+\s+{_vua}\s+clone\s*(?:ho[ặa]c\s+t[ạa]o)?", f"ID: {last_created_id}", case_command, flags=re.IGNORECASE)
-                case_command = re.sub(rf"(?:\d+\s+)?\S+\s+{_vua}\s+t[ạa]o\s*(?:ho[ặa]c\s+clone)?", f"ID: {last_created_id}", case_command, flags=re.IGNORECASE)
+
+            # "X vừa clone/tạo" can reference a DIFFERENT feature than feature_key within
+            # the SAME testcase, e.g. "Vào Fight Card V3 -> Sửa ID vừa clone -> ... -> Sửa
+            # RBE Event: Hãy lấy ID RBE vừa clone ... -> Vào RBE -> Sửa ID vừa clone".
+            # Blanket-substituting every occurrence with the single feature_key-based
+            # last_created_id would wrongly reuse the Fight Card ID for the RBE
+            # occurrences too. _substitute_last_clone_id resolves each occurrence
+            # independently by its nearest preceding feature keyword.
+            case_command, _vua_clone_id = _substitute_last_clone_id(
+                case_command, st.session_state.smoke_last_created_id_by_feature
+            )
 
             _vua_pattern = r"[^\s]*\s*v[uưừữ]a\s+(clone|tạo)"
-            if not last_created_id and re.search(_vua_pattern, case_command, re.IGNORECASE):
+            if not _vua_clone_id and re.search(_vua_pattern, case_command, re.IGNORECASE):
                 note = f"Skipped: no last_created_id for feature '{feature_key}' (no prior clone/create passed)"
                 print(f"   ⏭️ {note}")
                 smoke_records.append({"Features": feature, "Testcase": display_case, "Result": "SKIPPED", "Note": note})

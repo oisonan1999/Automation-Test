@@ -51,6 +51,7 @@ DEPLOYMENT_KEYWORDS = [
     "liveops message",
     "live ops message",
     "rbe",
+    "affiliation war contribution",
     "faction lockbox",
     "promo code",
     "subscription & vip",
@@ -148,7 +149,8 @@ NAVIGATION_PATH_MAP = {
     # Cash Contract
     "cash contract": ["Live Events", "Cash Contract", "Cash Contract"],
     # RBE
-    "rbe": ["Live Events", "RBE"],
+    "rbe": ["Live Events", "RBE", "RBE"],
+    "affiliation war contribution": ["Live Events", "RBE", "Affiliation War Contribution"],
     "rules based event": ["Live Events", "RBE"],
     "rules based tournament": ["Live Events", "RBE"],
     # Faction Lockbox

@@ -30,6 +30,100 @@ def _strip_invalid_deploy_options(plan):
 
 
 
+def _fix_choose_n_id_contains_random_pattern(plan, user_command=""):
+    """
+    "Chọn N ID contain <substr> bất kỳ -> Export CSV file X.csv" — a compound
+    filter-then-random-select pattern with no prompt example anywhere (the
+    existing examples only cover plain "Chọn N ID bất kỳ" with no substring
+    constraint, or "Filter 1 X bất kỳ" which stops at N=1 and has no
+    download). Qwen fast-mode has no few-shot anchor for it and produces
+    various broken shapes for it — sometimes nothing resembling a checkbox
+    at all, sometimes a near-miss like
+    {"action":"checkbox","target":"ID contains","value":"LTPVE","count":2}.
+
+    The near-miss shape is actively dangerous, not just incomplete: its
+    substring value (e.g. "LTPVE") can collide with a home-screen deployment
+    keyword ("pve" is a naive substring of "LTPVE") in
+    `_merge_process_deployment_steps`'s deployment-checkbox detector, which
+    uses plain `keyword in check_val` containment. That misclassifies the
+    row-selection checkbox as a deploy-option checkbox, merges it into
+    process_deployment(options=["LTPVE"]), and `_strip_invalid_deploy_options`
+    then deletes it as an invalid option — silently destroying the checkbox
+    (and any download) before the run even reaches Playwright. So this fixer
+    must NOT merely bail out when *a* checkbox already exists; it must
+    recognize whether that checkbox is actually the CORRECT shape, and if
+    not, remove it here (before STEP 4's merge ever sees it) rather than
+    leave it to be mangled downstream.
+
+    handle_checkbox's random-selection path (table_checkbox.py CASE 1) has
+    no support for "pick N random rows FROM those matching a substring" as
+    a single action — its filter-then-tick shortcut only covers N==1
+    (`num_to_select == 1 and wants_id_filter`). For N>1 the only reliable
+    composition is two separate actions: filter the table first via the
+    existing "ID contains" search box (same mechanism as the "Filter ...
+    bất kỳ" pattern), THEN checkbox(random_N) picks from the now-restricted
+    row set that's left in the DOM.
+
+    Deterministically reconstructs the whole tail after existing navigate
+    step(s): update_form({"ID contains": substr}) -> click("Filter Data")
+    -> checkbox(target="ID", value="random_N") -> download(...). Skips
+    reconstruction only when the plan ALREADY contains both a matching
+    "ID contains" filter step and a "random_N" checkbox — i.e. it's
+    idempotent against a plan the model (or an earlier pass) already got
+    right, but treats any other checkbox shape as needing a rebuild.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    m = _re.search(
+        r"chọn\s+(\d+|một)\s+id\s+(?:contain(?:s|ing)?|chứa)\s+(\S+)\s+bất\s*k[yỳ]",
+        user_command,
+        _re.IGNORECASE,
+    )
+    if not m:
+        return plan
+
+    n = 1 if m.group(1).lower() == "một" else int(m.group(1))
+    substr = m.group(2).strip().strip("\"',.")
+
+    has_filter = any(
+        s.get("action") == "update_form"
+        and isinstance(s.get("data"), dict)
+        and any(str(k).strip().lower() == "id contains" for k in s["data"].keys())
+        for s in plan
+    )
+    has_random_checkbox = any(
+        s.get("action") == "checkbox"
+        and str(s.get("value", "")).strip().lower() == f"random_{n}"
+        for s in plan
+    )
+    if has_filter and has_random_checkbox:
+        return plan
+
+    nav_steps = [s for s in plan if s.get("action") == "navigate"]
+    if not nav_steps:
+        return plan
+
+    new_tail = [
+        {"action": "update_form", "data": {"ID contains": substr}},
+        {"action": "click", "target": "Filter Data"},
+        {"action": "checkbox", "target": "ID", "value": f"random_{n}"},
+    ]
+
+    fm = _re.search(r"export\s+csv(?:\s+file)?\s+([\w\-]+\.csv)", user_command, _re.IGNORECASE)
+    if fm:
+        new_tail.append({"action": "download", "target": "Export CSV", "value": fm.group(1)})
+
+    print(
+        f"   🔧 SYNTHESIZE: 'Chọn {n} ID contain {substr} bất kỳ' → "
+        f"filter(ID contains={substr}) + checkbox(random_{n})"
+        + (f" + download({fm.group(1)})" if fm else " (no download — filename not found in command)")
+    )
+    return nav_steps + new_tail
+
+
 def _fix_choose_id_misclassified_as_filter(plan, user_command=""):
     """
     "Chọn N ID bất kỳ -> Export CSV file X.csv" is sometimes misread by the
@@ -162,6 +256,64 @@ def _fix_specific_id_choose_misclassified_as_edit_row(plan, user_command=""):
             filename = fm.group(1)
             print(f"   🔧 INJECT DOWNLOAD: Missing download after checkbox → {filename}")
             result.insert(idx + 1, {"action": "download", "target": "Export CSV", "value": filename})
+
+    return result
+
+
+def _fix_bare_random_checkbox_and_missing_download(plan, user_command=""):
+    """
+    "Chọn N ID bất kỳ -> Export CSV file X.csv" where the model DOES emit a
+    checkbox step (so `_fix_choose_id_misclassified_as_filter` /
+    `_fix_specific_id_choose_misclassified_as_edit_row` both no-op — they only
+    fire when no checkbox exists yet) but still gets two things wrong:
+
+      1. value is the bare sentinel "RANDOM" (or a "random_M" with the wrong
+         count) instead of "random_N". handle_checkbox's CASE 1 regex
+         `random.*?(\d+)` finds no digit in bare "RANDOM" and silently falls
+         back to selecting only 1 row, dropping the user's requested count.
+      2. the trailing download step is missing entirely, even though the
+         command names an export filename right after the checkbox
+         instruction — `_inject_missing_checkbox_before_download` only
+         injects a checkbox before an EXISTING download step; it can't
+         inject a download that isn't there at all.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    m = _re.search(r"chọn\s+(\d+|một)\s+id\s+bất\s*k[yỳ]", user_command, _re.IGNORECASE)
+    if not m:
+        return plan
+    n = 1 if m.group(1).lower() == "một" else int(m.group(1))
+
+    result = list(plan)
+    checkbox_idx = None
+    for i, step in enumerate(result):
+        if step.get("action") != "checkbox":
+            continue
+        value = str(step.get("value", "")).strip()
+        rm = _re.fullmatch(r"random(?:_(\d+))?", value, _re.IGNORECASE)
+        if rm:
+            existing_n = int(rm.group(1)) if rm.group(1) else None
+            if existing_n != n:
+                print(
+                    f"   🔧 FIX CHECKBOX COUNT: value '{value}' → 'random_{n}' "
+                    f"(command says 'Chọn {n} ID bất kỳ')"
+                )
+                step["value"] = f"random_{n}"
+            if checkbox_idx is None:
+                checkbox_idx = i
+
+    if checkbox_idx is not None and not any(s.get("action") == "download" for s in result):
+        fm = _re.search(r"export\s+csv(?:\s+file)?\s+([\w\-]+\.csv)", user_command, _re.IGNORECASE)
+        if fm:
+            filename = fm.group(1)
+            print(f"   🔧 INJECT DOWNLOAD: Missing download after checkbox → {filename}")
+            result.insert(
+                checkbox_idx + 1,
+                {"action": "download", "target": "Export CSV", "value": filename},
+            )
 
     return result
 
@@ -321,6 +473,130 @@ def _fix_manipulate_csv_value_verbatim(plan, user_command=""):
             step["data"] = f"{col}={literal_val}"
 
     return plan
+
+
+def _inject_missing_download_before_manipulate_csv(plan, user_command=""):
+    """
+    "Export <X> ... file <name.csv> -> Sửa/Xóa cột ..." always implies a
+    download step that fetches <name.csv> BEFORE any manipulate_csv touches
+    it. `_process_csv_manipulation` (automation/data_handler.py) hard-requires
+    the file to already exist on disk and returns "Error: File X not found."
+    otherwise — silently failing the whole case.
+
+    Non-standard export phrasing (e.g. "Export Chapter theo BookID file
+    chapter_test.csv" instead of the generic "Export CSV file X.csv" the
+    prompt's few-shot examples use) can make the model drop the download
+    step entirely while still emitting the manipulate_csv edits, because it
+    doesn't recognize the unfamiliar wording as an export/download action.
+
+    Safety net: for each manipulate_csv step whose target filename has no
+    earlier download step producing that same filename, inject one right
+    before it. The button label is inferred from the nearest preceding
+    "export <word> ..." clause before the filename mention in the command;
+    falls back to the generic "Export CSV" label if none is found.
+    """
+    import re as _re
+
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    downloaded = set()
+    result = []
+    for step in plan:
+        if step.get("action") == "download":
+            fname = str(step.get("value") or step.get("target") or "").strip()
+            if fname:
+                downloaded.add(fname.lower())
+        elif step.get("action") == "manipulate_csv":
+            fname = str(step.get("target") or "").strip()
+            if fname and fname.lower() not in downloaded:
+                target = "Export CSV"
+                idx = user_command.lower().find(fname.lower())
+                if idx != -1:
+                    prefix = user_command[:idx]
+                    matches = list(_re.finditer(r"export\s+(\w+)", prefix, _re.IGNORECASE))
+                    if matches:
+                        word = matches[-1].group(1)
+                        if word.lower() != "csv":
+                            target = f"Export {word}"
+                print(
+                    f"   🔧 INJECT DOWNLOAD: manipulate_csv('{fname}') has no prior "
+                    f"download — injecting download(target='{target}', value='{fname}')"
+                )
+                result.append({"action": "download", "target": target, "value": fname})
+                downloaded.add(fname.lower())
+        result.append(step)
+    return result
+
+
+def _remove_redundant_pre_download_steps(plan):
+    """
+    core.py's `download`/`upload` dispatcher already finds and clicks the
+    trigger button itself (`_find_download_trigger`), and for
+    target=="Export Chapter" specifically it ALSO handles the entire BookID
+    lookup + selection flow internally (extracts BookID from the page header,
+    falls back to the previously-downloaded chapter CSV, selects it in the
+    #searchChapterTemplate multiselect — see automation/core.py's `download`
+    branch). No manual step is needed to drive any of that.
+
+    The model sometimes still hallucinates a manual replica of this flow right
+    before the real download/upload step — a bare click("Export")/click("Import")
+    duplicating the button the dispatcher already clicks itself, and/or an
+    update_form({"File Name": "<same file as the download's value>"}) standing
+    in for a form field that doesn't exist. Both are safe to drop whenever they
+    sit directly in front of a download/upload step referencing the same file.
+    """
+    import re as _re
+
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    dl_values = {
+        str(s.get("value") or "").strip().lower()
+        for s in plan
+        if s.get("action") in ("download", "upload") and s.get("value")
+    }
+
+    to_drop = set()
+    for i, step in enumerate(plan):
+        if step.get("action") not in ("download", "upload"):
+            continue
+        j = i - 1
+        cluster = []
+        found_real = False
+        while j >= 0:
+            s = plan[j]
+            act = s.get("action")
+            if act == "wait":
+                cluster.append(j)
+            elif act == "click" and str(s.get("target") or "").strip().lower() in (
+                "export",
+                "import",
+            ):
+                cluster.append(j)
+                found_real = True
+            elif act == "update_form" and isinstance(s.get("data"), dict) and any(
+                _re.search(r"file\s*name|filename|t[êe]n\s*file", str(k), _re.IGNORECASE)
+                and str(v).strip().lower() in dl_values
+                for k, v in s.get("data").items()
+            ):
+                cluster.append(j)
+                found_real = True
+            else:
+                break
+            j -= 1
+        if found_real:
+            to_drop.update(cluster)
+
+    if not to_drop:
+        return plan
+
+    print(
+        f"   🔧 REMOVE REDUNDANT PRE-DOWNLOAD STEPS: {len(to_drop)} hallucinated "
+        f"step(s) before download/upload removed (executor already handles the "
+        f"button click / BookID selection internally)"
+    )
+    return [s for idx, s in enumerate(plan) if idx not in to_drop]
 
 
 def _auto_infer_deployment_options(plan, user_command=""):

@@ -13,7 +13,13 @@
     "hieunm_test_20260707_134535_9c9e96",
     "hieunm_test_20260707_134826_6ac2ee",
     "hieunm_test_20260708_115722_f344b7",
-    "hieunm_test_20260708_115948_531530"
+    "hieunm_test_20260708_115948_531530",
+    "hieunm_test_20260713_111101_f038cd",
+    "hieunm_test_20260713_111816_9c3e2a",
+    "hieunm_test_20260714_140746_7e4088",
+    "hieunm_test_20260714_141158_6c988b",
+    "hieunm_test_20260715_111807_b85257",
+    "hieunm_test_20260715_144704_b276ba"
   ],
   "Offer": [
     "hieunm_test_20260603_135356_f4475e",
@@ -34,7 +40,9 @@
     "hieunm_test_20260605_145001_a13d0f",
     "LTPVE_hieunm_test_20260605_152144_18d12b",
     "LTPVE_hieunm_test_20260609_102049_9fab20",
-    "LTPVE_hieunm_test_20260612_160141_77d46b"
+    "LTPVE_hieunm_test_20260612_160141_77d46b",
+    "LTPVE_hieunm_test_20260714_145549_bfb0b2",
+    "LTPVE_hieunm_test_20260715_111108_0a9d39"
   ],
   "Gacha": [
     "hieunm_test_20260609_110021_f81178",
@@ -54,5 +62,8 @@
   "Currency": [
     "hieunm_test_20260701_160447_e55d12",
     "hieunm_test_20260701_160751_e8c452"
+  ],
+  "Fight Card": [
+    "FightCard_Jul2026_Wk3_Champ_Chelsea"
   ]
 }

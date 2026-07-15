@@ -9,6 +9,7 @@ __pycache__/
 .streamlit/
 .obsidian/
 .claude/
+.agents/
 .vscode/
 .env
 *.pyc

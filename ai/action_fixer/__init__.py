@@ -20,12 +20,16 @@ from .navigation_fixers import (
 )
 from .deployment_fixers import (
     _strip_invalid_deploy_options,
+    _fix_choose_n_id_contains_random_pattern,
     _fix_choose_id_misclassified_as_filter,
     _fix_specific_id_choose_misclassified_as_edit_row,
+    _fix_bare_random_checkbox_and_missing_download,
     _inject_missing_checkbox_before_download,
     _dedup_consecutive_identical_steps,
     _fix_download_filename_in_target,
     _fix_manipulate_csv_value_verbatim,
+    _inject_missing_download_before_manipulate_csv,
+    _remove_redundant_pre_download_steps,
     _auto_infer_deployment_options,
     _merge_process_deployment_steps,
     _inject_missing_final_deployment,
@@ -35,9 +39,12 @@ from .clone_fixers import (
     _remove_edit_row_before_checkbox,
     _fix_pve_clone_chapter,
     _fix_rbe_clone_field_name,
+    _fix_aw_contribution_clone_field_name,
+    _remove_aw_contribution_redundant_save,
     _fix_clone_modal_new_prefix_fields,
     _fix_id_only_update_to_edit_row,
     _remove_click_after_clone_save,
+    _remove_spurious_edit_row_after_clone_save,
     _inject_missing_clone_row,
     _extract_clone_modal_fields,
     _inject_clone_save,
@@ -645,9 +652,20 @@ def fix_action_plan(plan, user_command=""):
     # click on the raw instruction text and/or re-navigates to a page it's
     # already on. Both run AFTER navigate resolution/merge so paths are full.
     # ============================================================
-    fixed_plan = _remove_spurious_instruction_clicks(fixed_plan)
+    fixed_plan = _remove_spurious_instruction_clicks(fixed_plan, user_command)
     fixed_plan = _remove_redundant_duplicate_navigate(fixed_plan)
     fixed_plan = _remove_redundant_click_after_navigate(fixed_plan)
+
+    # ============================================================
+    # STEP 3d.6b: Fix "Chọn N ID contain X bất kỳ" — compound filter+random
+    # pattern with no few-shot anchor anywhere; Qwen fast-mode hallucinates
+    # garbage for it (observed: navigate + empty process_deployment, nothing
+    # else). Deterministically rebuilds the whole tail. Must run BEFORE 3d.7
+    # since its regex is a superset that 3d.7 doesn't match anyway, but
+    # placing it first keeps intent clear and guarantees it sees the
+    # untouched plan.
+    # ============================================================
+    fixed_plan = _fix_choose_n_id_contains_random_pattern(fixed_plan, user_command)
 
     # ============================================================
     # STEP 3d.7: Fix "Chọn N ID bất kỳ" misread as the FILTER pattern
@@ -666,6 +684,15 @@ def fix_action_plan(plan, user_command=""):
     fixed_plan = _fix_specific_id_choose_misclassified_as_edit_row(fixed_plan, user_command)
 
     # ============================================================
+    # STEP 3d.9: Fix "Chọn N ID bất kỳ" where checkbox WAS correctly
+    # generated but the count got lost (bare "RANDOM"/wrong "random_M")
+    # and/or the trailing download step was dropped entirely. Unlike 3d.7/
+    # 3d.8 above, this fires precisely BECAUSE a checkbox already exists
+    # (those two guard on "no checkbox yet").
+    # ============================================================
+    fixed_plan = _fix_bare_random_checkbox_and_missing_download(fixed_plan, user_command)
+
+    # ============================================================
     # STEP 3e: INJECT missing checkbox before download
     # If command says "Chọn N ID bất kỳ -> Export CSV" but AI skipped
     # the checkbox step, inject checkbox(random_N) before download.
@@ -681,6 +708,22 @@ def fix_action_plan(plan, user_command=""):
     # to raw CSV cell edits, which have no such format requirement and can
     # fail CSV-import validation with the hallucinated suffix.
     fixed_plan = _fix_manipulate_csv_value_verbatim(fixed_plan, user_command)
+
+    # ============================================================
+    # STEP 3e.5: INJECT missing download before manipulate_csv
+    # Non-standard "Export <X> ... file <name.csv>" phrasing (not the generic
+    # "Export CSV file X.csv") can make the AI drop the download step while
+    # still emitting the manipulate_csv edits, which then fail outright
+    # ("File not found") since the file was never fetched.
+    # ============================================================
+    fixed_plan = _inject_missing_download_before_manipulate_csv(fixed_plan, user_command)
+
+    # ============================================================
+    # STEP 3e.6: REMOVE hallucinated manual BookID/filename steps before
+    # download/upload — core.py's dispatcher already handles the button click
+    # (and, for "Export Chapter", the entire BookID-selection flow) internally.
+    # ============================================================
+    fixed_plan = _remove_redundant_pre_download_steps(fixed_plan)
 
     # ============================================================
     # STEP 3f: Remove spurious edit_row(RANDOM) before checkbox
@@ -728,6 +771,22 @@ def fix_action_plan(plan, user_command=""):
     # Also injects modal update_form from user_command if AI skipped it.
     # ============================================================
     merged_plan = _inject_clone_save(merged_plan, user_command)
+
+    # ============================================================
+    # STEP 7a1: REMOVE redundant save_form(save) right after
+    # save_form(clone) for Affiliation War Contribution — single-page
+    # form, the clone-save already persisted everything.
+    # ============================================================
+    merged_plan = _remove_aw_contribution_redundant_save(merged_plan, user_command)
+
+    # ============================================================
+    # STEP 7a2: RENAME Affiliation War Contribution clone field name
+    # This RBE sub-feature's clone flow is a full PAGE (not a modal) whose
+    # ID field is labeled plain "ID" — not "New ID" like other RBE forms.
+    # Must run BEFORE STEP 7b so the generic RBE renamer doesn't grab it
+    # first if "rbe" also happens to appear in the command text.
+    # ============================================================
+    merged_plan = _fix_aw_contribution_clone_field_name(merged_plan, user_command)
 
     # ============================================================
     # STEP 7b: RENAME RBE clone modal field name
@@ -842,6 +901,14 @@ def fix_action_plan(plan, user_command=""):
     merged_plan = _remove_click_after_clone_save(merged_plan)
 
     # ============================================================
+    # STEP 9b: Remove spurious edit_row right after save_form(mode=clone)
+    # AI sometimes re-searches the table using the original clone_row's
+    # search text instead of continuing on the already-open newly-cloned
+    # entity's edit page.
+    # ============================================================
+    merged_plan = _remove_spurious_edit_row_after_clone_save(merged_plan)
+
+    # ============================================================
     # STEP 10: INJECT missing final process_deployment
     # Every test case ends with "Bấm vào logo The Brick". If the AI dropped it
     # and the plan doesn't already end with process_deployment, append
@@ -871,12 +938,16 @@ __all__ = [
     "_remove_redundant_click_after_navigate",
     "_fix_post_deployment_missing_navigate",
     "_strip_invalid_deploy_options",
+    "_fix_choose_n_id_contains_random_pattern",
     "_fix_choose_id_misclassified_as_filter",
     "_fix_specific_id_choose_misclassified_as_edit_row",
+    "_fix_bare_random_checkbox_and_missing_download",
     "_inject_missing_checkbox_before_download",
     "_dedup_consecutive_identical_steps",
     "_fix_download_filename_in_target",
     "_fix_manipulate_csv_value_verbatim",
+    "_inject_missing_download_before_manipulate_csv",
+    "_remove_redundant_pre_download_steps",
     "_auto_infer_deployment_options",
     "_merge_process_deployment_steps",
     "_inject_missing_final_deployment",
@@ -884,9 +955,12 @@ __all__ = [
     "_remove_edit_row_before_checkbox",
     "_fix_pve_clone_chapter",
     "_fix_rbe_clone_field_name",
+    "_fix_aw_contribution_clone_field_name",
+    "_remove_aw_contribution_redundant_save",
     "_fix_clone_modal_new_prefix_fields",
     "_fix_id_only_update_to_edit_row",
     "_remove_click_after_clone_save",
+    "_remove_spurious_edit_row_after_clone_save",
     "_inject_missing_clone_row",
     "_extract_clone_modal_fields",
     "_inject_clone_save",

@@ -11,6 +11,13 @@ class ClickHandlerMixin:
     def smart_click(self, page, target_text):
         print(f"      🖱 Smart Click: '{target_text}'")
         target_clean = target_text.strip()
+        # AI sometimes echoes the Vietnamese "Bấm vào tab X" phrasing literally into
+        # the click target (e.g. "tab PVE" instead of "PVE"). Real UI tab/sidebar
+        # elements are never labeled "Tab X" (just "X"), and every matching strategy
+        # below searches by substring-in-element-text — a stray "tab " prefix means
+        # NONE of them can ever match, since the rendered element text lacks the
+        # word "tab" entirely. Strip it up front so every strategy still works.
+        target_clean = re.sub(r"^tab\s+", "", target_clean, flags=re.IGNORECASE).strip()
         clicked = False
 
         # Early-exit: "Filter Data" / "Filter" button — click the page-level Filter button
@@ -29,6 +36,13 @@ class ClickHandlerMixin:
                         _fb.click()
                         print(f"         ✅ Filter button clicked via '{_fsel}'")
                         self._wait_for_long_loading(page)
+                        # Settle buffer: the loading spinner clears as soon as the
+                        # filter XHR resolves, but the table's row/cell content
+                        # (especially far-down rows) can still be mid-render for a
+                        # beat after that — a subsequent action (e.g. random
+                        # checkbox selection) can hit a <tr> with 0 populated <td>
+                        # cells if it queries too early. 2s covers the observed gap.
+                        time.sleep(2)
                         return True
                 except Exception:
                     continue

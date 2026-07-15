@@ -304,6 +304,100 @@ def _fix_rbe_clone_field_name(plan, user_command=""):
     return plan
 
 
+def _fix_aw_contribution_clone_field_name(plan, user_command=""):
+    """
+    Affiliation War Contribution's clone flow is a full PAGE navigation
+    (/wp_rbe_tools/aw_contribution/clone/<id>/), not a Bootstrap modal like
+    other RBE sub-features, and its ID field is labeled plain 'ID *'
+    (for='contribution-event-id') — not 'New ID' / 'Cloned Rules Based
+    Tournament ID' like the rest of RBE. The AI follows the shared clone
+    prompt and generates a generic ID key; rewrite it to match this
+    feature's real DOM label. Verified live via CDP against the actual page.
+    """
+    cmd_lower = (user_command or "").lower()
+    nav_mentions_awc = any(
+        step.get("action") == "navigate"
+        and any(
+            "affiliation war contribution" in str(p).lower()
+            for p in (step.get("path") or [])
+        )
+        for step in plan
+    )
+    if "affiliation war contribution" not in cmd_lower and not nav_mentions_awc:
+        return plan
+
+    clone_positions = {i for i, s in enumerate(plan) if s.get("action") == "clone_row"}
+    if not clone_positions:
+        return plan
+
+    for i, step in enumerate(plan):
+        if step.get("action") != "update_form":
+            continue
+        if not any(cp < i for cp in clone_positions):
+            continue
+        data = step.get("data", {})
+        for generic_key in ("New ID", "New Event ID", "Cloned Rules Based Tournament ID"):
+            if generic_key in data:
+                data["ID"] = data.pop(generic_key)
+                print(f"   🔧 AW CONTRIBUTION clone: renamed '{generic_key}' → 'ID'")
+                break
+    return plan
+
+
+def _remove_aw_contribution_redundant_save(plan, user_command=""):
+    """
+    Affiliation War Contribution's clone is a single-page form: ID/Gate/PvE/
+    Showdown/... are ALL filled in one update_form and ONE click on
+    "SAVE CHANGES" (save_form mode='clone') both creates the clone AND
+    persists every field — there is no separate post-clone edit page with
+    more fields to fill.
+
+    _inject_clone_save() unconditionally appends save_form(mode='clone')
+    right after the clone-modal fields. When the user's command also has its
+    own literal "-> Save ->" (translated by the AI into a second, separate
+    save_form(mode='save')), the two end up back-to-back with nothing new
+    filled in between — the same physical "SAVE CHANGES" click represented
+    twice. The second click fails outright because after the first save the
+    browser has already navigated away from the form (verified live via CDP:
+    "Contribution saved successfully" alert + redirect), so there's no Save
+    button left to find.
+
+    Only removes save_form(mode="save") immediately (modulo `wait` steps)
+    after save_form(mode="clone") with no update_form/clone_row/edit_row in
+    between, and only in Affiliation War Contribution context — this pattern
+    is legitimately used for multi-step wizards (e.g. PVE book/chapter clone)
+    in other features, so it is NOT safe to remove globally.
+    """
+    cmd_lower = (user_command or "").lower()
+    nav_mentions_awc = any(
+        step.get("action") == "navigate"
+        and any(
+            "affiliation war contribution" in str(p).lower()
+            for p in (step.get("path") or [])
+        )
+        for step in plan
+    )
+    if "affiliation war contribution" not in cmd_lower and not nav_mentions_awc:
+        return plan
+
+    indices_to_remove = set()
+    for i, step in enumerate(plan):
+        if step.get("action") == "save_form" and step.get("mode") == "clone":
+            j = i + 1
+            while j < len(plan) and plan[j].get("action") == "wait":
+                j += 1
+            if j < len(plan) and plan[j].get("action") == "save_form" and plan[j].get("mode") == "save":
+                indices_to_remove.add(j)
+                print(
+                    "   🔧 AW CONTRIBUTION: Removed redundant save_form(mode='save') "
+                    "right after save_form(mode='clone') — single-page form, same click"
+                )
+
+    if not indices_to_remove:
+        return plan
+    return [s for idx, s in enumerate(plan) if idx not in indices_to_remove]
+
+
 def _fix_clone_modal_new_prefix_fields(plan, user_command=""):
     """
     Clone modals often label fields as 'X' but the AI generates 'New X' because
@@ -404,6 +498,79 @@ def _remove_click_after_clone_save(plan):
                 continue
         result.append(step)
         i += 1
+    return result
+
+
+def _remove_spurious_edit_row_after_clone_save(plan):
+    """
+    Remove an edit_row that appears right after save_form(mode='clone')
+    (modulo `wait` steps) with no update_form in between.
+
+    After clicking the clone-submit button, the browser is ALREADY on the
+    newly-cloned entity's own edit page — this is the established behavior
+    across every RBE-family clone flow (Gacha, Faction Feud, Tournament,
+    RBE Rules Based Tournament, Affiliation War Contribution, ...), which is
+    exactly why _inject_clone_save() places "post-clone" fields directly
+    after save_form(clone) with no extra navigation step.
+
+    The AI sometimes still generates a stray edit_row right after the clone
+    save, re-using the ORIGINAL clone_row's search text (e.g. clone_row
+    target="solo" → edit_row target="solo") — this re-searches the table for
+    the OLD row instead of continuing on the NEW cloned entity's already-open
+    form, editing the wrong record or crashing if the table isn't even on
+    screen anymore (the page navigated to a standalone edit form/URL).
+
+    Only removes edit_row when a clone_row precedes it (no update_form for
+    genuinely different data in between) — never touches edit_row used to
+    open an unrelated, pre-existing row.
+    """
+    if not plan:
+        return plan
+
+    result = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+        result.append(step)
+        i += 1
+
+        if step.get("action") != "save_form" or step.get("mode") != "clone":
+            continue
+
+        # Find the clone_row this save_form(clone) belongs to (nearest one before it)
+        clone_row_step = next(
+            (s for s in reversed(result[:-1]) if s.get("action") == "clone_row"),
+            None,
+        )
+        if clone_row_step is None:
+            continue
+
+        clone_search_terms = {
+            str(clone_row_step.get("target", "")).strip().lower(),
+            str(clone_row_step.get("source", "")).strip().lower(),
+        } - {""}
+        if not clone_search_terms:
+            continue
+
+        j = i
+        while j < len(plan) and plan[j].get("action") == "wait":
+            j += 1
+
+        if (
+            j < len(plan)
+            and plan[j].get("action") == "edit_row"
+            and str(plan[j].get("target", "")).strip().lower() in clone_search_terms
+        ):
+            print(
+                f"   🔧 AUTO-FIX: Removed spurious edit_row(target='{plan[j].get('target')}') "
+                "right after save_form(mode='clone') — already on the newly-cloned entity's "
+                "own edit page, re-searching for the original row would edit/crash on the wrong one"
+            )
+            # Copy the skipped waits, then skip the edit_row
+            for k in range(i, j):
+                result.append(plan[k])
+            i = j + 1
+
     return result
 
 
