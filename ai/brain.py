@@ -39,6 +39,14 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 # Careful Mode (Claude API) — opt-in alternative to the Ollama fast pipeline
 MODEL_CLAUDE_CAREFUL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# Mushigen gateway (internal AI control plane) — same Bedrock-passthrough env
+# vars Claude Code CLI uses. When CLAUDE_CODE_USE_BEDROCK=1, call_claude() talks
+# to ANTHROPIC_BEDROCK_BASE_URL with a bearer token instead of api.anthropic.com.
+# Rollback: unset CLAUDE_CODE_USE_BEDROCK and set ANTHROPIC_API_KEY in .env.
+CLAUDE_USE_BEDROCK_GATEWAY = os.getenv("CLAUDE_CODE_USE_BEDROCK") == "1"
+ANTHROPIC_BEDROCK_BASE_URL = os.getenv("ANTHROPIC_BEDROCK_BASE_URL")
+ANTHROPIC_AUTH_TOKEN = os.getenv("ANTHROPIC_AUTH_TOKEN")
 SCENARIO_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "scenarios.json"
 )
@@ -506,11 +514,66 @@ def single_model_pipeline(user_command):
 # ============================================================================
 
 
+def _call_claude_via_mushigen(prompt, model_name, wall_start):
+    """
+    Gọi Claude qua Mushigen (Bedrock-shaped gateway) — cùng cơ chế
+    ANTHROPIC_BEDROCK_BASE_URL + ANTHROPIC_AUTH_TOKEN mà Claude Code CLI dùng.
+    Trả về response text, hoặc None nếu request lỗi.
+    """
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 8192,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    # "effort" 400s on Haiku 4.5 (only Fable 5 / Opus / Sonnet 5 / Sonnet 4.6
+    # support it) and Haiku isn't built for deep adaptive thinking — only
+    # send these on the larger models that actually support them.
+    if "haiku" not in model_name:
+        body["thinking"] = {"type": "adaptive"}
+        body["output_config"] = {"effort": "high"}
+    try:
+        resp = requests.post(
+            f"{ANTHROPIC_BEDROCK_BASE_URL}/model/{model_name}/invoke",
+            headers={
+                "Authorization": f"Bearer {ANTHROPIC_AUTH_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=180,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        wall_elapsed = time.time() - wall_start
+        text = next(
+            (b["text"] for b in data.get("content", []) if b.get("type") == "text"),
+            "",
+        )
+        usage = data.get("usage", {})
+        print(f"\n   ⏱️  TIMING [{model_name}] (careful/claude via mushigen):")
+        print(f"      Total (wall):  {wall_elapsed:6.2f}s")
+        print(
+            f"      Tokens: in={usage.get('input_tokens')} out={usage.get('output_tokens')} "
+            f"cache_read={usage.get('cache_read_input_tokens', 0)}"
+        )
+        return text
+    except Exception as e:
+        print(f"❌ Claude API Error via Mushigen ({model_name}): {e}")
+        return None
+
+
 def call_claude(prompt, model_name=None):
     """
-    Gọi Claude API (Anthropic) cho Careful Mode.
-    Trả về response text, hoặc None nếu thiếu SDK/API key hoặc lỗi request.
+    Gọi Claude API cho Careful Mode.
+    Ưu tiên Mushigen (CLAUDE_CODE_USE_BEDROCK=1); fallback SDK 'anthropic' gọi
+    thẳng api.anthropic.com nếu có ANTHROPIC_API_KEY. Trả về response text,
+    hoặc None nếu thiếu config/SDK hoặc lỗi request.
     """
+    model_name = model_name or MODEL_CLAUDE_CAREFUL
+    wall_start = time.time()
+
+    if CLAUDE_USE_BEDROCK_GATEWAY and ANTHROPIC_BEDROCK_BASE_URL and ANTHROPIC_AUTH_TOKEN:
+        return _call_claude_via_mushigen(prompt, model_name, wall_start)
+
     if anthropic is None:
         print(
             "   ❌ Careful Mode (Claude): package 'anthropic' chưa được cài. "
@@ -519,12 +582,12 @@ def call_claude(prompt, model_name=None):
         return None
     if not ANTHROPIC_API_KEY:
         print(
-            "   ❌ Careful Mode (Claude): thiếu ANTHROPIC_API_KEY trong .env"
+            "   ❌ Careful Mode (Claude): thiếu ANTHROPIC_API_KEY trong .env "
+            "(hoặc thiếu CLAUDE_CODE_USE_BEDROCK/ANTHROPIC_BEDROCK_BASE_URL/"
+            "ANTHROPIC_AUTH_TOKEN cho Mushigen)"
         )
         return None
 
-    model_name = model_name or MODEL_CLAUDE_CAREFUL
-    wall_start = time.time()
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         # "effort" 400s on Haiku 4.5 (only Fable 5 / Opus / Sonnet 5 / Sonnet 4.6
@@ -678,8 +741,12 @@ def _inject_generated_ids(user_command: str, forced_id: str | None = None) -> st
     import datetime as _dt
     import uuid as _uuid
 
+    # Count word ("một"/"1") and the "nhất"/"nhát" (typo) adjective both vary
+    # across testcase authors — match loosely on structure instead of the
+    # exact literal phrase, or rows using a different wording silently skip
+    # ID injection and the AI copies the raw instruction into the plan.
     _pattern = re.compile(
-        r"hãy tự generate một ID duy nhất bắt đầu bằng\s+(\S+)",
+        r"hãy tự generate\s+\S+\s+ID\s+duy\s+\S+\s+bắt đầu bằng\s+(\S+)",
         re.IGNORECASE,
     )
 

@@ -1,54 +1,17 @@
 {
-  "pve||import the chapter csv: vào pve -> sửa book vừa clone -> đợi trang load -> bấm vào tab import/export chapters -> import chapter chapter_test.csv -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Import the Chapter CSV",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-10T17:00:00",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Import/Export Chapters"
-      },
-      {
-        "action": "upload",
-        "target": "Import Chapter",
-        "value": "chapter_test.csv"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
   "rbe||search for an rbe: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> filter một id bất kỳ -> bấm vào logo the brick": {
     "feature": "RBE",
     "label": "Search for an RBE",
     "step_count": 5,
     "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-11T09:37:46",
+    "uses_last": false,
+    "saved_at": "2026-07-21T14:36:33",
     "template": [
       {
         "action": "navigate",
         "path": [
           "Live Events",
+          "RBE",
           "RBE"
         ]
       },
@@ -61,7 +24,7 @@
       {
         "action": "update_form",
         "data": {
-          "ID contains": "{{LAST_ID}}"
+          "ID contains": "RANDOM"
         }
       },
       {
@@ -74,53 +37,47 @@
       }
     ]
   },
-  "rbe||create a new rbe: vào rbe -> bấm vào nút new rules based event -> radio: solo -> save -> đợi trang load -> sửa rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest, event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, 2026-05-22 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
+  "rbe||clone an rbe: vào rbe -> clone rbe contain solo bất kỳ -> cloned rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest -> đợi trang load -> sửa event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, {{today_iso}} 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
     "feature": "RBE",
-    "label": "Create a new RBE",
-    "step_count": 9,
+    "label": "Clone an RBE",
+    "step_count": 8,
     "uses_unique": true,
     "uses_last": false,
-    "saved_at": "2026-06-11T11:24:15",
+    "saved_at": "2026-07-21T14:39:46",
     "template": [
       {
         "action": "navigate",
         "path": [
           "Live Events",
+          "RBE",
           "RBE"
-        ],
-        "target": "RBE",
-        "value": ""
+        ]
       },
       {
-        "action": "click",
-        "target": "New Rules Based Event"
+        "action": "clone_row",
+        "target": "solo"
       },
       {
         "action": "update_form",
         "data": {
-          "Solo": "select"
+          "Cloned Rules Based Tournament ID": "{{UNIQUE_ID}}",
+          "Gate": "LiveOpsTest"
         }
       },
       {
         "action": "save_form",
-        "mode": "save"
+        "mode": "clone"
       },
       {
         "action": "wait"
       },
       {
-        "action": "edit_row",
-        "target": "RANDOM"
-      },
-      {
         "action": "update_form",
         "data": {
-          "Rules Based Tournament ID": "{{UNIQUE_ID}}",
-          "Gate": "LiveOpsTest",
           "Event Name": "!!BUTTON_CANCEL",
           "Event Description": "!!BUTTON_CANCEL",
           "Event Marquee Text": "!!BUTTON_CANCEL",
-          "Schedule in UTC": "2026-05-22 00:00, 2026-05-22 11:00",
+          "Schedule in UTC": "2026-05-22 00:00, 2026-07-21 11:00",
           "Preview Time": "3600",
           "Expired Time": "3600",
           "Event Icon": "RBE_Icon_Generic",
@@ -140,18 +97,19 @@
       }
     ]
   },
-  "rbe||import/export tasks: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> export csv -> import csv -> save -> bấm vào logo the brick": {
+  "rbe||edit an rbe (tasks, ms, lb) then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> xóa tất cả các task -> bấm vào add new task -> sửa task 2: condition: win, league min: 3, league max: 22, attempt: 7, default score: 250, is hidden: on, accumulated: off, complete type 1: pvp:pvp, complete type 2: superstar:ss_oosbourne_ozzy, complete type 3: event_type:limited time, condition description: !!r44_task_win_descript, link end time: {{today_mdy}} 11:00, link start time: 2026-07-20 01:00:00 -> save -> bấm vào logo the brick": {
     "feature": "RBE",
-    "label": "Import/Export Tasks",
-    "step_count": 9,
+    "label": "Edit an RBE (Tasks, MS, LB) then Save",
+    "step_count": 10,
     "uses_unique": false,
     "uses_last": true,
-    "saved_at": "2026-06-11T11:37:03",
+    "saved_at": "2026-07-21T14:41:19",
     "template": [
       {
         "action": "navigate",
         "path": [
           "Live Events",
+          "RBE",
           "RBE"
         ]
       },
@@ -173,119 +131,19 @@
         "target": "Tasks"
       },
       {
-        "action": "download",
-        "value": "tasks.csv",
-        "target": "Export CSV"
-      },
-      {
-        "action": "upload",
-        "value": "tasks.csv",
-        "target": "Import CSV"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "rbe||import/export milestones: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab milestones -> export csv file milestone_test.csv -> import csv -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Import/Export Milestones",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-11T11:56:42",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Hide LiveopsTest gate items checkbox": "false"
-        }
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
+        "action": "delete_all_tasks"
       },
       {
         "action": "click",
-        "target": "Milestones"
-      },
-      {
-        "action": "download",
-        "value": "milestone_test.csv",
-        "target": "Export CSV"
-      },
-      {
-        "action": "upload",
-        "value": "milestone_test.csv",
-        "target": "Import CSV"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "rbe||import/export leaderboards: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab leaderboards -> export csv file leaderboard_test.csv -> import csv -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Import/Export Leaderboards",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-11T11:59:18",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE"
-        ]
+        "target": "Add New Task"
       },
       {
         "action": "update_form",
-        "data": {
-          "Hide LiveopsTest gate items checkbox": "false"
-        }
+        "data": {}
       },
       {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Leaderboards"
-      },
-      {
-        "action": "download",
-        "value": "leaderboard_test.csv",
-        "target": "Export CSV"
-      },
-      {
-        "action": "upload",
-        "value": "leaderboard_test.csv",
-        "target": "Import CSV"
-      },
-      {
-        "action": "save_form"
+        "action": "save_form",
+        "mode": "save"
       },
       {
         "action": "process_deployment",
@@ -293,18 +151,19 @@
       }
     ]
   },
-  "rbe||create/edit the contest superstars then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab contest superstars -> bấm vào add event -> bấm vào pvp -> sửa event id: vs_tournament_may2026_hieunm_1205 -> bấm vào define schedules -> bấm vào add schedule, start time: 2026-05-18 19:00, end time: 2026-05-22 19:00 -> save -> sửa condition: win against any rarity -> bấm vào add css -> enter superstars or groups: body_oosbourne, attempt: 10000, amount: 1000 -> save -> bấm vào logo the brick": {
+  "rbe||create/edit the contest superstars then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab contest superstars -> bấm vào add event -> bấm vào pvp -> sửa event id: vs_tournament_may2026_hieunm_1205 -> bấm vào define schedules -> bấm vào add schedule, start time: 2026-05-18 19:00, end time: {{today_iso}} 11:00 -> save -> sửa condition: win against any rarity -> bấm vào add css -> enter superstars or groups: body_oosbourne, attempt: 10000, amount: 1000 -> save -> bấm vào logo the brick": {
     "feature": "RBE",
     "label": "Create/Edit the Contest Superstars then Save",
     "step_count": 17,
     "uses_unique": false,
     "uses_last": true,
-    "saved_at": "2026-06-11T12:03:52",
+    "saved_at": "2026-07-21T14:49:04",
     "template": [
       {
         "action": "navigate",
         "path": [
           "Live Events",
+          "RBE",
           "RBE"
         ]
       },
@@ -351,11 +210,12 @@
         "action": "update_form",
         "data": {
           "Start Time": "2026-05-22 00:00",
-          "End Time": "2026-05-22 11:00"
+          "End Time": "2026-07-21 11:00"
         }
       },
       {
-        "action": "save_form"
+        "action": "save_form",
+        "mode": "save"
       },
       {
         "action": "update_form",
@@ -376,127 +236,6 @@
         }
       },
       {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||search any offers: vào offer -> filter một id bất kỳ -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Search any offers",
-    "step_count": 4,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-11T16:00:57",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "ID contains": "RANDOM"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Filter Data"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||edit an offer (common, details, display): vào offer -> sửa một id bất kỳ -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Edit an Offer (Common, Details, Display)",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-11T14:44:37",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||clone an offer: vào offer -> clone một id bất kỳ -> new offer id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, new gate: liveopstest -> đợi trang load -> bấm vào tab detail info -> sửa schedule in utc: 03/22/2026, 19:00, 06/03/2026, 11:00 -> save -> bấm vào tab display info -> save -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Clone an Offer",
-    "step_count": 11,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-06-11T15:04:50",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ],
-        "target": "Offer",
-        "value": ""
-      },
-      {
-        "action": "clone_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "New Offer ID": "{{UNIQUE_ID}}",
-          "New Gate": "LiveOpsTest"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Detail Info"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Schedule in UTC": "03/22/2026, 19:00, 06/03/2026, 11:00"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "click",
-        "target": "Display Info"
-      },
-      {
         "action": "save_form",
         "mode": "save"
       },
@@ -506,120 +245,21 @@
       }
     ]
   },
-  "offer||open the segmentation info: vào offer -> sửa 1 id bất kỳ -> đợi trang load -> bấm vào tab segmentation info -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Open the Segmentation Info",
+  "rbe||create/edit the affiliation war contribution: vào affiliation war contribution -> clone 1 id bất kỳ -> đợi trang load -> sửa id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest, pve: 6, showdown: 6 -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Create/Edit the Affiliation War Contribution",
     "step_count": 5,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-11T15:35:34",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Segmentation Info"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||filter any offer sections: vào offer section -> filter 1 id bất kỳ -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Filter any offer sections",
-    "step_count": 4,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-11T15:58:38",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer Section"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "ID contains": "RANDOM"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Filter Data"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||filter any offer sections: vào offer section -> filter 1 section id bất kỳ -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Filter any offer sections",
-    "step_count": 4,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-11T16:36:04",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer Section"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "ID contains": "RANDOM"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Filter Data"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||clone an offer section: vào offer section -> clone 1 section id bất kỳ -> new section id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest -> đợi trang load -> sửa texture: ui/storev2/offersections/header_0421_premium -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Clone an Offer Section",
-    "step_count": 8,
     "uses_unique": true,
     "uses_last": false,
-    "saved_at": "2026-06-12T14:13:39",
+    "saved_at": "2026-07-21T14:50:25",
     "template": [
       {
         "action": "navigate",
         "path": [
           "Live Events",
-          "Offer",
-          "Offer Section"
-        ],
-        "target": "Offer Section",
-        "value": ""
+          "RBE",
+          "Affiliation War Contribution"
+        ]
       },
       {
         "action": "clone_row",
@@ -629,114 +269,9 @@
         "action": "update_form",
         "data": {
           "Gate": "LiveOpsTest",
-          "Section ID": "{{UNIQUE_ID}}"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Texture": "UI/StoreV2/OfferSections/Header_0421_Premium"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "continue"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "offer||edit an offer section: vào offer section -> sửa id vừa clone -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Edit an Offer Section",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-12T15:57:02",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer Section"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||search for a pve book: vào pve -> filter 1 id bất kỳ -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Search for a PVE Book",
-    "step_count": 4,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-12T16:01:31",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "ID contains": "RANDOM"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Filter Data"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||clone the pve: vào pve -> clone 1 id contain ltpve bất kỳ -> sửa book name: hãy tự generate một id duy nhất bắt đầu bằng ltpve_hieunm_test -> bấm vào nút create book and open in v2 -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Clone the PVE",
-    "step_count": 5,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-06-12T16:04:11",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "ltpve"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Book Name": "{{UNIQUE_ID}}"
+          "ID": "{{UNIQUE_ID}}",
+          "PvE": "6",
+          "Showdown": "6"
         }
       },
       {
@@ -749,291 +284,19 @@
       }
     ]
   },
-  "pve||edit the book info and save: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào tab book information -> sửa book texture icon: engagement_pve_aug2025_wkend4 -> bấm vào nút save book info -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Edit the Book Info and Save",
-    "step_count": 7,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-12T16:18:14",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Book Information"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Book Texture Icon": "Engagement_PVE_Aug2025_Wkend4"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Save Book Info"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||edit the chapter (schedule, loadout, rewards) then save: vào pve -> sửa id vừa clone -> đợi trang load -> sửa gate trong chapter info: liveopstest, start time: 04/27/2026, 19:00, end time: 05/30/2026, 19:00 -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Edit the Chapter (Schedule, Loadout, Rewards) then Save",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-12T16:23:13",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate trong Chapter Info": "LiveOpsTest",
-          "Start time": "04/27/2026, 19:00",
-          "End Time": "05/30/2026, 19:00"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||export the book csv: vào pve -> chọn 2 id bất kỳ -> export csv file book_test.csv -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Export the Book CSV",
-    "step_count": 4,
+  "rbe||deploy and view diff: bấm vào logo the brick -> chọn checkbox rbe-> process": {
+    "feature": "RBE",
+    "label": "Deploy and view diff",
+    "step_count": 1,
     "uses_unique": false,
     "uses_last": false,
-    "saved_at": "2026-06-12T16:49:24",
+    "saved_at": "2026-07-21T14:50:34",
     "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ],
-        "target": "Classic PVE",
-        "value": ""
-      },
-      {
-        "action": "checkbox",
-        "target": "",
-        "value": "random_2"
-      },
-      {
-        "action": "download",
-        "target": "Export CSV",
-        "value": "Book_test.csv"
-      },
       {
         "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||import the book csv: vào pve -> import csv file book_test.csv -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Import the Book CSV",
-    "step_count": 4,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-12T17:23:33",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ],
-        "target": "Classic PVE",
-        "value": ""
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV",
-        "value": "Book_test.csv"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "gacha||search for a gacha event: vào gacha event -> filter 1 id bất kỳ -> bấm vào logo the brick": {
-    "feature": "Gacha",
-    "label": "Search for a Gacha event",
-    "step_count": 4,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-12T17:31:09",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Gacha Event",
-          "Gacha Event"
+        "options": [
+          "RBE"
         ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "ID contains": "RANDOM"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Filter Data"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "gacha||clone the gacha event: vào gacha event -> clone 1 id bất kỳ -> new event id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest, radio: use another currency, currency: gachashard_mar2026_weeklong_skillplate -> save -> bấm vào logo the brick": {
-    "feature": "Gacha",
-    "label": "Clone the Gacha Event",
-    "step_count": 6,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-06-12T17:34:44",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Gacha Event",
-          "Gacha Event"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "New Event ID": "{{UNIQUE_ID}}",
-          "Gate": "LiveOpsTest",
-          "Use another currency": true,
-          "Currency": "GachaShard_Mar2026_Weeklong_SkillPlate"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "gacha||edit the gacha (info, display, pool, weight) and save: vào gacha event -> sửa id vừa clone -> đợi trang load -> sửa schedule in utc: 2025-12-12 20:00:00, 2026-06-09 11:00:00 -> save -> bấm vào tab gacha token -> save -> bấm vào tab display info -> sửa display name: !!button_cancel, description: !!button_cancel, loot table description: !!button_cancel -> save -> bấm vào logo the brick": {
-    "feature": "Gacha",
-    "label": "Edit the Gacha (Info, Display, Pool, Weight) and Save",
-    "step_count": 11,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-12T17:39:42",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Gacha Event",
-          "Gacha Event"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Schedule in UTC": "2025-12-12 20:00:00, 2026-06-09 11:00:00"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "click",
-        "target": "Gacha Token"
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "click",
-        "target": "Display Info"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Display Name": "!!BUTTON_CANCEL",
-          "Description": "!!BUTTON_CANCEL",
-          "Loot Table Description": "!!BUTTON_CANCEL"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
       }
     ]
   },
@@ -1042,13 +305,14 @@
     "label": "Import/Export Tasks",
     "step_count": 9,
     "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-15T13:50:34",
+    "uses_last": false,
+    "saved_at": "2026-07-21T16:21:41",
     "template": [
       {
         "action": "navigate",
         "path": [
           "Live Events",
+          "RBE",
           "RBE"
         ]
       },
@@ -1060,7 +324,7 @@
       },
       {
         "action": "edit_row",
-        "target": "{{LAST_ID}}"
+        "target": "hieunm_test_20260721_143633_7eb7b5"
       },
       {
         "action": "wait"
@@ -1071,13 +335,13 @@
       },
       {
         "action": "download",
-        "value": "task_test.csv",
-        "target": "Export CSV"
+        "target": "Export CSV",
+        "value": "task_test.csv"
       },
       {
         "action": "upload",
-        "value": "task_test.csv",
-        "target": "Import CSV"
+        "target": "Import CSV",
+        "value": "task_test.csv"
       },
       {
         "action": "save_form"
@@ -1088,1457 +352,65 @@
       }
     ]
   },
-  "offer||edit an offer (common, details, display): vào offer -> sửa id vừa clone -> đợi trang load -> sửa platform type: both, offer section: section_hieunm_0306 -> save -> bấm vào tab display info -> sửa store image name: !!button_cantuse, store image description: !!button_cantuse -> save -> bấm vào logo the brick": {
-    "feature": "Offer",
-    "label": "Edit an Offer (Common, Details, Display)",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-15T16:16:40",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Platform Type": "Both",
-          "Offer Section": "Section_hieunm_0306"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "click",
-        "target": "Display Info"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Store Image Name": "!!BUTTON_CANTUSE",
-          "Store Image Description": "!!BUTTON_CANTUSE"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "gacha||import the gacha pool csv: vào gacha event -> sửa id vừa clone -> đợi trang load -> bấm vào tab gacha pool -> đợi trang load -> export csv file gacha_pool_test.csv -> import csv file gacha_pool_test.csv -> save -> bấm vào logo the brick": {
-    "feature": "Gacha",
-    "label": "Import the Gacha Pool CSV",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-16T17:41:17",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Gacha Event",
-          "Gacha Event"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Gacha Pool"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "download",
-        "value": "gacha_pool_test.csv",
-        "target": "Export CSV"
-      },
-      {
-        "action": "upload",
-        "value": "gacha_pool_test.csv",
-        "target": "Import CSV"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào fight card -> clone 1 id bất kỳ -> fightcard id: hãy tự generate một id duy nhất bắt đầu bằng fightcard_hieunm_test, gate: liveopstest -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào Fight Card -> Clone 1 ID bất kỳ -> FightCard ID: hãy tự generate một ID duy nhất bắt đầu bằng FightCard_hieunm_test,",
-    "step_count": 5,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-06-18T15:26:42",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Fight Card",
-          "Fight Card"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate": "LiveOpsTest",
-          "FightCard ID": "{{UNIQUE_ID}}"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "rbe||clone an rbe: vào rbe -> clone rbe contain solo bất kỳ -> cloned rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest -> đợi trang load -> sửa event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, 2026-05-22 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
+  "rbe||import/export leaderboards: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab leaderboards -> export csv file leaderboard_test.csv -> import csv -> save -> bấm vào logo the brick": {
     "feature": "RBE",
-    "label": "Clone an RBE",
-    "step_count": 8,
-    "uses_unique": true,
+    "label": "Import/Export Leaderboards",
+    "step_count": 9,
+    "uses_unique": false,
     "uses_last": false,
-    "saved_at": "2026-06-18T17:44:30",
+    "saved_at": "2026-07-21T16:25:27",
     "template": [
       {
         "action": "navigate",
         "path": [
           "Live Events",
+          "RBE",
           "RBE"
         ]
       },
       {
-        "action": "clone_row",
-        "filter": "Solo bất kỳ",
-        "target": "solo"
-      },
-      {
         "action": "update_form",
         "data": {
-          "Gate": "LiveOpsTest",
-          "Cloned Rules Based Tournament ID": "{{UNIQUE_ID}}"
+          "Hide LiveopsTest gate items checkbox": "false"
         }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Event Name": "!!BUTTON_CANCEL",
-          "Event Description": "!!BUTTON_CANCEL",
-          "Event Marquee Text": "!!BUTTON_CANCEL",
-          "Schedule in UTC": "2026-05-22 00:00, 2026-05-22 11:00",
-          "Preview Time": "3600",
-          "Expired Time": "3600",
-          "Event Icon": "RBE_Icon_Generic",
-          "Event Hub Banner Texture": "RBE_Fac_Wrapper_Wknd3_May2026",
-          "Event Sidebar Icon": "RBE_Icon_Generic",
-          "Gradient Image": "RBE_banner_1_purple",
-          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào gacha event -> clone 1 id bất kỳ -> new event id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest, radio: use another currency, currency: gachashard_mar2026_weeklong_skillplate -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào Gacha Event -> Clone 1 ID bất kỳ -> New Event ID: hãy tự generate một ID duy nhất bắt đầu bằng hieunm_test, Gate: Li",
-    "step_count": 6,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-06-18T21:27:38",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Gacha Event",
-          "Gacha Event"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "New Event ID": "{{UNIQUE_ID}}",
-          "Gate": "LiveOpsTest",
-          "Use another currency": true,
-          "Currency": "GachaShard_Mar2026_Weeklong_SkillPlate"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào offer -> sửa 1 id bất kỳ -> đợi trang load -> bấm vào tab display info -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào Offer -> Sửa 1 ID bất kỳ -> Đợi trang load -> Bấm vào tab Display Info -> Save -> Bấm vào logo The Brick",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-23T22:03:15",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
       },
       {
         "action": "edit_row",
-        "target": "RANDOM"
+        "target": "hieunm_test_20260721_143633_7eb7b5"
       },
       {
         "action": "wait"
       },
       {
         "action": "click",
-        "target": "Display Info"
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào drip offer -> sửa 1 id bất kỳ -> đợi trang load -> bấm vào tab detail info -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào Drip Offer -> Sửa 1 ID bất kỳ -> Đợi trang load -> Bấm vào tab Detail Info -> Save -> Bấm vào logo The Brick",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-23T22:06:15",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Drip Offer"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Detail Info"
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "gacha||deploy and view diff: bấm vào logo the brick -> chọn checkbox gacha events -> process": {
-    "feature": "Gacha",
-    "label": "Deploy and view diff",
-    "step_count": 1,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-24T11:36:30",
-    "template": [
-      {
-        "action": "process_deployment",
-        "options": [
-          "Gacha Events"
-        ]
-      }
-    ]
-  },
-  "manual||vào pve -> chọn id \"ltpve_may2026_wk4_contest\" -> export csv": {
-    "feature": "manual",
-    "label": "Vào PVE -> Chọn ID \"LTPVE_May2026_Wk4_Contest\" -> Export CSV",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-25T10:36:55",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "LTPVE_May2026_Wk4_Contest"
-      },
-      {
-        "action": "download",
-        "target": "Export CSV"
-      }
-    ]
-  },
-  "manual||vào pve -> chọn id \"ltpve_may2026_wk4_contest\" -> export csv file book_info_2506": {
-    "feature": "manual",
-    "label": "Vào PVE -> Chọn ID \"LTPVE_May2026_Wk4_Contest\" -> Export CSV file Book_info_2506",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-25T11:11:18",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "LTPVE_May2026_Wk4_Contest"
-      },
-      {
-        "action": "download",
-        "value": "Book_info_2506.csv",
-        "target": "Export CSV"
-      }
-    ]
-  },
-  "manual||vào pve -> import csv file book_info_2506.csv": {
-    "feature": "manual",
-    "label": "Vào PVE -> Import CSV file Book_info_2506.csv",
-    "step_count": 2,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-25T11:17:40",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV",
-        "value": "Book_info_2506.csv"
-      }
-    ]
-  },
-  "manual||vào offer -> clone một id bất kỳ -> new offer id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, new gate: r80 -> đợi trang load -> bấm vào detail info -> sửa schedule in utc: 03/22/2026, 19:00, 06/25/2026, 11:00 -> save -> bấm vào tab display info -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào Offer -> Clone một ID bất kỳ -> New Offer ID: hãy tự generate một ID duy nhất bắt đầu bằng hieunm_test, New Gate: r8",
-    "step_count": 11,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-06-25T14:22:41",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "New Offer ID": "{{UNIQUE_ID}}",
-          "New Gate": "r80"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Detail Info"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Schedule in UTC": "03/22/2026, 19:00, 06/25/2026, 11:00"
-        }
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "click",
-        "target": "Display Info"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào offer -> chọn id vừa clone -> export csv file offer_2506.csv": {
-    "feature": "manual",
-    "label": "Vào Offer -> Chọn ID vừa clone -> Export CSV file Offer_2506.csv",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-25T14:41:16",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "{{LAST_ID}}"
-      },
-      {
-        "action": "download",
-        "value": "Offer_2506.csv",
-        "target": "Export CSV"
-      }
-    ]
-  },
-  "manual||vào offer -> import csv file offer_2506.csv": {
-    "feature": "manual",
-    "label": "Vào Offer -> Import CSV file Offer_2506.csv",
-    "step_count": 2,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-25T14:43:55",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV",
-        "value": "Offer_2506.csv"
-      }
-    ]
-  },
-  "manual||vào offer -> chọn id hieunm_test_20260625_141847_8e7f61 -> export csv file offer_data.csv": {
-    "feature": "manual",
-    "label": "Vào Offer -> Chọn ID hieunm_test_20260625_141847_8e7f61 -> Export CSV file offer_data.csv",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-06-25T17:15:07",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "hieunm_test_20260625_141847_8e7f61"
-      },
-      {
-        "action": "download",
-        "value": "offer_data.csv",
-        "target": "Export CSV"
-      }
-    ]
-  },
-  "manual||vào offer -> clone một id bất kỳ -> new offer id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, new gate: r80 -> đợi trang load -> bấm vào detail info -> sửa schedule in utc: 03/22/2026, 19:00, 06/26/2026, 11:00 -> save -> bấm vào display info -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào Offer -> Clone một ID bất kỳ -> New Offer ID: hãy tự generate một ID duy nhất bắt đầu bằng hieunm_test, New Gate: r8",
-    "step_count": 11,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-06-26T10:03:46",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "RANDOM"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "New Offer ID": "{{UNIQUE_ID}}",
-          "New Gate": "r80"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Detail Info"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Schedule in UTC": "03/22/2026, 19:00, 06/26/2026, 11:00"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "click",
-        "target": "Display Info"
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào offer -> chọn id vừa clone -> export csv file offer_data.csv": {
-    "feature": "manual",
-    "label": "Vào Offer -> Chọn ID vừa clone -> Export CSV file offer_data.csv",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-26T10:06:21",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "{{LAST_ID}}"
-      },
-      {
-        "action": "download",
-        "value": "offer_data.csv",
-        "target": "Export CSV"
-      }
-    ]
-  },
-  "manual||vào offer -> chọn id vừa clone -> export csv file offer_data.csv -> sửa cột gate: r80 -> sửa cột: platform: web -> import csv file offer_data.csv -> bấm vào logo the brick -> chọn checkbox offers -> process": {
-    "feature": "manual",
-    "label": "Vào Offer -> Chọn ID vừa clone -> Export CSV file offer_data.csv -> Sửa cột gate: r80 -> Sửa cột: Platform: web -> Impor",
-    "step_count": 7,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-06-26T10:25:42",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "{{LAST_ID}}"
-      },
-      {
-        "action": "download",
-        "value": "offer_data.csv",
-        "target": "Export CSV"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_data.csv",
-        "operation": "set",
-        "data": "gate=r80"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_data.csv",
-        "operation": "set",
-        "data": "Platform=web"
-      },
-      {
-        "action": "upload",
-        "value": "offer_data.csv",
-        "target": "Import CSV"
-      },
-      {
-        "action": "process_deployment",
-        "options": [
-          "Offers"
-        ]
-      }
-    ]
-  },
-  "currency||search for a currency: vào currency -> filter 1 id bất kỳ -> bấm vào logo the brick": {
-    "feature": "Currency",
-    "label": "Search for a Currency",
-    "step_count": 5,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-01T10:58:26",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Data Configs",
-          "Inventory",
-          "Currency"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "ID contains": "RANDOM"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Filter Data"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào offer -> import csv file offer_test.csv": {
-    "feature": "manual",
-    "label": "Vào Offer -> Import CSV file offer_test.csv",
-    "step_count": 2,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-01T11:57:25",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV",
-        "value": "offer_test.csv"
-      }
-    ]
-  },
-  "currency||create a new currency by manual: vào currency -> bấm vào nút add new currency -> đợi trang load -> sửa gate: liveopstest, currency id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, currencyname: !!button_cantuse, description: !!button_cantuse, currency category: gacha token, icon texture: currency_lootcoin_pc_may2026, hard currency value: 199.0000 -> bấm vào nút create -> bấm vào logo the brick": {
-    "feature": "Currency",
-    "label": "Create a new Currency by manual",
-    "step_count": 6,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-01T16:07:40",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Data Configs",
-          "Inventory",
-          "Currency"
-        ]
-      },
-      {
-        "action": "click",
-        "target": "Add New Currency"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate": "LiveOpsTest",
-          "Currency ID": "{{UNIQUE_ID}}",
-          "CurrencyName": "!!BUTTON_CANTUSE",
-          "Description": "!!BUTTON_CANTUSE",
-          "Currency Category": "Gacha Token",
-          "Icon Texture": "Currency_Lootcoin_PC_May2026",
-          "Hard Currency Value": "199.0000"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Create"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào offer -> chọn 1 id bất kỳ -> export csv file offer_test.csv": {
-    "feature": "manual",
-    "label": "Vào Offer -> Chọn 1 ID bất kỳ -> Export CSV file offer_test.csv",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-02T11:03:35",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "random_1"
+        "target": "Leaderboards"
       },
       {
         "action": "download",
         "target": "Export CSV",
-        "value": "offer_test.csv"
-      }
-    ]
-  },
-  "manual||vào offer -> chọn 1 id bất kỳ -> export csv file offer_data.csv": {
-    "feature": "manual",
-    "label": "Vào Offer -> Chọn 1 ID bất kỳ -> Export CSV file offer_data.csv",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-02T11:05:30",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "random_1"
-      },
-      {
-        "action": "download",
-        "target": "Export CSV",
-        "value": "offer_data.csv"
-      }
-    ]
-  },
-  "manual||sửa file offer_data.csv -> sửa cột gate: r80 -> sửa cột weight: 100 -> vào offer -> import csv file offer_data.csv": {
-    "feature": "manual",
-    "label": "Sửa file offer_data.csv -> Sửa cột gate: r80 -> Sửa cột Weight: 100 -> Vào Offer -> Import CSV file offer_data.csv",
-    "step_count": 4,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-02T11:11:25",
-    "template": [
-      {
-        "action": "manipulate_csv",
-        "target": "offer_data.csv",
-        "operation": "set",
-        "data": "gate=r80"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_data.csv",
-        "operation": "set",
-        "data": "Weight=100"
-      },
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "upload",
-        "value": "offer_data.csv",
-        "target": "Import CSV"
-      }
-    ]
-  },
-  "manual||vào offer -> chọn id: nov2024_wk3_webpp_wcs_strap_130gem_show -> export csv file offer_test.csv -> sửa cột gate: r80 -> sửa cột flagship: true -> sửa cột weight: 100000 -> sửa cột end times: 07/31/2026, 11:00 -> sửa cột repeat weekly: false -> import csv": {
-    "feature": "manual",
-    "label": "Vào Offer -> Chọn ID: nov2024_wk3_webpp_wcs_strap_130gem_show -> Export CSV file offer_test.csv -> Sửa cột gate: r80 -> ",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-02T11:21:53",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "nov2024_wk3_webpp_wcs_strap_130gem_show"
-      },
-      {
-        "action": "download",
-        "target": "Export CSV",
-        "value": "offer_test.csv"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_test.csv",
-        "operation": "set",
-        "data": "gate=r80"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_test.csv",
-        "operation": "set",
-        "data": "Flagship=TRUE"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_test.csv",
-        "operation": "set",
-        "data": "Weight=100000"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_test.csv",
-        "operation": "set",
-        "data": "End Times=07/31/2026, 11:00"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_test.csv",
-        "operation": "set",
-        "data": "Repeat Weekly=FALSE"
+        "value": "leaderboard_test.csv"
       },
       {
         "action": "upload",
         "target": "Import CSV",
-        "value": "offer_test.csv"
+        "value": "leaderboard_test.csv"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
       }
     ]
   },
-  "manual||vào offer section -> chọn 1 id bất kỳ -> export csv offer_section.csv -> sửa cột sectionid: section_hieunm_0207 -> sửa cột gate: r80 -> sửa cột weight: 99 -> sửa cột enddate: 07/02/2026,11:00 -> import csv offer_section.csv": {
-    "feature": "manual",
-    "label": "Vào Offer Section -> Chọn 1 ID bất kỳ -> Export CSV offer_section.csv -> Sửa cột SectionID: Section_hieunm_0207 -> Sửa c",
+  "rbe||import/export milestones: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab milestones -> export csv file milestone_test.csv -> import csv -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Import/Export Milestones",
     "step_count": 9,
     "uses_unique": false,
     "uses_last": false,
-    "saved_at": "2026-07-02T14:40:48",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer Section"
-        ],
-        "target": "Offer Section",
-        "value": ""
-      },
-      {
-        "action": "click",
-        "target": "Offer Section"
-      },
-      {
-        "action": "checkbox",
-        "target": "",
-        "value": "random_1"
-      },
-      {
-        "action": "download",
-        "value": "offer_section.csv",
-        "target": "Export CSV"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_section.csv",
-        "operation": "set",
-        "data": "SectionID=Section_hieunm_0207"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_section.csv",
-        "operation": "set",
-        "data": "gate=r80"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_section.csv",
-        "operation": "set",
-        "data": "weight=99"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "offer_section.csv",
-        "operation": "set",
-        "data": "EndDate=07/02/2026,11:00"
-      },
-      {
-        "action": "upload",
-        "value": "offer_section.csv",
-        "target": "Import CSV"
-      }
-    ]
-  },
-  "manual||vào offer section -> import csv file offer_section.csv": {
-    "feature": "manual",
-    "label": "Vào Offer Section -> Import CSV file offer_section.csv",
-    "step_count": 2,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-02T15:01:16",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer Section"
-        ]
-      },
-      {
-        "action": "upload",
-        "file_path": "offer_section.csv",
-        "target": "Import CSV",
-        "value": "offer_section.csv"
-      }
-    ]
-  },
-  "manual||sửa file offer_section.csv -> sửa cột startdate: 07/02/2026,01:00 -> vào offer section -> import csv file offer_section.csv": {
-    "feature": "manual",
-    "label": "Sửa file offer_section.csv -> Sửa cột StartDate: 07/02/2026,01:00 -> Vào Offer Section -> Import CSV file offer_section.",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-02T15:04:31",
-    "template": [
-      {
-        "action": "manipulate_csv",
-        "target": "offer_section.csv",
-        "operation": "set",
-        "data": "StartDate=07/02/2026,01:00"
-      },
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer Section"
-        ]
-      },
-      {
-        "action": "upload",
-        "file_name": "offer_section.csv",
-        "target": "Import CSV",
-        "value": "offer_section.csv"
-      }
-    ]
-  },
-  "rbe||deploy and view diff: bấm vào logo the brick -> chọn checkbox rbe-> process": {
-    "feature": "RBE",
-    "label": "Deploy and view diff",
-    "step_count": 1,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-07T13:57:48",
-    "template": [
-      {
-        "action": "process_deployment",
-        "options": [
-          "RBE"
-        ]
-      }
-    ]
-  },
-  "manual||vào rbe -> bấm vào nút new rules based event -> radio: solo -> save -> đợi trang load -> sửa rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest, event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, {{today_iso}} 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào RBE -> Bấm vào nút New Rules Based Event -> Radio: Solo -> Save -> Đợi trang load -> Sửa Rules Based Tournament ID: ",
-    "step_count": 8,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-08T11:54:01",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE"
-        ],
-        "target": "RBE",
-        "value": ""
-      },
-      {
-        "action": "click",
-        "target": "New Rules Based Event"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Solo": "select"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Continue"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Rules Based Tournament ID": "{{UNIQUE_ID}}",
-          "Gate": "LiveOpsTest",
-          "Event Name": "!!BUTTON_CANCEL",
-          "Event Description": "!!BUTTON_CANCEL",
-          "Event Marquee Text": "!!BUTTON_CANCEL",
-          "Schedule in UTC": "2026-05-22 00:00, 2026-07-08 11:00",
-          "Preview Time": "3600",
-          "Expired Time": "3600",
-          "Event Icon": "RBE_Icon_Generic",
-          "Event Hub Banner Texture": "RBE_Fac_Wrapper_Wknd3_May2026",
-          "Event Sidebar Icon": "RBE_Icon_Generic",
-          "Gradient Image": "RBE_banner_1_purple",
-          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào rbe -> clone rbe contain solo bất kỳ -> cloned rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest -> đợi trang load -> sửa event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, {{today_iso}} 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào RBE -> Clone RBE contain Solo bất kỳ -> Cloned Rules Based Tournament ID: hãy tự generate một ID duy nhất bắt đầu bằ",
-    "step_count": 8,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-08T12:02:28",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "solo"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Cloned Rules Based Tournament ID": "{{UNIQUE_ID}}",
-          "Gate": "LiveOpsTest"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Event Name": "!!BUTTON_CANCEL",
-          "Event Description": "!!BUTTON_CANCEL",
-          "Event Marquee Text": "!!BUTTON_CANCEL",
-          "Schedule in UTC": "2026-05-22 00:00, 2026-07-08 11:00",
-          "Preview Time": "3600",
-          "Expired Time": "3600",
-          "Event Icon": "RBE_Icon_Generic",
-          "Event Hub Banner Texture": "RBE_Fac_Wrapper_Wknd3_May2026",
-          "Event Sidebar Icon": "RBE_Icon_Generic",
-          "Gradient Image": "RBE_banner_1_purple",
-          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào fight card v3 -> sửa id fightcard_feb2026_weeklong_champ -> đợi trang load -> bấm vào tab pve -> contest superstar: on -> sửa rbe event: hãy lấy id rbe vừa clone, contest superstar id: ss_oosbourne_ozzy, rewards: softcurrency, quantity: 100 -> save -> bấm vào logo the brick -> vào rbe -> sửa id vừa clone -> đợi trang load -> bấm vào tab contest superstars -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào Fight Card V3 -> Sửa ID FightCard_Feb2026_weeklong_champ -> Đợi trang load -> Bấm vào tab PVE -> Contest Superstar: ",
-    "step_count": 13,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-08T17:47:11",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Fight Card",
-          "Fight Card V3"
-        ],
-        "target": "Fight Card V3",
-        "value": ""
-      },
-      {
-        "action": "edit_row",
-        "target": "FightCard_Feb2026_weeklong_champ"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "PVE"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "RBE Event": "{{LAST_ID}}",
-          "Contest Superstar ID": "SS_OOsbourne_Ozzy",
-          "Rewards": "SoftCurrency",
-          "Quantity": "100"
-        }
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      },
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Contest Superstars"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào localization -> chọn 2 id bất kỳ -> export to csv file loc.csv -> sửa giá trị cột gate: deprecatedloc -> import csv file loc.csv": {
-    "feature": "manual",
-    "label": "Vào localization -> Chọn 2 ID bất kỳ -> Export To CSV file LOC.csv -> Sửa giá trị cột gate: deprecatedLOC -> Import CSV ",
-    "step_count": 5,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-09T14:16:47",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Data Configs",
-          "Localizations",
-          "Localizations"
-        ]
-      },
-      {
-        "action": "checkbox",
-        "target": "",
-        "value": "random_2"
-      },
-      {
-        "action": "download",
-        "value": "LOC.csv",
-        "target": "Export CSV"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "LOC.csv",
-        "operation": "set",
-        "data": "gate=deprecatedLOC"
-      },
-      {
-        "action": "upload",
-        "value": "LOC.csv",
-        "target": "Import CSV"
-      }
-    ]
-  },
-  "manual||vào offer -> sửa id jun2026_ml_pw_finale_shard_splusextra_mid -> đợi trang load -> bấm vào tab display info -> sửa store image name: !!t6_skillplate_jun2026_hof_desc": {
-    "feature": "manual",
-    "label": "Vào Offer -> Sửa ID jun2026_ml_pw_finale_shard_splusextra_mid -> Đợi trang load -> Bấm vào tab Display Info -> Sửa Store",
-    "step_count": 5,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-09T14:21:33",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "Offer",
-          "Offer"
-        ],
-        "target": "Offer",
-        "value": ""
-      },
-      {
-        "action": "edit_row",
-        "target": "jun2026_ml_pw_finale_shard_splusextra_mid"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Display Info"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Store Image Name": "!!T6_SKILLPLATE_JUN2026_HOF_DESC"
-        }
-      }
-    ]
-  },
-  "manual||vào affiliation war contribution -> clone id hieunm_test_1806 -> đợi trang load -> sửa id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: r80 -> sửa pve: 6, showdown: 6 -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào affiliation war contribution -> Clone ID hieunm_test_1806 -> Đợi trang load -> Sửa ID: Hãy tự generate một ID duy nh",
-    "step_count": 8,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-13T10:43:49",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE",
-          "Affiliation War Contribution"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "hieunm_test_1806"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate": "r80",
-          "ID": "{{UNIQUE_ID}}"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "PvE": "6",
-          "Showdown": "6"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào affiliation war contribution -> clone id hieunm_test_1806 -> đợi trang load -> sửa id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: r80, pve: 6, showdown: 6 -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào affiliation war contribution -> Clone ID hieunm_test_1806 -> Đợi trang load -> Sửa ID: Hãy tự generate một ID duy nh",
-    "step_count": 6,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-13T11:07:27",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE",
-          "Affiliation War Contribution"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "hieunm_test_1806"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate": "r80",
-          "PvE": "6",
-          "Showdown": "6",
-          "ID": "{{UNIQUE_ID}}"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào rbe -> clone rbe contain solo bất kỳ -> cloned rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: r80 -> đợi trang load -> sửa event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, {{today_iso}} 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
-    "feature": "manual",
-    "label": "Vào RBE -> Clone RBE contain Solo bất kỳ -> Cloned Rules Based Tournament ID: hãy tự generate một ID duy nhất bắt đầu bằ",
-    "step_count": 8,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-13T11:22:30",
+    "saved_at": "2026-07-21T16:27:40",
     "template": [
       {
         "action": "navigate",
@@ -2546,298 +418,34 @@
           "Live Events",
           "RBE",
           "RBE"
-        ],
-        "target": "RBE",
-        "value": ""
-      },
-      {
-        "action": "clone_row",
-        "source": "RANDOM",
-        "target": "solo"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate": "r80",
-          "Cloned Rules Based Tournament ID": "{{UNIQUE_ID}}"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Event Name": "!!BUTTON_CANCEL",
-          "Event Description": "!!BUTTON_CANCEL",
-          "Event Marquee Text": "!!BUTTON_CANCEL",
-          "Schedule in UTC": "2026-05-22 00:00, 2026-07-13 11:00",
-          "Preview Time": "3600",
-          "Expired Time": "3600",
-          "Event Icon": "RBE_Icon_Generic",
-          "Event Hub Banner Texture": "RBE_Fac_Wrapper_Wknd3_May2026",
-          "Event Sidebar Icon": "RBE_Icon_Generic",
-          "Gradient Image": "RBE_banner_1_purple",
-          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
-        }
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "manual||vào pve -> chọn 2 id contain ltpve bất kỳ -> export csv file book_test.csv": {
-    "feature": "manual",
-    "label": "Vào PVE -> Chọn 2 ID contain LTPVE bất kỳ -> Export CSV file Book_test.csv",
-    "step_count": 5,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-13T15:37:16",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
         ]
       },
       {
         "action": "update_form",
         "data": {
-          "ID contains": "LTPVE"
+          "Hide LiveopsTest gate items checkbox": "false"
         }
       },
       {
-        "action": "click",
-        "target": "Filter Data"
+        "action": "edit_row",
+        "target": "hieunm_test_20260721_143633_7eb7b5"
       },
       {
-        "action": "checkbox",
-        "target": "ID",
-        "value": "random_2"
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Milestones"
       },
       {
         "action": "download",
         "target": "Export CSV",
-        "value": "Book_test.csv"
-      }
-    ]
-  },
-  "rbe||create a new rbe: vào rbe -> bấm vào nút new rules based event -> radio: solo -> save -> đợi trang load -> sửa rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest, event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, {{today_iso}} 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Create a new RBE",
-    "step_count": 8,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-14T14:11:47",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE",
-          "RBE"
-        ],
-        "target": "RBE",
-        "value": ""
+        "value": "milestone_test.csv"
       },
       {
-        "action": "click",
-        "target": "New Rules Based Event"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Solo": "select"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Continue"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Rules Based Tournament ID": "{{UNIQUE_ID}}",
-          "Gate": "LiveOpsTest",
-          "Event Name": "!!BUTTON_CANCEL",
-          "Event Description": "!!BUTTON_CANCEL",
-          "Event Marquee Text": "!!BUTTON_CANCEL",
-          "Schedule in UTC": "2026-05-22 00:00, 2026-07-14 11:00",
-          "Preview Time": "3600",
-          "Expired Time": "3600",
-          "Event Icon": "RBE_Icon_Generic",
-          "Event Hub Banner Texture": "RBE_Fac_Wrapper_Wknd3_May2026",
-          "Event Sidebar Icon": "RBE_Icon_Generic",
-          "Gradient Image": "RBE_banner_1_purple",
-          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "rbe||clone an rbe: vào rbe -> clone rbe contain solo bất kỳ -> cloned rules based tournament id: hãy tự generate một id duy nhất bắt đầu bằng hieunm_test, gate: liveopstest -> đợi trang load -> sửa event name: !!button_cancel, event description: !!button_cancel, event marquee text: !!button_cancel, schedule in utc: 2026-05-22 00:00, {{today_iso}} 11:00, preview time: 3600, expired time: 3600, event icon: rbe_icon_generic, event hub banner texture: rbe_fac_wrapper_wknd3_may2026, event sidebar icon: rbe_icon_generic, gradient image: rbe_banner_1_purple, point currency: pointcurrency_quanvm_liveopstest_rbe_1 -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Clone an RBE",
-    "step_count": 8,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-14T14:16:01",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE",
-          "RBE"
-        ],
-        "target": "RBE",
-        "value": ""
-      },
-      {
-        "action": "clone_row",
-        "source": "RANDOM",
-        "target": "solo"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate": "LiveOpsTest",
-          "Cloned Rules Based Tournament ID": "{{UNIQUE_ID}}"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Event Name": "!!BUTTON_CANCEL",
-          "Event Description": "!!BUTTON_CANCEL",
-          "Event Marquee Text": "!!BUTTON_CANCEL",
-          "Schedule in UTC": "2026-05-22 00:00, 2026-07-14 11:00",
-          "Preview Time": "3600",
-          "Expired Time": "3600",
-          "Event Icon": "RBE_Icon_Generic",
-          "Event Hub Banner Texture": "RBE_Fac_Wrapper_Wknd3_May2026",
-          "Event Sidebar Icon": "RBE_Icon_Generic",
-          "Gradient Image": "RBE_banner_1_purple",
-          "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
-        }
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||export the chapter csv: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào tab import/export chapters -> export chapter theo bookid file chapter_test.csv -> xóa tất giá trị trong cột entry req ss 1 -> xóa tất cả giá trị trong cột entry req ss 2 -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Export the Chapter CSV",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-14T17:10:35",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Import/Export Chapters"
-      },
-      {
-        "action": "download",
-        "target": "Export Chapter",
-        "value": "chapter_test.csv"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "chapter_test.csv",
-        "operation": "set",
-        "data": "Entry Req SS 1="
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "chapter_test.csv",
-        "operation": "set",
-        "data": "Entry Req SS 2="
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||setup the css for the pve: vào pve -> sửa book vừa clone -> đợi trang load -> contest superstar: on -> sửa rbe: rbe_test_hieunm, normal node 1: ss_oosbourne_ozzy, softcurrency: 10000, hard node 1: ss_oosbourne_ozzy, softcurrency: 10000, hell node 1: ss_oosbourne_ozzy, softcurrency: 10000 -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Setup the CSS for the PVE",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-15T11:14:50",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ],
-        "target": "Classic PVE",
-        "value": ""
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {}
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "milestone_test.csv"
       },
       {
         "action": "save_form"

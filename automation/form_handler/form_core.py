@@ -104,6 +104,13 @@ class FormCoreMixin:
         # SPECIAL (PVE): Contest Superstar toggle + Normal/Hard/Hell panels (Node 1 + SS/Soft Currency)
         self._handle_pve_contest_superstar(page, data)
 
+        # SPECIAL (Titan Takeover Boss): "Restriction Slot N" Group/AND/OR condition builder modal
+        self._handle_restriction_slot_edit(page, data)
+
+        # SPECIAL (RBE Tasks tab): "Task <N> <field>" keys → fill by pm[idx][field]
+        # name (Condition/League/Attempt/Score/toggles/times/Complete Types).
+        self._handle_rbe_task_panel(page, data)
+
         for label, value in data.items():
             # DNU Warning / "Are you sure" from the PREVIOUS field fill may still be visible.
             # Dismiss it before attempting the next field so it doesn't block the fill.
@@ -827,11 +834,16 @@ class FormCoreMixin:
                 const filterBtns = [...document.querySelectorAll(
                     'button, a.btn, input[type=button], input[type=submit]')]
                     .filter(b => /filter/i.test((b.textContent || b.value || '')) && vis(b));
+                // Named form controls (e.g. an input named/id'd "contains") can
+                // shadow Node.prototype.contains as an own property on their
+                // form/container element — call the prototype method explicitly
+                // so a field literally named "contains" doesn't break this.
+                const nodeContains = (node, target) => Node.prototype.contains.call(node, target);
                 const sharesFilterContainer = inp => filterBtns.some(b => {
                     const f = inp.closest('form');
-                    if (f && f.contains(b)) return true;
+                    if (f && nodeContains(f, b)) return true;
                     let c = inp.parentElement;
-                    for (let h = 0; h < 4 && c; h++) { if (c.contains(b)) return true; c = c.parentElement; }
+                    for (let h = 0; h < 4 && c; h++) { if (nodeContains(c, b)) return true; c = c.parentElement; }
                     return false;
                 });
 

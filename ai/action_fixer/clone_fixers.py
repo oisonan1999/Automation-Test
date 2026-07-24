@@ -514,11 +514,14 @@ def _remove_spurious_edit_row_after_clone_save(plan):
     after save_form(clone) with no extra navigation step.
 
     The AI sometimes still generates a stray edit_row right after the clone
-    save, re-using the ORIGINAL clone_row's search text (e.g. clone_row
-    target="solo" → edit_row target="solo") — this re-searches the table for
-    the OLD row instead of continuing on the NEW cloned entity's already-open
-    form, editing the wrong record or crashing if the table isn't even on
-    screen anymore (the page navigated to a standalone edit form/URL).
+    save — either re-using the ORIGINAL clone_row's search text (e.g. clone_row
+    target="solo" → edit_row target="solo") or, just as often, using the brand
+    new generated ID (e.g. clone_row target="RANDOM" → edit_row
+    target="HNM_Test_0717163116_a330", the ID just typed into the clone
+    modal). Either way it's wrong: right after save_form(mode='clone') the
+    browser is ALREADY on the newly-cloned entity's own edit page (no table on
+    screen at all), so ANY edit_row here re-searches a table that isn't there
+    — editing the wrong record, or crashing outright ("row not found").
 
     Only removes edit_row when a clone_row precedes it (no update_form for
     genuinely different data in between) — never touches edit_row used to
@@ -545,26 +548,18 @@ def _remove_spurious_edit_row_after_clone_save(plan):
         if clone_row_step is None:
             continue
 
-        clone_search_terms = {
-            str(clone_row_step.get("target", "")).strip().lower(),
-            str(clone_row_step.get("source", "")).strip().lower(),
-        } - {""}
-        if not clone_search_terms:
-            continue
-
         j = i
         while j < len(plan) and plan[j].get("action") == "wait":
             j += 1
 
-        if (
-            j < len(plan)
-            and plan[j].get("action") == "edit_row"
-            and str(plan[j].get("target", "")).strip().lower() in clone_search_terms
-        ):
+        # ANY edit_row right here is spurious — the invariant (see docstring)
+        # holds regardless of what target text the AI picked.
+        if j < len(plan) and plan[j].get("action") == "edit_row":
             print(
                 f"   🔧 AUTO-FIX: Removed spurious edit_row(target='{plan[j].get('target')}') "
                 "right after save_form(mode='clone') — already on the newly-cloned entity's "
-                "own edit page, re-searching for the original row would edit/crash on the wrong one"
+                "own edit page, re-searching a table that isn't there would edit the wrong "
+                "row or crash outright"
             )
             # Copy the skipped waits, then skip the edit_row
             for k in range(i, j):
@@ -736,6 +731,52 @@ def _inject_missing_clone_row(plan, user_command=""):
     return plan
 
 
+
+
+def _fix_edit_row_with_new_id_should_be_clone_row(plan):
+    """
+    Convert edit_row(target=X) -> clone_row(target=X) whenever the immediately
+    following update_form contains a "New ... ID" key.
+
+    A genuine "edit a random existing row" flow never has a "New X ID" field
+    as its first fill — that phrasing only ever appears in a CLONE modal. The
+    AI sometimes emits edit_row instead of clone_row, and `_inject_missing_clone_row`
+    only catches the FIRST such occurrence in the whole command (single regex
+    `search()` + "a clone_row already exists somewhere -> skip entirely" guard)
+    — commands with TWO separate clone flows (e.g. clone a Boss, then later
+    clone an Event that references it) leave the SECOND one broken: edit_row
+    opens an EXISTING random row instead of cloning a new one, then the
+    "New Event ID" field-search lands on that row's own (locked/disabled) ID
+    input and hangs for the full timeout.
+
+    Runs unconditionally on every edit_row in the plan, independent of how
+    many clone_row steps already exist elsewhere.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    _NEW_ID_KEY_RE = _re.compile(r"\bnew\b.*\bid\b", _re.IGNORECASE)
+
+    for i, step in enumerate(plan):
+        if step.get("action") != "edit_row":
+            continue
+        if i + 1 >= len(plan):
+            continue
+        nxt = plan[i + 1]
+        if nxt.get("action") != "update_form":
+            continue
+        data = nxt.get("data") or {}
+        if any(_NEW_ID_KEY_RE.search(str(k)) for k in data.keys()):
+            old_target = step.get("target")
+            step["action"] = "clone_row"
+            print(
+                f"   🔧 AUTO-FIX: Converted edit_row('{old_target}') → clone_row('{old_target}') "
+                "— followed by a 'New ... ID' field, which only exists in a clone modal"
+            )
+
+    return plan
 
 
 def _extract_clone_modal_fields(user_command):

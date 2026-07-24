@@ -379,7 +379,9 @@ class DropdownHandlerMixin:
                         visible_count = page.evaluate("""() => {
                             const opts = document.querySelectorAll('.select2-results__option');
                             let c = 0;
-                            for (const o of opts) { if (o.offsetParent !== null) c++; }
+                            for (const o of opts) {
+                                if (o.offsetParent !== null && o.getAttribute('aria-disabled') !== 'true') c++;
+                            }
                             return c;
                         }""")
 
@@ -424,7 +426,9 @@ class DropdownHandlerMixin:
                         visible_count = page.evaluate("""() => {
                             const opts = document.querySelectorAll('.select2-results__option');
                             let c = 0;
-                            for (const o of opts) { if (o.offsetParent !== null) c++; }
+                            for (const o of opts) {
+                                if (o.offsetParent !== null && o.getAttribute('aria-disabled') !== 'true') c++;
+                            }
                             return c;
                         }""")
                         if visible_count > 0:
@@ -552,7 +556,9 @@ class DropdownHandlerMixin:
                         const options = document.querySelectorAll('.select2-results__option');
                         const valueLower = value.toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ');
                         const visible = [];
-                        for (const o of options) { if (o.offsetParent !== null) visible.push(o); }
+                        for (const o of options) {
+                            if (o.offsetParent !== null && o.getAttribute('aria-disabled') !== 'true') visible.push(o);
+                        }
                         const total = visible.length;
 
                         // In a Clone modal, clicking a result option dispatches a body-level

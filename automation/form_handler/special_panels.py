@@ -1965,3 +1965,207 @@ class SpecialPanelsMixin:
                 )
         except Exception:
             pass
+
+    def _handle_restriction_slot_edit(self, page, data):
+        """Titan Takeover Boss "Restriction Slot N" special-case.
+
+        The Battle Setup tab shows a read-only preview input + "Edit" button per
+        slot (fieldset legend = "Restriction Slot N"). Edit opens a modal with a
+        nested Group/AND/OR condition-rule builder (Vue component
+        `.restriction-rule-builder`), NOT a single plain input — the generic
+        `_handle_inline_edit_field` can't handle it (it only fills one input).
+
+        Trigger: any data key matching "Restriction Slot <N>" (case-insensitive).
+        Value format: "Group <M>: [<item1>, <item2>, ...]" (M defaults to 1 if
+        omitted). Each item is added as a new "AND condition" row inside Group M
+        (first item reuses the modal's existing empty row), then the value is
+        typed into that row's Vue Multiselect ("Search requirement..." combobox)
+        the same way `_fill_vue_multiselect` fills any other Vue multiselect.
+        Pops handled keys from `data` so the generic fill loop skips them.
+        """
+        if not isinstance(data, dict):
+            return
+
+        slot_keys = [
+            k for k in list(data.keys())
+            if re.match(r"^\s*restriction\s*slot\s*\d+\s*$", str(k), re.IGNORECASE)
+        ]
+        if not slot_keys:
+            return
+
+        for slot_key in slot_keys:
+            spec = data.pop(slot_key, None)
+            try:
+                self._fill_restriction_slot(page, str(slot_key).strip(), spec)
+            except Exception as e:
+                print(f"         ⚠️ [Restriction Slot] Failed to fill '{slot_key}': {e}")
+
+    def _parse_restriction_slot_spec(self, spec):
+        """
+        Parse a "Restriction Slot" value into (group_number, [condition_items]).
+
+        Accepts:
+          'Group 1: ["Ascended_1","group:Color_Black"]'  -> (1, ["Ascended_1", "group:Color_Black"])
+          '["Ascended_1","group:Color_Black"]'           -> (1, [...])   (group defaults to 1)
+          'Ascended_1'                                    -> (1, ["Ascended_1"])  (single bare value)
+        """
+        import json as _json
+
+        s = str(spec).strip()
+        m = re.match(r"(?:group\s*(\d+)\s*:\s*)?(\[.*\])\s*$", s, re.IGNORECASE | re.DOTALL)
+        if not m:
+            return 1, ([s] if s else [])
+
+        group_num = int(m.group(1)) if m.group(1) else 1
+        bracket_str = m.group(2)
+        try:
+            items = _json.loads(bracket_str)
+        except Exception:
+            # Fallback: naive quoted-string extraction if JSON parsing fails
+            # (e.g. AI emitted single quotes or an unterminated bracket).
+            items = re.findall(r'"([^"]*)"|\'([^\']*)\'', bracket_str)
+            items = [a or b for a, b in items]
+
+        return group_num, [str(it).strip() for it in items if str(it).strip()]
+
+    def _fill_restriction_slot(self, page, slot_label, spec):
+        """
+        Open the "Edit {slot_label}" modal and set Group N's conditions to the
+        parsed item list. See `_handle_restriction_slot_edit` for context.
+        """
+        group_num, items = self._parse_restriction_slot_spec(spec)
+        if not items:
+            print(f"         ⚠️ [Restriction Slot] '{slot_label}': nothing to fill (empty spec: {spec!r})")
+            return
+
+        print(f"         🧩 [Restriction Slot] '{slot_label}' -> Group {group_num}: {items}")
+
+        # 1) Find the fieldset via its <legend> (exact match so "Slot 1" != "Slot 10").
+        # The Battle Setup tab-pane keeps its DOM mounted but hidden when another
+        # tab is active (BootstrapVue tabs) — a save/reload can reset the active
+        # tab back to the default one, so a prior "click tab Battle Setup" step
+        # earlier in the plan is not a reliable guarantee it's still active here.
+        # Self-heal: if the legend isn't visible, click the tab ourselves first.
+        def _find_visible_legend():
+            loc = page.locator("legend").filter(
+                has_text=re.compile(rf"^\s*{re.escape(slot_label)}\s*$", re.IGNORECASE)
+            ).first
+            if loc.count() == 0:
+                return None
+            try:
+                return loc if loc.is_visible() else None
+            except Exception:
+                return None
+
+        legend = _find_visible_legend()
+        if legend is None:
+            battle_setup_tab = page.locator("text=Battle Setup").first
+            if battle_setup_tab.count() > 0:
+                try:
+                    battle_setup_tab.click(force=True)
+                    time.sleep(1.0)
+                except Exception:
+                    pass
+            legend = _find_visible_legend()
+
+        if legend is None:
+            print(
+                f"         ⚠️ [Restriction Slot] legend for '{slot_label}' not visible "
+                "(Battle Setup tab not active) — giving up"
+            )
+            return
+
+        fieldset = legend.locator("xpath=ancestor::fieldset[1]").first
+        edit_btn = fieldset.locator("button:has-text('Edit')").first
+        if edit_btn.count() == 0:
+            print(f"         ⚠️ [Restriction Slot] Edit button not found in '{slot_label}' fieldset")
+            return
+
+        try:
+            edit_btn.scroll_into_view_if_needed(timeout=5000)
+        except Exception as e:
+            print(f"         ⚠️ [Restriction Slot] scroll_into_view failed for '{slot_label}': {e}")
+            return
+        edit_btn.click(force=True)
+        time.sleep(0.6)
+
+        # 2) Wait for the "Edit Restriction Slot N" modal
+        modal = page.locator(".modal.show, .modal.in").filter(
+            has_text=re.compile(r"Edit\s+Restriction\s+Slot", re.IGNORECASE)
+        ).last
+        try:
+            modal.wait_for(state="visible", timeout=5000)
+        except Exception:
+            print(f"         ⚠️ [Restriction Slot] Modal didn't open for '{slot_label}'")
+            return
+
+        # 3) Locate (or fall back to) the target Group N card
+        group_cards = modal.locator(".group-card").all()
+        target_group = None
+        for gc in group_cards:
+            header = gc.locator(".group-header small").first
+            if header.count() > 0:
+                try:
+                    if header.inner_text().strip().lower() == f"group {group_num}".lower():
+                        target_group = gc
+                        break
+                except Exception:
+                    pass
+        if target_group is None:
+            if not group_cards:
+                print(f"         ⚠️ [Restriction Slot] No group-card found in modal for '{slot_label}'")
+                self._safe_press_escape(page)
+                return
+            print(f"         ⚠️ [Restriction Slot] Group {group_num} not found, falling back to first group")
+            target_group = group_cards[0]
+
+        def _condition_rows():
+            return target_group.locator(".condition-row").all()
+
+        # 4) Fill each item into a condition-row, adding new AND-condition rows as needed.
+        # The modal always ships with ONE empty row already present, so item 0 reuses it.
+        for idx, item in enumerate(items):
+            rows = _condition_rows()
+            if idx >= len(rows):
+                add_btn = target_group.locator(
+                    "button.add-condition-btn:has-text('Add AND condition')"
+                ).first
+                if add_btn.count() == 0:
+                    print(f"         ⚠️ [Restriction Slot] 'Add AND condition' button not found (item {idx}: '{item}')")
+                    break
+                add_btn.click(force=True)
+                time.sleep(0.5)
+                rows = _condition_rows()
+                if idx >= len(rows):
+                    print(f"         ⚠️ [Restriction Slot] Row for item {idx} ('{item}') didn't appear after Add")
+                    continue
+
+            row = rows[idx]
+            combobox = row.locator(".multiselect.condition-select").first
+            if combobox.count() == 0:
+                print(f"         ⚠️ [Restriction Slot] No condition-select in row {idx}")
+                continue
+
+            opened = self._open_vue_multiselect(page, combobox, timeout_ms=3000)
+            if not opened:
+                print(f"         ⚠️ [Restriction Slot] Could not open condition-select for item {idx} ('{item}')")
+
+            filled = self._fill_vue_multiselect(page, combobox, item, listbox_scope=combobox)
+            if not filled:
+                print(f"         ⚠️ [Restriction Slot] Could not select '{item}' for row {idx}")
+
+            time.sleep(0.3)
+
+        # 5) Save the modal (scoped to modal-footer to avoid the outer page's Save)
+        save_btn = modal.locator(".modal-footer button:has-text('Save')").first
+        if save_btn.count() > 0:
+            save_btn.click(force=True)
+            print(f"         💾 [Restriction Slot] Saved '{slot_label}'")
+            time.sleep(1.0)
+        else:
+            print(f"         ⚠️ [Restriction Slot] Save button not found in modal footer for '{slot_label}'")
+
+        try:
+            page.wait_for_load_state("networkidle", timeout=3000)
+        except Exception:
+            pass

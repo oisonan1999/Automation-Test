@@ -75,6 +75,7 @@ DEPLOYMENT_KEYWORDS = [
     "social friends",
     "social friend",
     "token",
+    "titan takeover",
     # Additional navigation contexts
     "data configs",
     "data config",
@@ -214,6 +215,10 @@ NAVIGATION_PATH_MAP = {
     "rarity release gate": ["Settings", "Rarity Release Gate"],
     "playgami reward config": ["Settings", "Playgami Reward Config"],
     "localization": ["Data Configs", "Localizations", "Localizations"],
+    "titan takeover event": ["Live Events", "Titan Takeover", "Event"],
+    "titan takeover boss": ["Live Events", "Titan Takeover", "Boss"],
+    "tactics event config": ["Live Events", "Tactics", "Event Config"],
+    "tactics boss config": ["Live Events", "Tactics", "Boss Config"],
 }
 
 
@@ -300,6 +305,12 @@ ACTION_NAME_MAP = {
     "check_tab_fields": "check_fields",
     "check_tabs": "check_fields",
     "kiem_tra_fields": "check_fields",
+    # Delete-all-tasks variations (RBE Tasks tab)
+    "delete_all": "delete_all_tasks",
+    "remove_all_tasks": "delete_all_tasks",
+    "clear_all_tasks": "delete_all_tasks",
+    "delete_all_task": "delete_all_tasks",
+    "xoa_tat_ca_task": "delete_all_tasks",
 }
 
 VALID_ACTIONS = {
@@ -321,6 +332,7 @@ VALID_ACTIONS = {
     "wait_for_page_load",
     "process_deployment",
     "reorder",
+    "delete_all_tasks",
 }
 
 # Valid deployment options (checkboxes on The Brick home screen).

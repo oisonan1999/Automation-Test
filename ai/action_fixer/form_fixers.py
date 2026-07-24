@@ -1,5 +1,7 @@
 # ai/action_fixer/form_fixers.py - split from action_fixer.py
 # Form step merges: update+save, PVE CSS update
+import re
+
 from ._constants import (
     DEPLOYMENT_KEYWORDS,
     PAGE_TAB_NAMES,
@@ -453,6 +455,172 @@ def _inject_fcv3_pve_tab_click(plan):
     return result
 
 
+def _fix_restriction_slot_misclassified_as_edit_row(plan):
+    """
+    Fix "Edit Restriction Slot N, sửa Group M: [...]" misread as
+    edit_row(target="Restriction Slot N") -> update_form({"Group M": "..."})
+    instead of a single update_form({"Restriction Slot N": "Group M: [...]"})
+    — the shape `_handle_restriction_slot_edit` (automation special-case)
+    expects.
+
+    The AI (esp. fast-mode Qwen) treats "Edit Restriction Slot N" as a
+    click/edit_row action and "Group M" as an unrelated field, because there's
+    no table row named "Restriction Slot N" — it's a fieldset+modal on the
+    CURRENT page. Left as-is, edit_row crashes ("row not found") since there's
+    no table on a single-entity edit form.
+    """
+    import re as _re
+    import json as _json
+
+    if not plan:
+        return plan
+
+    _SLOT_RE = _re.compile(r"^\s*restriction\s*slot\s*(\d+)\s*$", _re.IGNORECASE)
+    _GROUP_KEY_RE = _re.compile(r"^\s*group\s*(\d+)\s*$", _re.IGNORECASE)
+
+    result = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+
+        is_slot_edit_row = (
+            step.get("action") in ("edit_row", "click")
+            and bool(_SLOT_RE.match(str(step.get("target", ""))))
+        )
+
+        if is_slot_edit_row and i + 1 < len(plan) and plan[i + 1].get("action") == "update_form":
+            slot_num = _SLOT_RE.match(str(step.get("target", ""))).group(1)
+            slot_key = f"Restriction Slot {slot_num}"
+            nxt_data = plan[i + 1].get("data") or {}
+
+            group_key = None
+            group_val = None
+            for k, v in nxt_data.items():
+                m = _GROUP_KEY_RE.match(str(k))
+                if m:
+                    group_key = m.group(1)
+                    group_val = v
+                    break
+
+            if group_key is not None:
+                # Rebuild the item list whether the value is still bracketed
+                # JSON or was already flattened to a comma string by the
+                # earlier "list string" normalizer (STEP 2, runs first).
+                raw = str(group_val).strip()
+                items = None
+                if raw.startswith("[") and raw.endswith("]"):
+                    try:
+                        items = _json.loads(raw)
+                    except Exception:
+                        items = None
+                if items is None:
+                    items = [p.strip() for p in raw.split(",") if p.strip()]
+
+                spec = f"Group {group_key}: {_json.dumps(items, ensure_ascii=False)}"
+                merged_data = dict(nxt_data)
+                for k in list(merged_data.keys()):
+                    if _GROUP_KEY_RE.match(str(k)):
+                        merged_data.pop(k)
+                merged_data[slot_key] = spec
+
+                print(
+                    f"   🔧 AUTO-FIX: '{step.get('action')}(\"{step.get('target')}\")' + "
+                    f"update_form({{'Group {group_key}': ...}}) → update_form({{'{slot_key}': '{spec}'}})"
+                )
+                result.append({"action": "update_form", "data": merged_data})
+                i += 2
+                continue
+
+        result.append(step)
+        i += 1
+
+    return result
+
+
+def _resolve_same_as_field_reference(plan):
+    """
+    Resolve "Giống như <Field>" / "same as <Field>" placeholder VALUES in
+    update_form data to the literal value <Field> already has elsewhere in the
+    plan (e.g. "Display Name: Giống như Boss ID" should become the actual
+    auto-generated ID typed into the clone modal's "New Boss ID" field).
+
+    Without this, the AI has to re-derive the literal string purely from prose
+    context with zero prompt guidance and zero safety net — this makes it
+    deterministic instead.
+
+    Search order: scan backward from the current step (inclusive of the
+    current step's OTHER keys, in case the AI didn't split clone-modal fields
+    into their own update_form), matching key names loosely (a "New " prefix
+    is stripped so "New Boss ID" matches a reference to "Boss ID"). The
+    nearest earlier match wins. Only ever rewrites values matching the
+    trigger phrase; everything else is untouched.
+    """
+    import re as _re
+
+    _SAME_AS_RE = _re.compile(
+        r"^\s*(?:gi[ốo]ng\s+nh[ưu]|same\s+as)\s+(.+?)\s*$",
+        _re.IGNORECASE,
+    )
+
+    def _normalize_key(k):
+        k = str(k).strip().lower()
+        if k.startswith("new "):
+            k = k[4:].strip()
+        return k
+
+    for i, step in enumerate(plan):
+        if step.get("action") != "update_form":
+            continue
+        data = step.get("data")
+        if not isinstance(data, dict):
+            continue
+
+        for key, value in list(data.items()):
+            if not isinstance(value, str):
+                continue
+            m = _SAME_AS_RE.match(value)
+            if not m:
+                continue
+
+            ref_field = _normalize_key(m.group(1))
+            resolved = None
+
+            for j in range(i, -1, -1):
+                prev = plan[j]
+                if prev.get("action") != "update_form":
+                    continue
+                prev_data = prev.get("data")
+                if not isinstance(prev_data, dict):
+                    continue
+                for pk, pv in prev_data.items():
+                    if j == i and pk == key:
+                        continue  # never resolve from itself
+                    if (
+                        _normalize_key(pk) == ref_field
+                        and isinstance(pv, str)
+                        and pv.strip()
+                        and not _SAME_AS_RE.match(pv)
+                    ):
+                        resolved = pv
+                        break
+                if resolved:
+                    break
+
+            if resolved:
+                print(
+                    f"   🔧 SAME-AS: '{key}': '{value}' → '{resolved}' "
+                    f"(resolved from earlier field '{ref_field}')"
+                )
+                data[key] = resolved
+            else:
+                print(
+                    f"   ⚠️ SAME-AS: could not resolve '{value}' for '{key}' — "
+                    f"no earlier field matching '{ref_field}' found"
+                )
+
+    return plan
+
+
 def _merge_pve_css_update_steps(plan):
     """
     Merge ALL consecutive update_form steps where the first contains 'Contest Superstar'
@@ -537,5 +705,50 @@ def _merge_pve_css_update_steps(plan):
             i += 1
 
     return merged
+
+
+_DELETE_ALL_TASKS_TARGET_RE = re.compile(
+    r"(xo[aá]\s*(t[aấ]t\s*c[aả])?\s*(c[aá]c)?\s*task|"
+    r"delete\s*all\s*tasks?|remove\s*all\s*tasks?|clear\s*all\s*tasks?)",
+    re.IGNORECASE,
+)
+
+
+def _fix_delete_all_tasks_misclassified_as_click(plan):
+    """
+    Fix "Xóa tất cả các task" / "Delete all tasks" misread as a literal
+    click(target="Delete All Tasks") — there is no such button on the RBE
+    Tasks tab, only a per-task trash icon, so the click fails with "Cannot
+    find clickable element" and the whole run stops.
+
+    The AI (esp. fast-mode) treats an instruction phrase as if it named a
+    clickable UI element, the same class of mistake as filter/checkbox
+    misclassification elsewhere in this module. Rewrite any click/select
+    step whose target matches a delete-all-tasks phrase into the dedicated
+    {"action": "delete_all_tasks"} step, which the automation layer
+    (RbeTaskPanelMixin.delete_all_tasks) handles by repeatedly clicking each
+    task's own trash icon until only Task 1 remains.
+    """
+    if not plan:
+        return plan
+
+    result = []
+    changed = False
+    for step in plan:
+        action = step.get("action")
+        target = str(step.get("target", "") or "")
+        if action in ("click", "select") and _DELETE_ALL_TASKS_TARGET_RE.search(target):
+            print(
+                f"   🔧 FIX: '{action}(target=\"{target}\")' misclassified as click "
+                f"→ delete_all_tasks"
+            )
+            result.append({"action": "delete_all_tasks"})
+            changed = True
+        else:
+            result.append(step)
+
+    if changed:
+        return result
+    return plan
 
 

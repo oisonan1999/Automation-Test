@@ -48,6 +48,7 @@ from .clone_fixers import (
     _inject_missing_clone_row,
     _extract_clone_modal_fields,
     _inject_clone_save,
+    _fix_edit_row_with_new_id_should_be_clone_row,
 )
 from .form_fixers import (
     _merge_consecutive_update_save,
@@ -58,6 +59,9 @@ from .form_fixers import (
     _normalize_new_event_final_save,
     _fix_offer_filter_field,
     _remove_spurious_edit_row_after_new_event,
+    _resolve_same_as_field_reference,
+    _fix_restriction_slot_misclassified_as_edit_row,
+    _fix_delete_all_tasks_misclassified_as_click,
 )
 
 
@@ -684,6 +688,24 @@ def fix_action_plan(plan, user_command=""):
     fixed_plan = _fix_specific_id_choose_misclassified_as_edit_row(fixed_plan, user_command)
 
     # ============================================================
+    # STEP 3d.8b: Fix "Edit Restriction Slot N, sửa Group M: [...]" misread as
+    # edit_row(target="Restriction Slot N") -> update_form({"Group M": ...})
+    # instead of one update_form({"Restriction Slot N": "Group M: [...]"}).
+    # Must run before the checkbox/download injectors below (unrelated action
+    # types) but after basic per-step normalization so list-string flattening
+    # has already happened and this fixer can rebuild it.
+    # ============================================================
+    fixed_plan = _fix_restriction_slot_misclassified_as_edit_row(fixed_plan)
+
+    # ============================================================
+    # STEP 3d.8c: Fix "Xóa tất cả các task" / "Delete all tasks" misread as a
+    # literal click(target="Delete All Tasks") — no such button exists on the
+    # RBE Tasks tab (only a per-task trash icon). Rewrite to the dedicated
+    # delete_all_tasks action.
+    # ============================================================
+    fixed_plan = _fix_delete_all_tasks_misclassified_as_click(fixed_plan)
+
+    # ============================================================
     # STEP 3d.9: Fix "Chọn N ID bất kỳ" where checkbox WAS correctly
     # generated but the count got lost (bare "RANDOM"/wrong "random_M")
     # and/or the trailing download step was dropped entirely. Unlike 3d.7/
@@ -762,6 +784,16 @@ def fix_action_plan(plan, user_command=""):
     # inject it deterministically based on the original command.
     # ============================================================
     merged_plan = _inject_missing_clone_row(merged_plan, user_command)
+
+    # ============================================================
+    # STEP 6b: Catch-all — convert ANY remaining edit_row immediately
+    # followed by a "New ... ID" update_form into clone_row. Unlike STEP 6
+    # above (single regex match + "skip if any clone_row exists" guard), this
+    # runs on every edit_row unconditionally, so multi-clone commands (e.g.
+    # clone a Boss, then later clone an Event) get their SECOND+ clone fixed
+    # too, not just the first.
+    # ============================================================
+    merged_plan = _fix_edit_row_with_new_id_should_be_clone_row(merged_plan)
 
     # ============================================================
     # STEP 7: AUTO-INJECT save_form(mode=clone) after clone_row
@@ -909,6 +941,14 @@ def fix_action_plan(plan, user_command=""):
     merged_plan = _remove_spurious_edit_row_after_clone_save(merged_plan)
 
     # ============================================================
+    # STEP 9c: Resolve "Giống như <Field>" / "same as <Field>" placeholder
+    # values to the literal value <Field> already has elsewhere in the plan.
+    # Runs after all clone-field renames/splits above so it sees final key
+    # names (e.g. "New Boss ID" after clone-modal field extraction).
+    # ============================================================
+    merged_plan = _resolve_same_as_field_reference(merged_plan)
+
+    # ============================================================
     # STEP 10: INJECT missing final process_deployment
     # Every test case ends with "Bấm vào logo The Brick". If the AI dropped it
     # and the plan doesn't already end with process_deployment, append
@@ -970,4 +1010,8 @@ __all__ = [
     "_inject_fcv3_pve_tab_click",
     "_remove_spurious_edit_row_after_new_event",
     "_normalize_new_event_final_save",
+    "_resolve_same_as_field_reference",
+    "_fix_restriction_slot_misclassified_as_edit_row",
+    "_fix_edit_row_with_new_id_should_be_clone_row",
+    "_fix_delete_all_tasks_misclassified_as_click",
 ]

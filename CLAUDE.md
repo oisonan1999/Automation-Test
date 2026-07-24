@@ -290,6 +290,7 @@ Classes: `RBESmartTester` (line 2121), `RBEFuzzGenerator` (line 2248), `GenericC
 - Pattern in CSV: `hãy tự generate một ID duy nhất bắt đầu bằng <prefix>`
 - `_inject_generated_ids(user_command)` in brain.py preprocesses this → `<prefix>_<timestamp>` before AI sees it
 - Called at start of `parse_command_to_json`
+- **Regex is structural, not literal**: `hãy tự generate\s+\S+\s+ID\s+duy\s+\S+\s+bắt đầu bằng\s+(\S+)` — the count word ("một" vs numeral "1") and the "nhất"/"nhát" (typo) adjective both vary across CSV rows; matching the exact literal phrase silently skips injection and the AI copies the raw Vietnamese instruction into the plan verbatim instead of a real ID (2026-07-20, Offer CSV-import cases)
 
 ### `_smart_update_form` does NOT return a count
 - Signature: `def _smart_update_form(self, page, data):`
@@ -298,6 +299,16 @@ Classes: `RBESmartTester` (line 2121), `RBEFuzzGenerator` (line 2248), `GenericC
 ### Smoke Test ID Memory
 - `smoke_last_created_id_by_feature[feature]` in app.py tracks last created ID per feature
 - Prevents "random edit" drift when CSV test cases reference the previously created row
+
+### Filter Box `f.contains is not a function` (form_core.py `_fill_page_filter_box`)
+- `inp.closest('form')` can return a `<form>` whose child control is `name="contains"`/`id="contains"` — that named control shadows `Node.prototype.contains` as an own property on the form element, so `f.contains(b)` throws `TypeError: f.contains is not a function`
+- Fixed by calling `Node.prototype.contains.call(node, target)` instead of `node.contains(target)` — classic DOM named-item-shadowing gotcha, same class of bug as `document.forms.namedItem` shadowing global functions
+- The eval throw is caught (`⚠️ Filter box fill error`) and the per-field loop still finds the input by direct ID/name match, so this was a benign-looking warning, not a hard failure — but it silently skips the intended structural-fill path
+
+### Select2 Async "Searching…" Placeholder Miscounted As Loaded Option (dropdown_handler.py)
+- Select2 v4 renders a loading placeholder (`aria-disabled="true"`) with the SAME `.select2-results__option` class as real results while an AJAX search is in flight
+- The wait-loop and Strategy-A exact/partial-match option gathering both counted/matched against `.select2-results__option` with only an `offsetParent !== null` check — the placeholder passes that check, so `visible_count` reports "1 option loaded" while it's actually the "Searching…" placeholder, the exact-match fails, and the flow falls through to the slower search-box/Enter fallback even when the real option would have appeared moments later
+- Fixed by also excluding `aria-disabled="true"` in both the count and the match-candidate gather
 
 ### Upload Confirm Buttons Must Be Dialog-Scoped
 - In `smart_tester/upload_handler.py` `_upload_fuzz_fast`, the post-upload "confirm" loop MUST scope selectors to `.modal.show/.modal.in/.swal2-popup` — a bare `button:has-text('Import')` also matches the PAGE-LEVEL Import CSV trigger and re-clicking it reopens the OS file chooser → native dialog BLOCKS the run (gacha pool bug)

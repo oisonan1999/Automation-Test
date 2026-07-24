@@ -8,6 +8,7 @@ from .field_filler import FieldFillerMixin
 from .dropdown_handler import DropdownHandlerMixin
 from .datetime_handler import DateTimeHandlerMixin
 from .special_panels import SpecialPanelsMixin
+from .rbe_task_panel import RbeTaskPanelMixin
 from .form_save import FormSaveMixin
 from .tab_scanner import TabScannerMixin
 
@@ -19,6 +20,7 @@ class FormHandlerMixin(
     DropdownHandlerMixin,
     DateTimeHandlerMixin,
     SpecialPanelsMixin,
+    RbeTaskPanelMixin,
     FormSaveMixin,
     TabScannerMixin,
 ):

@@ -427,10 +427,15 @@ class BrickAutomation(
                     "wait_for_page_load",
                     "process_deployment",
                     "reorder",
+                    "delete_all_tasks",
                 }
 
                 # Safety-net mapping (in case ai_brain.py fix_action_plan missed something)
                 SAFETY_MAP = {
+                    "delete_all": "delete_all_tasks",
+                    "remove_all_tasks": "delete_all_tasks",
+                    "clear_all_tasks": "delete_all_tasks",
+                    "delete_all_task": "delete_all_tasks",
                     "select_random_ids": "checkbox",
                     "select_ids": "checkbox",
                     "check_checkbox": "checkbox",
@@ -1010,6 +1015,20 @@ class BrickAutomation(
                                         "details": str(e),
                                     }
                                 )
+
+                    elif act == "delete_all_tasks":
+                        try:
+                            delete_logs = self.delete_all_tasks(page)
+                            report_logs.extend(delete_logs)
+                        except Exception as e:
+                            print(f"   ❌ Delete All Tasks Error: {e}")
+                            report_logs.append(
+                                {
+                                    "step": "Delete All Tasks",
+                                    "status": "FAIL",
+                                    "details": str(e),
+                                }
+                            )
 
                     elif act == "process_deployment":
                         options = step.get("options", [])

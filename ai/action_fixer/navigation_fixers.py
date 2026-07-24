@@ -371,8 +371,15 @@ def _remove_redundant_click_after_navigate(plan):
       navigate(path=["Live Events", "PVE", "Classic PVE"])
       click(target="PVE")               ← also removed: already passed through here
 
+    It can also duplicate the WHOLE compound nav-map key (before
+    `_resolve_navigation_paths` expanded it into segments), e.g.
+      navigate(path=["Live Events", "Titan Takeover", "Boss"])
+      click(target="titan takeover boss")  ← also removed: same destination,
+                                              just unexpanded phrasing
+
     Only fires when the click target exactly matches one of the nav path's
-    segments. Clicks targeting other labels (e.g. "Create New") are untouched.
+    segments, OR is a substring of the segments joined together. Clicks
+    targeting other labels (e.g. "Create New") are untouched.
     """
     if not plan or not isinstance(plan, list):
         return plan
@@ -385,12 +392,18 @@ def _remove_redundant_click_after_navigate(plan):
                 nav_path = prev.get("path", [])
                 if isinstance(nav_path, list):
                     nav_segments = {str(seg).strip().lower() for seg in nav_path}
+                    nav_joined = " ".join(str(seg).strip().lower() for seg in nav_path)
                 elif isinstance(nav_path, str):
                     nav_segments = {nav_path.strip().lower()}
+                    nav_joined = nav_path.strip().lower()
                 else:
                     nav_segments = set()
+                    nav_joined = ""
                 click_target = str(step.get("target", "")).strip().lower()
-                if click_target and click_target in nav_segments:
+                if click_target and (
+                    click_target in nav_segments
+                    or (nav_joined and click_target in nav_joined)
+                ):
                     print(
                         f"   🔧 REMOVE REDUNDANT CLICK: click('{step.get('target')}') "
                         f"duplicates a segment navigate already visited — removed"

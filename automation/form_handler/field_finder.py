@@ -51,7 +51,7 @@ class FieldFinderMixin:
         # ─── Auto-scope to modal if one is open ────────────────────────────────────────
         # Shadow ‘page’ → modal so mọi page.locator() bên dưới đều scoped đúng
         _in_modal = False
-        for _ms in [".modal.show", ".modal.in", ".modal[aria-hidden=’false’]"]:
+        for _ms in [".modal.show", ".modal.in", ".modal[aria-hidden='false']"]:
             try:
                 if page.locator(_ms).count() > 0:
                     page = page.locator(_ms).last

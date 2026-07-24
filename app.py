@@ -155,19 +155,9 @@ if "smoke_waiting_for_deploy" not in st.session_state:
 if "smoke_deploy_info" not in st.session_state:
     st.session_state.smoke_deploy_info = {}
 
-# --- AI RUN GOLDEN STATE ---
-if "airun_use_golden" not in st.session_state:
-    st.session_state.airun_use_golden = True
+# --- AI RUN STATE ---
 if "airun_use_claude_careful" not in st.session_state:
     st.session_state.airun_use_claude_careful = False
-if "airun_raw_input" not in st.session_state:
-    st.session_state.airun_raw_input = None
-if "airun_generated_unique_id" not in st.session_state:
-    st.session_state.airun_generated_unique_id = None
-if "airun_last_id" not in st.session_state:
-    st.session_state.airun_last_id = None
-if "airun_golden_used" not in st.session_state:
-    st.session_state.airun_golden_used = False
 
 automation = st.session_state.automation
 
@@ -671,20 +661,8 @@ with col1:
 
     st.divider()
 
-    # === AI Run Golden Plan controls ===
+    # === AI Run controls ===
     if run_mode == "AI Run (theo lệnh)":
-        st.checkbox(
-            "♻️ Dùng Golden Plan cache (bỏ qua AI cho lệnh đã PASS)",
-            key="airun_use_golden",
-            help=(
-                "Lệnh nào chạy PASS hoàn toàn sẽ được lưu lại plan. Lần sau gõ đúng "
-                "lệnh đó sẽ chạy thẳng plan đã lưu (chỉ thay ID động), không cần AI. "
-                "Nếu replay fail thì tự huỷ cache, lần sau AI sinh lại."
-            ),
-        )
-        _airun_golden_n = plan_cache.golden_count()
-        st.caption(f"💾 {_airun_golden_n} golden plan đã lưu (chung với Smoke)")
-
         st.checkbox(
             "🧪 Careful Mode (Claude Sonnet 5 thay vì Qwen local)",
             key="airun_use_claude_careful",
@@ -980,63 +958,43 @@ if st.session_state.run_mode == "AI Run (theo lệnh)" and run_btn and user_inpu
         # Placeholder cho real-time logs
         log_placeholder = st.empty()
 
-        # --- Golden Plan Cache: lookup trước khi gọi AI ---
-        raw_input = user_input  # giữ nguyên để làm golden key (ổn định qua các lần chạy)
+        raw_input = user_input
         _unique_id_airun = _pregenerate_unique_id(raw_input)
         _processed_input, _last_id_airun = _substitute_last_clone_id(
             raw_input,
             st.session_state.smoke_last_created_id_by_feature,
         )
 
-        # Lưu vào session state để Phase 2 (execute) dùng sau rerun
-        st.session_state.airun_raw_input = raw_input
-        st.session_state.airun_generated_unique_id = _unique_id_airun
-        st.session_state.airun_last_id = _last_id_airun
-
-        _airun_golden_used = False
-        action_plan = None
-        if st.session_state.get("airun_use_golden", True):
-            action_plan = plan_cache.get_golden_plan(
-                "manual", raw_input, _unique_id_airun, _last_id_airun
+        # Nếu đã pre-generate unique ID, thêm constraint vào command cho AI
+        if _unique_id_airun:
+            import re as _re_uid
+            _pfix_m = _re_uid.search(r"bắt\s+đầu\s+bằng\s+(\S+)", _processed_input, _re_uid.IGNORECASE)
+            _pfix = _re_uid.sub(r"[.,;:]*$", "", _pfix_m.group(1)).strip() if _pfix_m else "hieunm_test"
+            _processed_input = (
+                f"{_processed_input}\n\nYêu cầu: Với các bước CREATE hoặc CLONE, hãy tạo/điền ID duy nhất "
+                f"bắt đầu bằng '{_pfix}' và sử dụng đúng giá trị sau: {_unique_id_airun}. "
+                f"Nếu có chỗ yêu cầu nhập '... ID ...' thì hãy thay bằng {_unique_id_airun}."
             )
-            if action_plan is not None:
-                _airun_golden_used = True
-                print(f"   ⚡ AI Run golden hit ({len(action_plan)} steps) — bỏ qua AI")
 
-        if not _airun_golden_used:
-            # Nếu đã pre-generate unique ID, thêm constraint vào command cho AI
-            if _unique_id_airun:
-                import re as _re_uid
-                _pfix_m = _re_uid.search(r"bắt\s+đầu\s+bằng\s+(\S+)", _processed_input, _re_uid.IGNORECASE)
-                _pfix = _re_uid.sub(r"[.,;:]*$", "", _pfix_m.group(1)).strip() if _pfix_m else "hieunm_test"
-                _processed_input = (
-                    f"{_processed_input}\n\nYêu cầu: Với các bước CREATE hoặc CLONE, hãy tạo/điền ID duy nhất "
-                    f"bắt đầu bằng '{_pfix}' và sử dụng đúng giá trị sau: {_unique_id_airun}. "
-                    f"Nếu có chỗ yêu cầu nhập '... ID ...' thì hãy thay bằng {_unique_id_airun}."
-                )
-
-            # Gọi AI với streaming log
-            with StreamingLogCapture(log_placeholder) as ai_log:
-                action_plan = parse_command_to_json(
-                    _processed_input,
-                    use_fast_mode=not st.session_state.get("airun_use_claude_careful", False),
-                    context_plan=st.session_state.loaded_scenario_plan,
-                    base_command=st.session_state.loaded_scenario_command,
-                    forced_unique_id=_unique_id_airun,
-                )
+        # Gọi AI với streaming log
+        with StreamingLogCapture(log_placeholder) as ai_log:
+            action_plan = parse_command_to_json(
+                _processed_input,
+                use_fast_mode=not st.session_state.get("airun_use_claude_careful", False),
+                context_plan=st.session_state.loaded_scenario_plan,
+                base_command=st.session_state.loaded_scenario_command,
+                forced_unique_id=_unique_id_airun,
+            )
 
         # Lưu kết quả
         st.session_state.current_plan = action_plan
-        st.session_state.airun_golden_used = _airun_golden_used
         st.session_state.run_execution = True
         st.session_state.test_logs = []
 
         # Lưu mode đã dùng (đọc từ brain module - phản ánh mode thực tế sau auto-switch)
-        if not _airun_golden_used:
-            st.session_state.last_mode_used = brain_module.last_actual_mode
+        st.session_state.last_mode_used = brain_module.last_actual_mode
 
-        _label = "⚡ Golden plan loaded!" if _airun_golden_used else "✅ AI đã phân tích xong!"
-        status.update(label=_label, state="complete", expanded=False)
+        status.update(label="✅ AI đã phân tích xong!", state="complete", expanded=False)
 
     st.rerun()
 
@@ -1051,24 +1009,6 @@ if st.session_state.run_execution and st.session_state.current_plan:
             logs = automation.execute_action(st.session_state.current_plan)
 
         st.session_state.test_logs = logs
-
-        # --- Golden Plan Cache: ghi nhận kết quả sau chạy (chỉ AI Run mode) ---
-        if st.session_state.run_mode == "AI Run (theo lệnh)":
-            _ar_raw = st.session_state.get("airun_raw_input")
-            _ar_golden_used = st.session_state.get("airun_golden_used", False)
-            _ar_unique_id = st.session_state.get("airun_generated_unique_id")
-            _ar_last_id = st.session_state.get("airun_last_id")
-            if _ar_raw:
-                _ar_status, _ = _extract_smoke_status_from_logs(logs)
-                if _ar_status == "PASS" and not _ar_golden_used:
-                    if plan_cache.record_success(
-                        "manual", _ar_raw, st.session_state.current_plan,
-                        _ar_unique_id, _ar_last_id,
-                    ):
-                        print(f"   💾 AI Run golden saved: {_ar_raw[:60]}")
-                elif _ar_golden_used and _ar_status in {"FAIL", "CRASH"}:
-                    plan_cache.invalidate("manual", _ar_raw)
-                    print(f"   ♻️ AI Run golden {_ar_status} → huỷ cache (lần sau AI sinh lại)")
 
         status.update(label="✅ Hoàn thành!", state="complete", expanded=False)
 

@@ -10,7 +10,7 @@ def get_fast_mode_prompt(user_command):
     return f"""You are a strict JSON converter. You MUST use action names from examples below.
 
 CRITICAL: ONLY these action names are valid:
-navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click, wait, check_fields, reorder
+navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click, wait, check_fields, reorder, delete_all_tasks
 
 LEARN FROM THESE 5 EXAMPLES (COPY the action names EXACTLY):
 
@@ -161,6 +161,16 @@ Example 24b (OFFER FILTER — also uses "ID contains"):
 Input: "Vào Offer -> Filter một ID bất kỳ -> Bấm vào logo The Brick"
 Output: [{{"action":"navigate","path":["Offer"]}},{{"action":"update_form","data":{{"ID contains":"RANDOM"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"process_deployment","options":[]}}]
 RULE for Example 24b: EVERY filter page (Offer, Offer Section, Drip Offer, PVE, RBE, Gacha, Currency, etc.) uses the SAME "ID contains" search box. ALWAYS use the key "ID contains" for any "Filter ... bất kỳ" command. NEVER use "Offer Name" or any other label.
+
+Example 25 (RBE TASKS TAB — per-task fields keyed "Task N <Field>"):
+Input: "Bấm vào tab Tasks -> Sửa Task 3: Condition: Signpost, League Min: 5, League Max: 20, Attempt: 7, Default Score: 250, Is hidden: on, Accumulated: off, Complete Type 1: PVP:PVP, Link Start Time: 2026-07-24 19:00, Link End Time: 2026-07-27 19:00 -> Save"
+Output: [{{"action":"click","target":"Tasks"}},{{"action":"update_form","data":{{"Task 3 Condition":"Signpost","Task 3 League Min":"5","Task 3 League Max":"20","Task 3 Attempt":"7","Task 3 Default Score":"250","Task 3 Is hidden":"on","Task 3 Accumulated":"off","Task 3 Complete Type 1":"PVP:PVP","Task 3 Link Start Time":"2026-07-24 19:00","Task 3 Link End Time":"2026-07-27 19:00"}}}},{{"action":"save_form","mode":"save"}}]
+RULE for Example 25: On the RBE "Tasks" tab each task is a numbered card ("Task 1", "Task 2", ...). EVERY field for a task MUST be keyed with the "Task <N> " prefix EXACTLY as written in the command (e.g. "Task 3 Condition", "Task 3 Is hidden"). Put ALL fields of ALL tasks in ONE update_form. Recognized field labels: Condition, Description (localization), Count, Complete Type 1/2/3, Default Score, Link, Link Start Time, Link End Time, League Min, League Max, Attempt, Is hidden, Accumulated. Complete Type values use "Category:Value" form (e.g. "PVP:PVP", "superstar:SS_BretHart_BTI", "damage:1250"). Is hidden / Accumulated take on/off. NEVER drop the "Task N" prefix and NEVER split one task's fields across multiple update_form steps.
+
+Example 25b (RBE TASKS TAB — DELETE ALL TASKS, before re-creating them):
+Input: "Bấm vào tab Tasks -> Xóa tất cả các task -> Sửa Task 1: Condition: win, Default Score: 100 -> Save"
+Output: [{{"action":"click","target":"Tasks"}},{{"action":"delete_all_tasks"}},{{"action":"update_form","data":{{"Task 1 Condition":"win","Task 1 Default Score":"100"}}}},{{"action":"save_form","mode":"save"}}]
+RULE for Example 25b: "Xóa tất cả các task" / "Delete all tasks" / "Remove all tasks" is ALWAYS {{"action":"delete_all_tasks"}} — a DEDICATED action, NOT {{"action":"click","target":"Delete All Tasks"}} (there is no such button; only a per-task trash icon exists, and a literal click for it always fails "Cannot find clickable element"). This action deletes every task down to Task 1 (Task 1 itself can never be deleted). Use it whenever the command says to delete/clear/remove ALL tasks, not for deleting one specific task.
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
 - "Bấm logo The Brick" / "Click logo" ALONE (no "Chọn checkbox" and no "Process" after) → {{"action":"process_deployment","options":[]}} (navigate home only, options MUST be [])
@@ -210,6 +220,18 @@ CRITICAL RULES:
   * CORRECT: edit_row(ID) → wait → update_form({{"Contest Superstar":"on","RBE":"X","Normal Node 1":"Y","SoftCurrency":"N","Hard Node 1":"Y","Hell Node 1":"Y"}}) → save_form
     (SoftCurrency only needs to appear once when the amount is the same across Normal/Hard/Hell — it applies to all three panels.)
   * WRONG: update_form({{"Contest Superstar":"on","RBE":"X"}}) → update_form({{"Normal Node 1":"Y"}}) → update_form({{"SoftCurrency":"N"}}) → update_form({{"Hard Node 1":"Y"}}) → ... (one call per field — breaks the special-case handler)
+
+- TITAN TAKEOVER BOSS — "RESTRICTION SLOT N" EDIT MODAL (CRITICAL — SINGLE KEY, DO NOT SPLIT):
+  * Battle Setup tab has "Restriction Slot 1"/"Restriction Slot 2" fields with an Edit button that opens a Group/AND/OR condition-builder modal (NOT a plain text field).
+  * Command syntax: "Edit Restriction Slot 1, sửa Group 1: [\"Ascended_1\",\"group:Color_Black\"]" → put the WHOLE "Group N: [...]" spec as the STRING value of a single key literally named "Restriction Slot N".
+  * CORRECT: update_form({{"Restriction Slot 1": "Group 1: [\"Ascended_1\",\"group:Color_Black\"]"}})
+  * WRONG: update_form({{"Group 1": "[\"Ascended_1\",\"group:Color_Black\"]"}}) ← missing the "Restriction Slot N" key, the special-case handler will never trigger
+  * WRONG: splitting into update_form({{"Restriction Slot 1":"Ascended_1"}}) → update_form({{"Restriction Slot 1":"group:Color_Black"}}) ← must be ONE call with the full bracketed list as the value
+
+- "GIỐNG NHƯ <FIELD>" / "SAME AS <FIELD>" VALUES (deterministic — DO NOT try to guess the literal):
+  * When a field's value is "Giống như <Field>" / "same as <Field>" (e.g. "Display Name: Giống như Boss ID"), output the phrase VERBATIM as the string value — do NOT invent or copy a literal ID yourself.
+  * CORRECT: update_form({{"Display Name": "Giống như Boss ID", ...}})
+  * A deterministic post-processor resolves this to the real value of "Boss ID"/"New Boss ID" elsewhere in the plan; if you substitute your own guess instead, it will likely be wrong and this safety net won't run.
 
 - MULTI-FEATURE COMMANDS (CRITICAL — NEVER SKIP NAVIGATE):
   * When command touches multiple features (e.g. FCV3 then RBE), EACH feature section MUST start with its own navigate.
@@ -503,7 +525,7 @@ def get_formatting_prompt(user_command, analysis_clean):
     Task: Convert them into a detailed, sequential JSON Action Plan.
 
     - VALID actions: navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle
-    - clone_row, edit_row, update_form, save_form, scan_tabs, check_fields, click, wait, process_deployment, reorder
+    - clone_row, edit_row, update_form, save_form, scan_tabs, check_fields, click, wait, process_deployment, reorder, delete_all_tasks
     
     INVALID action names (NEVER USE): select_random_ids, export_csv, import_csv, click_logo, select_checkbox, click_button ❌
 
@@ -596,6 +618,13 @@ def get_formatting_prompt(user_command, analysis_clean):
           * "Kéo alex_drip_test lên đầu" → {{{{ "action": "reorder", "target": "alex_drip_test", "position": 1 }}}}
           * "Kéo alex_drip_test xuống dưới quanvm" → {{{{ "action": "reorder", "target": "alex_drip_test", "after": "quanvm" }}}}
           * "Đặt offer_A trước offer_B" → {{{{ "action": "reorder", "target": "offer_A", "before": "offer_B" }}}}
+    16. "delete_all_tasks": {{{{ "action": "delete_all_tasks" }}}}
+        - RBE "Tasks" tab ONLY. Use when user says "Xóa tất cả các task", "Delete all tasks",
+          "Remove all tasks", "Clear all tasks" — deletes every task down to Task 1
+          (Task 1 can never be removed by the app).
+        - NEVER emit {{{{ "action": "click", "target": "Delete All Tasks" }}}} — no such button
+          exists (only a per-task trash icon), that click always fails.
+        - No "target" field needed/used.
     CRITICAL RULES:
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
        - "Go to A -> B -> C -> Clone D" => 1. navigate [A,B,C], 2. clone D.

@@ -322,6 +322,8 @@ class TableRowsMixin:
                     # Requirement: do NOT check Locked Item popup until:
                     #  - we have observed loading indicator at least once
                     #  - and at least ~30s have passed
+                    if action_type != "edit":
+                        self._wait_for_clone_modal_ready(page)
                     if action_type == "edit":
                         try:
                             start_t = time.time()
@@ -448,6 +450,8 @@ class TableRowsMixin:
                                     print("      ✅ Ready to update form (retry).")
                                 else:
                                     time.sleep(0.5)
+                            else:
+                                self._wait_for_clone_modal_ready(page)
                             return
                     except Exception as _retry_e:
                         print(f"      ⚠️ Random direct click retry failed: {_retry_e}")
@@ -521,6 +525,8 @@ class TableRowsMixin:
                 else:
                     # No popup = item unlocked, proceed normally
                     time.sleep(0.5)
+            else:
+                self._wait_for_clone_modal_ready(page)
         elif "Row Not Found" in result:
             if self._auto_filter_data(page, target_text):
                 # Filtering may trigger a GET-form navigation / AJAX reload — the filtered
@@ -550,6 +556,8 @@ class TableRowsMixin:
                         print("      ✅ Ready to update form.")
                     else:
                         time.sleep(0.5)
+                elif "Clicked" in result:
+                    self._wait_for_clone_modal_ready(page)
                 if "Clicked" in result:
                     return
                 # Filter applied but row still missing → fall through to the first-visible
@@ -564,6 +572,27 @@ class TableRowsMixin:
                 # so the job doesn't hard-crash (esp. after filter/tab changes).
                 if not self._fallback_first_visible_row(page, target_text, action_type):
                     raise Exception(f"Không tìm thấy dòng '{target_text}'")
+
+    def _wait_for_clone_modal_ready(self, page, timeout_ms=6000):
+        """After clicking a Clone icon, wait for the Bootstrap clone modal to
+        actually attach '.modal.show'/'.modal.in' before returning control.
+
+        Without this, _find_input_element's modal-scope auto-detection can run
+        a beat too early (still count()==0), silently falling back to a
+        whole-page search — where a generic field name like "Gate" collides
+        with a same-named element on the underlying list page (e.g. RBE list's
+        own #gate filter vs the modal's #id_clone_gate), corrupting the page's
+        own filter state and closing/invalidating the still-forming modal
+        before save_form runs (2026-07-21, RBE Clone golden-plan regression).
+        Some clone flows are full-page forms with no modal at all (e.g.
+        Affiliation War Contribution) — timing out here is expected there.
+        """
+        try:
+            page.locator(".modal.show, .modal.in").first.wait_for(
+                state="visible", timeout=timeout_ms
+            )
+        except Exception:
+            pass
 
     def _fallback_first_visible_row(self, page, target_text, action_type):
         """Click the edit/clone action on the first visible data row.
