@@ -324,8 +324,8 @@ def _make_unique_hieunm_test_id() -> str:
     import datetime as _dt
     import uuid as _uuid
 
-    ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    rnd = _uuid.uuid4().hex[:6]
+    ts = _dt.datetime.now().strftime("%m%d%H%M")
+    rnd = _uuid.uuid4().hex[:4]
     return f"hieunm_test_{ts}_{rnd}"
 
 
@@ -461,8 +461,8 @@ def _pregenerate_unique_id(command: str) -> str | None:
         return None
     _pfix_m = _re.search(r"bắt\s+đầu\s+bằng\s+(\S+)", command, _re.IGNORECASE)
     _pfix = _re.sub(r"[.,;:]*$", "", _pfix_m.group(1)).strip() if _pfix_m else "hieunm_test"
-    _ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    _rnd = _uuid.uuid4().hex[:6]
+    _ts = _dt.datetime.now().strftime("%m%d%H%M")
+    _rnd = _uuid.uuid4().hex[:4]
     return f"{_pfix}_{_ts}_{_rnd}"
 
 
@@ -1184,8 +1184,8 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                     _pfix = re.sub(r"[.,;:]*$", "", _pfix_m.group(1)).strip()
                 else:
                     _pfix = "hieunm_test"
-                _ts_uid = _dt_uid.datetime.now().strftime("%Y%m%d_%H%M%S")
-                _rnd_uid = _uuid_uid.uuid4().hex[:6]
+                _ts_uid = _dt_uid.datetime.now().strftime("%m%d%H%M")
+                _rnd_uid = _uuid_uid.uuid4().hex[:4]
                 unique_id = f"{_pfix}_{_ts_uid}_{_rnd_uid}"
                 generated_unique_id = unique_id
                 case_command = (

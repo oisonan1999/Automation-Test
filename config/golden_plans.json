@@ -97,60 +97,6 @@
       }
     ]
   },
-  "rbe||edit an rbe (tasks, ms, lb) then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> xóa tất cả các task -> bấm vào add new task -> sửa task 2: condition: win, league min: 3, league max: 22, attempt: 7, default score: 250, is hidden: on, accumulated: off, complete type 1: pvp:pvp, complete type 2: superstar:ss_oosbourne_ozzy, complete type 3: event_type:limited time, condition description: !!r44_task_win_descript, link end time: {{today_mdy}} 11:00, link start time: 2026-07-20 01:00:00 -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Edit an RBE (Tasks, MS, LB) then Save",
-    "step_count": 10,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-21T14:41:19",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE",
-          "RBE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Hide LiveopsTest gate items checkbox": "false"
-        }
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Tasks"
-      },
-      {
-        "action": "delete_all_tasks"
-      },
-      {
-        "action": "click",
-        "target": "Add New Task"
-      },
-      {
-        "action": "update_form",
-        "data": {}
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
   "rbe||create/edit the contest superstars then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab contest superstars -> bấm vào add event -> bấm vào pvp -> sửa event id: vs_tournament_may2026_hieunm_1205 -> bấm vào define schedules -> bấm vào add schedule, start time: 2026-05-18 19:00, end time: {{today_iso}} 11:00 -> save -> sửa condition: win against any rarity -> bấm vào add css -> enter superstars or groups: body_oosbourne, attempt: 10000, amount: 1000 -> save -> bấm vào logo the brick": {
     "feature": "RBE",
     "label": "Create/Edit the Contest Superstars then Save",
@@ -449,6 +395,745 @@
       },
       {
         "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||search for a pve book: vào pve -> filter 1 id bất kỳ -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Search for a PVE Book",
+    "step_count": 4,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-27T09:41:38",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "ID contains": "RANDOM"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Filter Data"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||clone the pve: vào pve -> clone 1 id contain ltpve bất kỳ -> sửa book name: hãy tự generate một id duy nhất bắt đầu bằng ltpve_hieunm_test -> bấm vào nút create book and open in v2 -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Clone the PVE",
+    "step_count": 5,
+    "uses_unique": true,
+    "uses_last": false,
+    "saved_at": "2026-07-27T09:43:16",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "ltpve"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Book Name": "{{UNIQUE_ID}}"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||edit the book info and save: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào tab book information -> sửa book texture icon: engagement_pve_aug2025_wkend4 -> bấm vào nút save book info -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Edit the Book Info and Save",
+    "step_count": 7,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T09:44:50",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Book Information"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Book Texture Icon": "Engagement_PVE_Aug2025_Wkend4"
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||edit the chapter (schedule, loadout, rewards) then save: vào pve -> sửa id vừa clone -> đợi trang load -> sửa gate trong chapter info: liveopstest, start time: 04/27/2026, 19:00, end time: {{today_mdy}}, 11:00 -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Edit the Chapter (Schedule, Loadout, Rewards) then Save",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T09:48:05",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Gate": "LiveOpsTest",
+          "Start time": "04/27/2026, 19:00",
+          "End Time": "07/27/2026, 11:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||export the book csv: vào pve -> chọn 2 id bất kỳ -> export csv file book_test.csv -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Export the Book CSV",
+    "step_count": 4,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-27T09:48:37",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "checkbox",
+        "target": "ID",
+        "value": "random_2"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "Book_test.csv"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||import the book csv: vào pve -> import csv file book_test.csv -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Import the Book CSV",
+    "step_count": 3,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-27T09:49:13",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "Book_test.csv"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||clone chapter then save: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào nút clone chapter -> bấm vào chapter 1 -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Clone Chapter then Save",
+    "step_count": 7,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T09:52:48",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Clone Chapter"
+      },
+      {
+        "action": "click",
+        "target": "Chapter 1"
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||edit the matches then save: vào pve -> sửa book vừa clone -> đợi trang load -> bấm vào normal matches -> bấm vào match 1 -> sửa ssgroup id: ss_oosbourne_ozzy, 5 star, gold -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Edit the Matches then Save",
+    "step_count": 8,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T09:55:51",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Normal Matches"
+      },
+      {
+        "action": "click",
+        "target": "Match 1"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "SSGroup ID": "SS_OOsbourne_Ozzy, 5 Star, Gold"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||turn on the universal toggle: vào pve -> sửa id vừa clone -> đợi trang load -> sửa toggle universal global: on -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Turn on the Universal toggle",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T09:57:06",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Universal Global": "on"
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||deploy and view diff: bấm vào logo the brick -> chọn checkbox pve -> process": {
+    "feature": "PVE",
+    "label": "Deploy and view diff",
+    "step_count": 1,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-27T09:58:57",
+    "template": [
+      {
+        "action": "process_deployment",
+        "options": [
+          "PVE"
+        ]
+      }
+    ]
+  },
+  "pve||export the chapter csv: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào tab import/export chapters -> export chapter theo bookid file chapter_test.csv -> xóa tất giá trị trong cột ss1 entry req -> xóa tất cả giá trị trong cột ss2 entry req -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Export the Chapter CSV",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T10:05:44",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Import/Export Chapters"
+      },
+      {
+        "action": "download",
+        "target": "Export Chapter",
+        "value": "chapter_test.csv"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "chapter_test.csv",
+        "operation": "set",
+        "data": "SS1 Entry Req="
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "chapter_test.csv",
+        "operation": "set",
+        "data": "SS2 Entry Req="
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||import the chapter csv: vào pve -> sửa book vừa clone -> đợi trang load -> bấm vào tab import/export chapters -> import chapter chapter_test.csv -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Import the Chapter CSV",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T10:25:23",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Import/Export Chapters"
+      },
+      {
+        "action": "upload",
+        "target": "chapter_test.csv",
+        "value": "chapter_test.csv"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||setup the css for the pve: vào pve -> sửa book vừa clone -> đợi trang load -> contest superstar: on -> sửa rbe: rbe_test_hieunm, normal node 1: ss_oosbourne_ozzy, softcurrency: 10000, hard node 1: ss_oosbourne_ozzy, softcurrency: 10000, hell node 1: ss_oosbourne_ozzy, softcurrency: 10000 -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Setup the CSS for the PVE",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T10:29:19",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Classic PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Contest Superstar": "on",
+          "RBE": "RBE_test_hieunm",
+          "Normal Node 1": "SS_OOsbourne_Ozzy",
+          "SoftCurrency": "10000",
+          "Hard Node 1": "SS_OOsbourne_Ozzy",
+          "Hell Node 1": "SS_OOsbourne_Ozzy"
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "gacha||search for a gacha event: vào gacha event -> filter 1 id bất kỳ -> bấm vào logo the brick": {
+    "feature": "Gacha",
+    "label": "Search for a Gacha event",
+    "step_count": 4,
+    "uses_unique": false,
+    "uses_last": false,
+    "saved_at": "2026-07-27T11:26:43",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "ID contains": "RANDOM"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Filter Data"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "gacha||edit the gacha (info, display, pool, weight) and save: vào gacha event -> sửa id vừa clone -> đợi trang load -> sửa schedule in utc: 2025-12-12 20:00:00, {{today_iso}} 11:00:00 -> save -> bấm vào tab gacha token -> save -> bấm vào tab display info -> sửa display name: !!button_cancel, description: !!button_cancel, loot table description: !!button_cancel -> save -> bấm vào logo the brick": {
+    "feature": "Gacha",
+    "label": "Edit the Gacha (Info, Display, Pool, Weight) and Save",
+    "step_count": 11,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T11:39:37",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Schedule in UTC": "2025-12-12 20:00:00, 2026-07-27 11:00:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "click",
+        "target": "Gacha Token"
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "click",
+        "target": "Display Info"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Display Name": "!!BUTTON_CANCEL",
+          "Description": "!!BUTTON_CANCEL",
+          "Loot Table Description": "!!BUTTON_CANCEL"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "gacha||import the gacha pool csv: vào gacha event -> sửa id vừa clone -> đợi trang load -> bấm vào tab gacha pool -> đợi trang load -> export csv file gacha_pool_test.csv -> import csv file gacha_pool_test.csv -> save -> bấm vào logo the brick": {
+    "feature": "Gacha",
+    "label": "Import the Gacha Pool CSV",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-07-27T11:41:15",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Gacha Pool"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "gacha_pool_test.csv"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "gacha_pool_test.csv"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "gacha||create the gacha event: vào gacha event -> bấm vào nút add new gacha -> đợi trang load -> sửa gate: liveopstest, eventid: hãy tự generate một id duy nhất bằng đầu bằng hieunm_test, schedule in utc: 2026-07-27 01:00:00, {{today_iso}} 11:00:00, currency: gachashard_jul2026_wknd4_main, cost: 100, priority: 2 -> save -> bấm vào tab display info -> sửa display name: !!button_cantuse, description: !!button_cantuse, loot table description: !!button_cantuse, gacha art: gacha_medium_armory_moments_june2026, gacha prefap: frontend_gacha_medium, top banner texture: gachaback_premium -> save -> bấm vào tab gacha pool -> import csv file gacha_pools_test.csv -> save -> bấm vào tab gacha weight -> import csv file gacha_weight_test.csv -> save -> bấm vào tab bonus items -> save -> bấm vào logo the brick": {
+    "feature": "Gacha",
+    "label": "Create the Gacha Event",
+    "step_count": 19,
+    "uses_unique": true,
+    "uses_last": false,
+    "saved_at": "2026-07-27T17:47:50",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "click",
+        "target": "Add New Gacha"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Gate": "LiveOpsTest",
+          "Event ID": "{{UNIQUE_ID}}",
+          "Schedule in UTC": "2026-07-27 01:00:00, 2026-07-27 11:00:00",
+          "Currency": "GachaShard_Jul2026_wknd4_Main",
+          "Cost": "100",
+          "Priority": "2"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "click",
+        "target": "Display Info"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Display Name": "!!BUTTON_CANTUSE",
+          "Description": "!!BUTTON_CANTUSE",
+          "Loot Table Description": "!!BUTTON_CANTUSE",
+          "Gacha Art": "Gacha_Medium_Armory_Moments_June2026",
+          "Gacha Prefap": "frontEnd_gacha_medium",
+          "Top Banner Texture": "GachaBack_Premium"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "click",
+        "target": "Gacha Pool"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "gacha_pools_test.csv",
+        "operation": "uniquify",
+        "data": "gacha pool=_{{UNIQUE_ID}}"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "gacha_pools_test.csv"
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "click",
+        "target": "Gacha Weight"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "gacha_weight_test.csv",
+        "operation": "apply_rename_map",
+        "data": ""
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "gacha_weight_test.csv"
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "click",
+        "target": "Bonus Items"
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
       },
       {
         "action": "process_deployment",

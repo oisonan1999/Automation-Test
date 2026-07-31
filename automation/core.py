@@ -1,5 +1,6 @@
 # automation/core.py
 import ast
+import copy
 import time
 import re
 import os
@@ -684,7 +685,14 @@ class BrickAutomation(
                     elif act == "clone_row":
                         self._click_icon_in_row(page, tgt, "clone")
                     elif act == "update_form":
-                        self._smart_update_form(page, popup_data)
+                        # Pass a deep copy: special-case handlers (Contest Superstar,
+                        # RBE task panel, ...) pop consumed keys off `data` in place.
+                        # `popup_data` is the SAME dict object as step["data"] inside
+                        # `action_plan`, so mutating it directly would leave step["data"]
+                        # empty by the time the smoke runner freezes this same action_plan
+                        # object into the golden plan cache (plan_cache.record_success) —
+                        # producing a golden template with "data": {} that replays as a no-op.
+                        self._smart_update_form(page, copy.deepcopy(popup_data))
                         last_update_form_data = popup_data  # Track for clone ID capture
                         report_logs.append(
                             {

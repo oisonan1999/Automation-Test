@@ -29,6 +29,7 @@ from .deployment_fixers import (
     _fix_download_filename_in_target,
     _fix_manipulate_csv_value_verbatim,
     _inject_missing_download_before_manipulate_csv,
+    _inject_gacha_pool_weight_uniquify,
     _remove_redundant_pre_download_steps,
     _auto_infer_deployment_options,
     _merge_process_deployment_steps,
@@ -65,7 +66,7 @@ from .form_fixers import (
 )
 
 
-def fix_action_plan(plan, user_command=""):
+def fix_action_plan(plan, user_command="", unique_id=None):
     """
     Post-process AI output: Fix invalid action names and field names.
     This is deterministic and 100% reliable regardless of what AI generates.
@@ -73,6 +74,12 @@ def fix_action_plan(plan, user_command=""):
     Args:
         plan: The AI-generated action plan (list of dicts)
         user_command: The original user command string (used for clone detection)
+        unique_id: The run's pre-generated unique ID (brain.py's forced_unique_id),
+            if any. Passed through to `_inject_gacha_pool_weight_uniquify` so its
+            injected CSV suffix reuses the SAME string plan_cache.py's
+            tokenize_plan already knows to freeze as {{UNIQUE_ID}} — otherwise a
+            self-invented suffix would get baked into the golden plan as a
+            static literal and replayed stale on every future run.
     """
     if not plan or not isinstance(plan, list):
         return plan
@@ -748,6 +755,16 @@ def fix_action_plan(plan, user_command=""):
     fixed_plan = _remove_redundant_pre_download_steps(fixed_plan)
 
     # ============================================================
+    # STEP 3e.7: INJECT gacha pool/weight CSV uniquify + apply_rename_map
+    # Gacha Event's Gacha Pool and Gacha Weight CSV imports reference the same
+    # static pool-name strings across two files; re-running the same static
+    # CSVs collides with whatever a previous run already created server-side.
+    # Deterministically inject the rename steps rather than relying on the AI
+    # to emit these two (novel, no-few-shot) manipulate_csv operations itself.
+    # ============================================================
+    fixed_plan = _inject_gacha_pool_weight_uniquify(fixed_plan, user_command, unique_id)
+
+    # ============================================================
     # STEP 3f: Remove spurious edit_row(RANDOM) before checkbox
     # Must run AFTER 3e so checkbox exists regardless of whether AI or
     # the injector added it. AI confuses "Chọn N ID bất kỳ" (→ checkbox)
@@ -987,6 +1004,7 @@ __all__ = [
     "_fix_download_filename_in_target",
     "_fix_manipulate_csv_value_verbatim",
     "_inject_missing_download_before_manipulate_csv",
+    "_inject_gacha_pool_weight_uniquify",
     "_remove_redundant_pre_download_steps",
     "_auto_infer_deployment_options",
     "_merge_process_deployment_steps",

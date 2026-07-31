@@ -187,10 +187,27 @@ class UploadHandlerMixin:
         CSV" trigger uses that wording, so this cannot misfire on the
         ordinary direct-file-chooser pattern used everywhere else.
 
+        BUT: not every "Import from CSV"-worded trigger opens a modal. Gacha
+        Event's Gacha Pool / Gacha Weight tabs also say "Import from CSV"
+        (`<button class="btn btn-import-pool">...Import from CSV</button>`)
+        yet have NO `.modal` at all — the button just synchronously opens
+        the REAL native OS file-picker for a hidden, page-level
+        `input#import_pool_csv` / `input#import_gacha_weight_csv` (confirmed
+        live via CDP DOM dump). The old code unconditionally did
+        `trigger.click(force=True)` with no `expect_file_chooser` guard,
+        assuming a modal would appear next — for this shape a real,
+        UN-intercepted native "Open" dialog popped up instead and blocked
+        the whole run (no CDP filechooser listener was registered to catch
+        it). Guard the click so Playwright can intercept and answer that
+        dialog directly if it fires; only fall through to the modal-search
+        logic when no chooser shows up within the wait window.
+
         Returns (success, msg, None) if this pattern was found and handled
         to completion, or None if the pattern isn't present at all (caller
         falls back to the generic upload logic below, completely unchanged).
         """
+        modal = None
+        chooser_handled = False
         try:
             trigger = (
                 page.locator("button, a, [role='button']")
@@ -201,35 +218,45 @@ class UploadHandlerMixin:
                 return None
 
             trigger.scroll_into_view_if_needed()
-            trigger.click(force=True)
 
-            modal = (
-                page.locator(".modal")
-                .filter(has=page.locator("input[type='file']"))
-                .filter(has_text=re.compile(r"import from csv", re.IGNORECASE))
-                .first
-            )
-            modal.wait_for(state="visible", timeout=5000)
+            try:
+                with page.expect_file_chooser(timeout=2000) as fc_info:
+                    trigger.click(force=True)
+                fc_info.value.set_files(file_path)
+                chooser_handled = True
+                print("   🧾 [Import-From-CSV] Native file chooser intercepted & filled directly")
+            except Exception:
+                pass  # no chooser within 2s -> genuine Bootstrap-modal pattern, handle below
 
-            file_input = modal.locator("input[type='file']").first
-            file_input.set_input_files(file_path)
-            print("   🧾 [Import-From-CSV modal] File set on modal-scoped input")
+            if not chooser_handled:
+                modal = (
+                    page.locator(".modal")
+                    .filter(has=page.locator("input[type='file']"))
+                    .filter(has_text=re.compile(r"import from csv", re.IGNORECASE))
+                    .first
+                )
+                modal.wait_for(state="visible", timeout=5000)
 
-            submit_btn = (
-                modal.locator("button, a, [role='button']")
-                .filter(has_text=re.compile(r"^\s*Import\s*$", re.IGNORECASE))
-                .first
-            )
-            submit_btn.wait_for(state="visible", timeout=2000)
-            submit_btn.click(force=True)
-            print("   🧾 [Import-From-CSV modal] Clicked modal 'Import' submit button")
+                file_input = modal.locator("input[type='file']").first
+                file_input.set_input_files(file_path)
+                print("   🧾 [Import-From-CSV modal] File set on modal-scoped input")
+
+                submit_btn = (
+                    modal.locator("button, a, [role='button']")
+                    .filter(has_text=re.compile(r"^\s*Import\s*$", re.IGNORECASE))
+                    .first
+                )
+                submit_btn.wait_for(state="visible", timeout=2000)
+                submit_btn.click(force=True)
+                print("   🧾 [Import-From-CSV modal] Clicked modal 'Import' submit button")
         except Exception as e:
-            print(f"   ℹ️ [Import-From-CSV modal] pattern not detected/failed to handle: {e}")
+            print(f"   ℹ️ [Import-From-CSV] pattern not detected/failed to handle: {e}")
             return None
 
         # Shared post-submit result detection — same building blocks the
         # generic path below uses (network idle, confirmation prompts, then
-        # the result-popup scanner), so classification stays consistent.
+        # the result-popup scanner), so classification stays consistent
+        # whether the file was fed via the native chooser or the modal input.
         try:
             page.wait_for_load_state("networkidle", timeout=60000)
         except Exception:
@@ -249,17 +276,23 @@ class UploadHandlerMixin:
         if found:
             return (res_type == "PASS", str(res_text or "")[:100], None)
 
-        # No popup at all — this UI style dismisses its own modal on a
-        # successful ajax submit, so a still-open modal signals the submit
-        # failed silently (client-side validation, network error, etc.)
-        # rather than being a silent success.
-        try:
-            still_open = modal.is_visible(timeout=500)
-        except Exception:
-            still_open = False
-        if still_open:
-            return (False, "Import modal still open after submit — likely failed", None)
-        return (True, "Import completed (modal closed, no popup)", None)
+        if not chooser_handled:
+            # The Bootstrap-modal style dismisses itself on a successful ajax
+            # submit, so a still-open modal signals the submit failed silently
+            # (client-side validation, network error, etc.) rather than being
+            # a silent success.
+            try:
+                still_open = modal.is_visible(timeout=500)
+            except Exception:
+                still_open = False
+            if still_open:
+                return (False, "Import modal still open after submit — likely failed", None)
+            return (True, "Import completed (modal closed, no popup)", None)
+
+        # Native-chooser style (Gacha Pool/Weight): no popup at all is the
+        # normal silent-success signal — same as the generic upload path's
+        # handling for these same pages.
+        return (True, "Import completed (native file input, no popup)", None)
 
     def _upload_fuzz_fast(self, page, target_text, file_name, cached_selector=None):
         """Optimized upload for fuzzing: 15s timeout, cached selector. Returns (success, msg, selector)"""

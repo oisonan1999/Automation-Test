@@ -758,7 +758,7 @@ def _inject_generated_ids(user_command: str, forced_id: str | None = None) -> st
         trailing = m.group(2) if m else ""
         if forced_id:
             return f"{forced_id}{trailing}"
-        ts = _dt.datetime.now().strftime("%m%d%H%M%S")
+        ts = _dt.datetime.now().strftime("%m%d%H%M")
         rnd = _uuid.uuid4().hex[:4]
         return f"{prefix}_{ts}_{rnd}{trailing}"
 
@@ -844,7 +844,7 @@ def parse_command_to_json(
 
     # BƯỚC 4: POST-PROCESSING - Fix invalid action names (CRITICAL)
     print("\n   🔧 POST-PROCESSING: Fixing AI action names...")
-    plan = fix_action_plan(plan, user_command)
+    plan = fix_action_plan(plan, user_command, unique_id=forced_unique_id)
 
     # DEBUG: Print FULL plan để kiểm tra
     print("\n" + "=" * 60)

@@ -14,6 +14,39 @@ class DataHandlerMixin:
             return f"Error: File {filename} not found."
 
         print(f"   🔧 CSV: {operation} -> {data_instruction}")
+
+        # apply_rename_map works on the raw file TEXT, not parsed rows/columns.
+        # Needed for exports like Gacha Weight's, which stack several distinct
+        # mini-tables (each with its own header row) in one CSV — the
+        # single-header-row/DictReader model below can't address a column that
+        # isn't on line 1. Handled here, before any row parsing, and returns
+        # early so the generic DictWriter write-back further down (which
+        # assumes a single fixed header) never runs on this file.
+        if operation == "apply_rename_map":
+            rename_map = getattr(self, "_last_csv_rename_map", None)
+            if not rename_map:
+                return (
+                    "Error: no rename map available — run a 'uniquify' "
+                    "manipulate_csv step on another file earlier in this plan first"
+                )
+            try:
+                with open(filepath, "r", encoding="utf-8-sig") as f:
+                    content = f.read()
+                cnt = 0
+                for old_v, new_v in rename_map.items():
+                    n = content.count(old_v)
+                    if n:
+                        content = content.replace(old_v, new_v)
+                        cnt += n
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(content)
+                return (
+                    f"Success: Replaced {cnt} occurrence(s) across "
+                    f"{len(rename_map)} renamed value(s)"
+                )
+            except Exception as e:
+                return f"Logic Error: {e}"
+
         rows = []
         headers = []
         try:
@@ -115,6 +148,37 @@ class DataHandlerMixin:
                 for r in rows:
                     r[t_col] = sv
                 msg = f"Set {len(rows)} rows ({col}={sv})"
+
+            # --- UNIQUIFY LOGIC ---
+            # Format: "ColumnName=SUFFIX". Auto-discovers every distinct value
+            # already present in the column and appends the SAME suffix to
+            # each — rows sharing an original value stay mapped to the exact
+            # same new value (group-preserving), unlike "set" which overwrites
+            # every row to one fixed value. Stores the old->new mapping on
+            # `self` so a later `apply_rename_map` step (typically on a
+            # companion file that references these same names, e.g. Gacha
+            # Weight referencing Gacha Pool's names) can re-apply it.
+            elif operation == "uniquify":
+                col, suffix = safe_split(data_instruction)
+                if not col:
+                    return "Invalid UNIQUIFY format"
+                t_col = find_col(col)
+                if not t_col:
+                    return f"Column '{col}' not found"
+                suffix = clean_val(suffix)
+                if not suffix:
+                    return "Invalid UNIQUIFY format: empty suffix"
+                rename_map = {}
+                for r in rows:
+                    old_v = r[t_col]
+                    if old_v not in rename_map:
+                        rename_map[old_v] = f"{old_v}{suffix}"
+                    r[t_col] = rename_map[old_v]
+                self._last_csv_rename_map = rename_map
+                msg = (
+                    f"Uniquified {len(rename_map)} distinct value(s) in "
+                    f"column '{col}' (+{suffix})"
+                )
 
             # --- DELETE LOGIC ---
             elif operation == "delete":

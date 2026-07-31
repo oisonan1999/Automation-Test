@@ -475,6 +475,120 @@ def _fix_manipulate_csv_value_verbatim(plan, user_command=""):
     return plan
 
 
+def _inject_gacha_pool_weight_uniquify(plan, user_command="", unique_id=None):
+    """
+    Gacha Event's Gacha Pool / Gacha Weight CSV imports reference the exact
+    same "gacha pool" name strings across TWO separate files:
+    gacha_pools_test.csv's "gacha pool" column values reappear as
+    gacha_weight_test.csv's Item/Pool values (in its Segments and
+    Guaranteed Rewards sub-tables). Both CSVs ship with static pool names,
+    so re-running the same smoke case a second time re-imports the exact
+    same pool IDs — colliding with whatever a previous run already created
+    server-side ("duplicate ID" import failures).
+
+    Fix: whenever a plan uploads BOTH a "...gacha_pool..." and a
+    "...gacha_weight..." CSV, deterministically inject:
+      1. manipulate_csv(operation="uniquify") on the pool file, right
+         before its upload step — appends one shared per-run suffix to
+         every distinct "gacha pool" value (group-preserving: rows sharing
+         an original value get the exact same new value).
+      2. manipulate_csv(operation="apply_rename_map") on the weight file,
+         right before ITS upload step — re-applies the identical old->new
+         mapping via raw-text substitution (see automation/data_handler.py
+         `_process_csv_manipulation`; the weight file's multi-table layout
+         has no single header row a normal column-based edit could target).
+
+    This is injected deterministically rather than left to the LLM: both
+    operation names are novel (no few-shot example exists for them in
+    prompts.py), so relying on Ollama to emit the right JSON shape every
+    single run would be unreliable — same reasoning as
+    `_inject_missing_download_before_manipulate_csv` below.
+
+    Suffix source (CRITICAL for golden-plan freshness): the suffix reuses
+    the run's `unique_id` (brain.py's forced_unique_id) verbatim instead of
+    minting its own timestamp. golden plan caching (ai/plan_cache.py) only
+    tokenizes strings that exactly equal `generated_unique_id`/`last_id`
+    into {{UNIQUE_ID}}/{{LAST_ID}} before freezing a PASSed run as a
+    template — a self-invented suffix would NOT match either, so it would
+    get baked into the golden template as a static literal and every
+    future replay would re-apply that SAME stale suffix, silently
+    recreating the exact duplicate-ID problem this fixer exists to solve.
+    Reusing `unique_id` means this manipulate_csv step's data string
+    naturally gets tokenized/detokenized alongside every other field that
+    already uses that same ID. Falls back to a self-generated timestamp
+    only if no unique_id was supplied (e.g. an ad-hoc call site that
+    doesn't use golden caching at all, so staleness can't occur there).
+
+    Idempotent: no-ops if either operation is already present in the plan,
+    or if the pool upload doesn't precede the weight upload (unexpected
+    ordering — skip rather than risk executing apply_rename_map before its
+    rename map exists).
+    """
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    def _upload_idx_matching(keyword):
+        for i, s in enumerate(plan):
+            if not isinstance(s, dict) or s.get("action") != "upload":
+                continue
+            fname = str(s.get("value", "") or s.get("target", "") or "").lower()
+            if keyword in fname:
+                return i
+        return None
+
+    pool_idx = _upload_idx_matching("gacha_pool")
+    weight_idx = _upload_idx_matching("gacha_weight")
+    if pool_idx is None or weight_idx is None:
+        return plan
+
+    if any(
+        isinstance(s, dict)
+        and s.get("action") == "manipulate_csv"
+        and s.get("operation") in ("uniquify", "apply_rename_map")
+        for s in plan
+    ):
+        return plan  # already injected
+
+    if not (pool_idx < weight_idx):
+        print(
+            "   ℹ️ Gacha pool upload does not precede gacha weight upload — "
+            "skipping uniquify/apply_rename_map injection (unexpected order)"
+        )
+        return plan
+
+    pool_file = plan[pool_idx].get("value") or plan[pool_idx].get("target")
+    weight_file = plan[weight_idx].get("value") or plan[weight_idx].get("target")
+
+    if unique_id:
+        suffix = f"_{unique_id}"
+    else:
+        import datetime as _dt
+
+        suffix = "_" + _dt.datetime.now().strftime("%m%d%H%M%S")
+
+    uniquify_step = {
+        "action": "manipulate_csv",
+        "target": pool_file,
+        "operation": "uniquify",
+        "data": f"gacha pool={suffix}",
+    }
+    apply_step = {
+        "action": "manipulate_csv",
+        "target": weight_file,
+        "operation": "apply_rename_map",
+        "data": "",
+    }
+
+    # Insert at the higher index first so the lower index stays valid.
+    plan.insert(weight_idx, apply_step)
+    plan.insert(pool_idx, uniquify_step)
+    print(
+        f"   🔧 INJECT: gacha pool/weight uniquify (+apply_rename_map) steps "
+        f"(suffix={suffix})"
+    )
+    return plan
+
+
 def _inject_missing_download_before_manipulate_csv(plan, user_command=""):
     """
     "Export <X> ... file <name.csv> -> Sửa/Xóa cột ..." always implies a
