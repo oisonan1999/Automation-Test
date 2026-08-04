@@ -44,5 +44,13 @@
       "/tmp",
       "/private/tmp"
     ]
+  },
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-ErGslZp8y8Fu5IkwJq2VQQ",
+    "ANTHROPIC_MODEL": "claude-sonnet-5",
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "ANTHROPIC_BEDROCK_BASE_URL": "https://mushigen.wwe-champions.scopelyai.com/bedrock",
+    "CLAUDE_CODE_SKIP_BEDROCK_AUTH": "1",
+    "AWS_REGION": "us-east-1"
   }
 }
