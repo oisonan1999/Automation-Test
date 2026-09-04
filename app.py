@@ -28,20 +28,55 @@ def _project_code_mtime():
     return latest
 
 
-if os.environ.get("DEV_AUTORELOAD", "1") == "1":
-    _sig = _project_code_mtime()
-    _last = st.session_state.get("_code_sig")
-    if _last is not None and _sig != _last:
-        _watch_prefixes = tuple(os.path.join(_PROJECT_ROOT, d) for d in _WATCH_DIRS)
-        for _name in list(sys.modules):
-            _mod = sys.modules.get(_name)
-            _f = getattr(_mod, "__file__", "") or ""
-            if _f.startswith(_watch_prefixes):
-                del sys.modules[_name]
+def _reload_project_modules(force: bool = False) -> bool:
+    """Purge sys.modules entries for ai/*.py + automation/*.py so a later import
+    re-reads current disk content, then clear st.cache_data/resource and drop
+    session_state['automation'].
+    - force=False (top-of-script, default): gated on DEV_AUTORELOAD + an actual mtime
+      change since the last rerun — this is the original top-of-script behavior, now
+      callable.
+    - force=True (post self-heal fix, same script run): unconditional. The edit just
+      happened synchronously in THIS execution; Streamlit's own runOnSave watcher only
+      queues a rerun for AFTER this script call returns, so nothing else will purge
+      for us in time for an immediate same-run retry.
+    """
+    if not force and os.environ.get("DEV_AUTORELOAD", "1") != "1":
+        return False
+    sig = _project_code_mtime()
+    last = st.session_state.get("_code_sig")
+    changed = force or (last is not None and sig != last)
+    if changed:
+        watch_prefixes = tuple(os.path.join(_PROJECT_ROOT, d) for d in _WATCH_DIRS)
+        for name in list(sys.modules):
+            mod = sys.modules.get(name)
+            f = getattr(mod, "__file__", "") or ""
+            if f.startswith(watch_prefixes):
+                del sys.modules[name]
         st.cache_data.clear()
         st.cache_resource.clear()
         st.session_state.pop("automation", None)  # rebuild với class mới
-    st.session_state["_code_sig"] = _sig
+        if force:
+            # Rebind names already imported earlier in THIS script run so every
+            # existing call site elsewhere in app.py (bare `parse_command_to_json(...)`,
+            # `plan_cache.record_success(...)`, `BrickAutomation()`) picks up fresh code
+            # without needing to touch those call sites.
+            import importlib
+
+            _core = importlib.import_module("automation.core")
+            _brain = importlib.import_module("ai.brain")
+            _plan_cache_mod = importlib.import_module("ai.plan_cache")
+            globals()["BrickAutomation"] = _core.BrickAutomation
+            globals()["brain_module"] = _brain
+            globals()["parse_command_to_json"] = _brain.parse_command_to_json
+            globals()["save_scenario"] = _brain.save_scenario
+            globals()["load_scenarios"] = _brain.load_scenarios
+            globals()["delete_scenarios"] = _brain.delete_scenarios
+            globals()["plan_cache"] = _plan_cache_mod
+    st.session_state["_code_sig"] = sig
+    return changed
+
+
+_reload_project_modules(force=False)
 # ---------------------------------------------------------------------------
 
 from ai.brain import (
@@ -102,6 +137,14 @@ if "loaded_scenario_command" not in st.session_state:
     st.session_state.loaded_scenario_command = None
 if "loaded_scenario_plan" not in st.session_state:
     st.session_state.loaded_scenario_plan = None
+if "pve_fuzz_base_file_name" not in st.session_state:
+    st.session_state.pve_fuzz_base_file_name = None
+if "pve_fuzz_plan" not in st.session_state:
+    st.session_state.pve_fuzz_plan = None
+if "pve_fuzz_run_execution" not in st.session_state:
+    st.session_state.pve_fuzz_run_execution = False
+if "pve_fuzz_last_report" not in st.session_state:
+    st.session_state.pve_fuzz_last_report = None
 
 # --- SMOKE BRICK LIVE STATE ---
 if "smoke_run_execution" not in st.session_state:
@@ -142,6 +185,8 @@ if "smoke_use_golden" not in st.session_state:
     st.session_state.smoke_use_golden = True
 if "smoke_use_claude_haiku" not in st.session_state:
     st.session_state.smoke_use_claude_haiku = False
+if "smoke_self_heal_enabled" not in st.session_state:
+    st.session_state.smoke_self_heal_enabled = True
 if "smoke_running" not in st.session_state:
     st.session_state.smoke_running = False
 if "smoke_current_idx" not in st.session_state:
@@ -645,7 +690,11 @@ with col1:
 
     run_mode = st.radio(
         "Chọn chế độ",
-        ["AI Run (theo lệnh)", "Smoke Brick Live (theo CSV)"],
+        [
+            "AI Run (theo lệnh)",
+            "Smoke Brick Live (theo CSV)",
+            "🧪 PVE Book CSV Fuzz Test",
+        ],
         horizontal=True,
         index=0,
         key="run_mode",
@@ -875,6 +924,149 @@ with col1:
             ),
         )
 
+        st.checkbox(
+            "🩹 Self-heal khi FAIL/CRASH (chỉ áp dụng khi chạy 1 testcase/feature riêng lẻ)",
+            key="smoke_self_heal_enabled",
+            help=(
+                "Khi case FAIL/CRASH sau golden-retry (hoặc ngay từ đầu nếu không dùng "
+                "golden), gọi Claude Agent SDK tự đọc code, tìm root cause, sửa file "
+                "trong ai/ hoặc automation/, tự test lại trên browser hiện tại, rồi "
+                "chạy lại toàn bộ action plan. CHỈ áp dụng khi chạy 1 testcase hoặc 1 "
+                "feature riêng lẻ, KHÔNG áp dụng khi 'Chạy toàn bộ testcase' (tránh "
+                "agent chạy lặp hàng loạt case, tốn phí/thời gian)."
+            ),
+        )
+
+    # === PVE Book CSV Fuzz Test UI ===
+    elif run_mode == "🧪 PVE Book CSV Fuzz Test":
+        st.markdown("### 🧪 PVE Book CSV Fuzz Test")
+        st.caption(
+            "Sinh case fuzz cho Import Book CSV (Book ID / Chapter Number / Node / CSS Req List / "
+            "CSS Reward ID / CSS Reward Quantity / CSS RBE ID), upload từng case, đọc popup kết quả "
+            "và so sánh với expected — chạy độc lập, không đi qua AI."
+        )
+
+        pve_fuzz_uploaded_csv = st.file_uploader(
+            "Book CSV để fuzz test",
+            type=["csv"],
+            accept_multiple_files=False,
+            key="pve_fuzz_upload_csv",
+            help="Upload file Book CSV gốc (ví dụ 'Aug2026 Wk4 Standard Book.csv').",
+        )
+
+        if pve_fuzz_uploaded_csv is not None:
+            import time as _time_pve
+
+            _pve_fuzz_base_name = f"pve_book_fuzz_base_{int(_time_pve.time())}.csv"
+            try:
+                os.makedirs("downloads", exist_ok=True)
+                with open(os.path.join("downloads", _pve_fuzz_base_name), "wb") as f:
+                    f.write(pve_fuzz_uploaded_csv.getbuffer())
+                st.session_state.pve_fuzz_base_file_name = _pve_fuzz_base_name
+                st.success(f"Đã lưu: {_pve_fuzz_base_name}")
+            except Exception as e:
+                st.error(f"Không lưu được file upload: {str(e)[:200]}")
+
+        st.markdown("**Nhóm test case:**")
+        pve_fuzz_col1, pve_fuzz_col2, pve_fuzz_col3, pve_fuzz_col4 = st.columns(4)
+        with pve_fuzz_col1:
+            pve_fuzz_cat_structural = st.checkbox("Structural", value=True, key="pve_fuzz_cat_structural")
+        with pve_fuzz_col2:
+            pve_fuzz_cat_hierarchy = st.checkbox("Hierarchy", value=True, key="pve_fuzz_cat_hierarchy")
+        with pve_fuzz_col3:
+            pve_fuzz_cat_focus = st.checkbox("Focus-column", value=True, key="pve_fuzz_cat_focus")
+        with pve_fuzz_col4:
+            pve_fuzz_cat_business = st.checkbox(
+                "Business-replay",
+                value=True,
+                key="pve_fuzz_cat_business",
+                help=(
+                    "Tạo 1 Book test thật trong app rồi import-lại (thêm 1 lần, xoá bớt Chapter 1 "
+                    "lần) để tái hiện bug 'thiếu Chapter ID bị chặn khi import lại'."
+                ),
+            )
+
+        pve_fuzz_max_per_cat = st.number_input(
+            "Số case tối đa mỗi nhóm",
+            min_value=1,
+            max_value=30,
+            value=5,
+            step=1,
+            key="pve_fuzz_max_per_category",
+        )
+
+        pve_fuzz_dry_run = st.checkbox(
+            "🔍 Dry-run (chỉ sinh case offline, không mở browser)",
+            key="pve_fuzz_dry_run",
+            help="Sinh danh sách case + expected ngoài browser để soát logic trước — chạy live có thể chậm.",
+        )
+
+        pve_fuzz_run_btn = st.button(
+            "▶ Chạy Fuzz Test",
+            type="primary",
+            width='stretch',
+            disabled=not st.session_state.get("pve_fuzz_base_file_name"),
+        )
+
+        if pve_fuzz_run_btn:
+            _pve_fuzz_categories = []
+            if pve_fuzz_cat_structural:
+                _pve_fuzz_categories.append("structural")
+            if pve_fuzz_cat_hierarchy:
+                _pve_fuzz_categories.append("hierarchy")
+            if pve_fuzz_cat_focus:
+                _pve_fuzz_categories.append("focus_column")
+            if pve_fuzz_cat_business:
+                _pve_fuzz_categories.append("business_replay")
+
+            if pve_fuzz_dry_run:
+                try:
+                    from automation.smart_tester import PVEBookCSVFuzzer
+
+                    _pve_fuzz_full_path = os.path.join(
+                        "downloads", st.session_state.pve_fuzz_base_file_name
+                    )
+                    _pve_fuzz_df = pd.read_csv(_pve_fuzz_full_path, dtype=str).fillna("")
+                    _pve_fuzzer = PVEBookCSVFuzzer(_pve_fuzz_df)
+                    _offline_categories = [c for c in _pve_fuzz_categories if c != "business_replay"]
+                    _pve_fuzz_cases = _pve_fuzzer.generate_cases(
+                        _offline_categories, int(pve_fuzz_max_per_cat)
+                    )
+                    st.success(f"Đã sinh {len(_pve_fuzz_cases)} case (dry-run, chưa upload).")
+                    st.dataframe(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "Case": c["name"],
+                                    "Category": c["category"],
+                                    "Columns": ", ".join(c["columns_touched"]),
+                                    "Expected": c["expected"],
+                                    "Note": c.get("note", ""),
+                                }
+                                for c in _pve_fuzz_cases
+                            ]
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                except Exception as e:
+                    st.error(f"Lỗi sinh case: {str(e)[:300]}")
+            else:
+                st.session_state.pve_fuzz_plan = [
+                    {"action": "navigate", "target": ["Live Events", "PVE", "Classic PVE"]},
+                    {
+                        "action": "pve_book_fuzz_test",
+                        "target": "Import Book CSV",
+                        "value": st.session_state.pve_fuzz_base_file_name,
+                        "options": {
+                            "categories": _pve_fuzz_categories,
+                            "max_per_category": int(pve_fuzz_max_per_cat),
+                        },
+                    },
+                ]
+                st.session_state.pve_fuzz_run_execution = True
+                st.rerun()
+
 with col2:
     st.subheader("📂 Kịch bản đã lưu")
     saved_scenarios = load_scenarios()
@@ -1013,6 +1205,33 @@ if st.session_state.run_execution and st.session_state.current_plan:
         status.update(label="✅ Hoàn thành!", state="complete", expanded=False)
 
     st.session_state.run_execution = False
+    st.rerun()
+
+# --- XỬ LÝ SỰ KIỆN THỰC THI (PVE BOOK CSV FUZZ TEST) ---
+if st.session_state.pve_fuzz_run_execution and st.session_state.pve_fuzz_plan:
+    with st.status("🧪 Đang chạy PVE Book CSV Fuzz Test...", expanded=True) as status:
+        fuzz_log_placeholder = st.empty()
+
+        with StreamingLogCapture(fuzz_log_placeholder) as fuzz_log:
+            automation.pve_book_fuzz_report = None
+            fuzz_logs = automation.execute_action(st.session_state.pve_fuzz_plan)
+
+        st.session_state.pve_fuzz_last_report = getattr(automation, "pve_book_fuzz_report", None)
+
+        status.update(label="✅ Hoàn thành Fuzz Test!", state="complete", expanded=False)
+
+    # Mỗi mutation/case CSV tạm đã tự xoá ngay sau khi upload xong (try/finally
+    # trong pve_book_csv_fuzzer.py) — chỉ còn file gốc do người dùng upload là
+    # cần dọn ở đây, một lần, sau khi TOÀN BỘ campaign đã chạy xong.
+    _pve_fuzz_base_to_clean = st.session_state.get("pve_fuzz_base_file_name")
+    if _pve_fuzz_base_to_clean:
+        try:
+            os.remove(os.path.join("downloads", _pve_fuzz_base_to_clean))
+        except Exception:
+            pass
+        st.session_state.pve_fuzz_base_file_name = None
+
+    st.session_state.pve_fuzz_run_execution = False
     st.rerun()
 
 
@@ -1337,6 +1556,56 @@ if st.session_state.get("smoke_running", False) and not st.session_state.get("sm
                     except Exception as _retry_e:
                         status_str, note_detail = "CRASH", f"AI retry crashed: {str(_retry_e)[:200]}"
 
+                # === Self-heal (code-level) ===
+                # Golden-retry above only fixes bad AI-generated PLANS. If the case is
+                # still FAIL/CRASH, the bug may be in the automation CODE itself. Only
+                # for standalone single-testcase/single-feature runs (never the full-CSV
+                # run) — one attempt, no retry loop. A bug in this feature must never
+                # crash an otherwise-working smoke run, hence the broad except below.
+                try:
+                    _self_heal_enabled = st.session_state.get("smoke_self_heal_enabled", True)
+                    _scope_is_standalone = (
+                        st.session_state.smoke_scope_mode != "Chạy toàn bộ testcase"
+                    )
+                    if (
+                        _self_heal_enabled
+                        and _scope_is_standalone
+                        and str(status_str).strip().upper() in {"FAIL", "CRASH"}
+                    ):
+                        print(f"   🩹 Self-heal: {display_case[:60]} still {status_str}, invoking agent...")
+                        from ai.self_heal import build_failure_context, run_self_heal
+
+                        _fc = build_failure_context(
+                            feature=feature,
+                            testcase=testcase,
+                            case_command=case_command,
+                            action_plan=action_plan,
+                            report_logs=logs,
+                        )
+                        with st.status("🩺 Self-heal agent đang chẩn đoán...", expanded=False):
+                            _heal_result = run_self_heal(_fc, repo_root=_PROJECT_ROOT)
+                        if _heal_result.get("fixed"):
+                            _reload_project_modules(force=True)
+                            automation = BrickAutomation()
+                            st.session_state.automation = automation
+                            with st.status("🤖 Automation re-run sau self-heal...", expanded=False):
+                                with StreamingLogCapture(exec_log_placeholder) as exec_log:
+                                    logs = automation.execute_action(action_plan)
+                            status_str, note_detail = _extract_smoke_status_from_logs(logs)
+                            if status_str in {"PASS", "WARNING"}:
+                                note_detail = (
+                                    f"[Self-heal fixed: {_heal_result.get('summary', '')[:300]}] {note_detail}"
+                                )[:500]
+                            else:
+                                note_detail = (
+                                    f"[Self-heal claimed fix but re-run still {status_str}: "
+                                    f"{_heal_result.get('summary', '')[:250]}] {note_detail}"
+                                )[:500]
+                        else:
+                            note_detail = f"[Self-heal could not fix: {_heal_result.get('summary', '')[:400]}]"[:500]
+                except Exception as _heal_e:
+                    note_detail = f"{note_detail} [Self-heal internal error: {str(_heal_e)[:200]}]"[:500]
+
                 if feature and str(status_str).strip().upper() in {"PASS", "WARNING"}:
                     # Prefer the ID actually filled in the form (from action_plan update_form data)
                     # over the pre-generated generic ID.  This handles cases where _inject_generated_ids
@@ -1532,6 +1801,115 @@ if (
 
     except Exception as e:
         st.error(f"Lỗi hiển thị Smoke report: {e}")
+
+# --- HIỂN THỊ BẢNG KẾT QUẢ PVE BOOK CSV FUZZ TEST ---
+if (
+    st.session_state.run_mode == "🧪 PVE Book CSV Fuzz Test"
+    and st.session_state.pve_fuzz_last_report
+):
+    st.subheader("🧪 PVE Book CSV Fuzz Test — Báo cáo theo Category")
+    try:
+        df_fuzz = pd.DataFrame(st.session_state.pve_fuzz_last_report)
+
+        for col in ("case", "category", "columns_touched", "expected", "actual", "verdict", "note"):
+            if col not in df_fuzz.columns:
+                df_fuzz[col] = ""
+
+        status_col = "verdict"
+        total = len(df_fuzz)
+        pass_count = df_fuzz[status_col].astype(str).str.upper().eq("PASS").sum()
+        fail_count = df_fuzz[status_col].astype(str).str.upper().eq("FAIL").sum()
+        warning_count = df_fuzz[status_col].astype(str).str.upper().eq("WARNING").sum()
+        info_count = df_fuzz[status_col].astype(str).str.upper().eq("INFO").sum()
+
+        col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
+        with col_stat1:
+            st.metric("Tổng số case", total)
+        with col_stat2:
+            st.metric("✅ PASS", pass_count)
+        with col_stat3:
+            st.metric("❌ FAIL", fail_count)
+        with col_stat4:
+            st.metric("⚠️ WARNING", warning_count)
+        with col_stat5:
+            st.metric("ℹ️ INFO", info_count)
+
+        if fail_count > 0:
+            st.error(f"🚨 Có {fail_count} case FAIL — xem chi tiết trong bảng/expander bên dưới.")
+
+        def color_highlight_pve_fuzz(val):
+            v = str(val).upper()
+            if v == "PASS":
+                color = "#28a745"
+            elif v == "WARNING":
+                color = "#ff8c00"
+            elif v == "FAIL":
+                color = "#dc3545"
+            elif v == "INFO":
+                color = "#6c757d"
+            else:
+                color = "black"
+            return f"color: {color}; font-weight: bold"
+
+        display_cols = ["case", "category", "columns_touched", "expected", "actual", "verdict", "note"]
+        rename_map = {
+            "case": "Case", "category": "Category", "columns_touched": "Columns Touched",
+            "expected": "Expected", "actual": "Actual", "verdict": "Verdict", "note": "Note",
+        }
+
+        st.markdown("**📌 Danh sách case (giao diện bảng):**")
+        st.dataframe(
+            df_fuzz[display_cols].rename(columns=rename_map).style.map(
+                color_highlight_pve_fuzz, subset=["Verdict"]
+            ),
+            width='stretch',
+            hide_index=True,
+        )
+
+        st.divider()
+        st.markdown("**📦 Breakdown theo Category:**")
+
+        category_order = []
+        seen_cat = set()
+        for c in df_fuzz["category"].astype(str).tolist():
+            c2 = (c or "").strip()
+            if c2 and c2 not in seen_cat:
+                seen_cat.add(c2)
+                category_order.append(c2)
+
+        for category in category_order:
+            df_c = df_fuzz[df_fuzz["category"].astype(str).eq(category)]
+            if df_c.empty:
+                continue
+
+            pass_c = df_c["verdict"].astype(str).str.upper().eq("PASS").sum()
+            warn_c = df_c["verdict"].astype(str).str.upper().eq("WARNING").sum()
+            fail_c = df_c["verdict"].astype(str).str.upper().eq("FAIL").sum()
+            info_c = df_c["verdict"].astype(str).str.upper().eq("INFO").sum()
+            total_c = len(df_c)
+
+            with st.expander(
+                f"Category: {category}  —  {pass_c} PASS / {warn_c} WARNING / {fail_c} FAIL / "
+                f"{info_c} INFO  (total {total_c})"
+            ):
+                st.dataframe(
+                    df_c[display_cols].rename(columns=rename_map).style.map(
+                        color_highlight_pve_fuzz, subset=["Verdict"]
+                    ),
+                    width='stretch',
+                    hide_index=True,
+                )
+
+        st.download_button(
+            label="⬇️ Tải PVE Book Fuzz report CSV",
+            data=df_fuzz[display_cols].rename(columns=rename_map).to_csv(index=False).encode("utf-8"),
+            file_name="pve_book_csv_fuzz_report.csv",
+            mime="text/csv",
+            width='stretch',
+        )
+
+    except Exception as e:
+        st.error(f"Lỗi hiển thị PVE Book Fuzz report: {e}")
 
 # --- HIỂN THỊ BẢNG KẾT QUẢ AI RUN ---
 if st.session_state.test_logs:

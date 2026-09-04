@@ -17,9 +17,12 @@ class FormSaveMixin:
         3. Hỗ trợ scope Modal.
         """
 
+        dialogs_seen = []
+
         def handle_dialog(dialog):
             try:
                 print(f"      🚨 Browser Alert detected: {dialog.message}")
+                dialogs_seen.append({"type": dialog.type, "message": dialog.message})
             except Exception:
                 pass
 
@@ -412,6 +415,28 @@ class FormSaveMixin:
                         network_error = error_detail
                 except Exception as read_err:
                     print(f"      ⚠️ Could not read network capture: {read_err}")
+                    all_responses = []
+
+                # [BUG FIX] A native browser dialog (alert/confirm) firing on the
+                # Save click is NOT normal app behavior here — every real save/
+                # error/confirm flow in this app uses SweetAlert2 popups or
+                # Bootstrap modals, never window.alert()/confirm(). When Playwright
+                # auto-accepts one of these, the site's click handler can abort
+                # BEFORE ever making its AJAX save call — which looks IDENTICAL to
+                # "nothing to report" (no network error, no popup, no toast) and
+                # previously fell through to _wait_after_save's default-success
+                # fallback, silently reporting a save that never happened. Treat
+                # "dialog fired + zero network responses" as a hard failure
+                # instead of letting it default-pass.
+                if dialogs_seen and not all_responses and not network_error:
+                    dlg = dialogs_seen[0]
+                    error_detail = (
+                        f"Unexpected browser {dlg['type']} dialog fired on Save click "
+                        f"(message={dlg['message']!r}) and NO save request was sent "
+                        f"(0 network responses captured) — save was likely aborted."
+                    )
+                    print(f"      ❌ {error_detail}")
+                    network_error = error_detail
 
                 # Cleanup interceptor
                 try:

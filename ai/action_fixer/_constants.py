@@ -180,10 +180,21 @@ NAVIGATION_PATH_MAP = {
     # Moment Poster
     "moment poster": ["Live Events", "Moment Poster", "Moment Poster"],
     # PVE
-    "pve": ["Live Events", "PVE", "Classic PVE"],
-    "chapter": ["Live Events", "PVE", "Chapter"],
-    "book": ["Live Events", "PVE", "Book"],
-    "book pool": ["Live Events", "PVE", "Book Pool"],
+    "pve": ["Live Events", "PVE", "Standard PVE", "PVE"],
+    # UI renamed "Classic PVE" -> "Standard PVE"; keep this alias so any plan
+    # (AI hallucination from stale training data, or a cached golden plan) that
+    # still emits the old literal "Classic PVE" gets normalized to the real
+    # current sidebar label via _resolve_navigation_paths CASE 3 (canonical fix).
+    "classic pve": ["Live Events", "PVE", "Standard PVE", "PVE"],
+    # AI naturally generates a path ending in "Standard PVE" (the on-screen
+    # label it navigates through) since that's now the 3rd breadcrumb level —
+    # but the real leaf list page is one level deeper ("PVE"). Without this
+    # key, CASE 3's path[-1] lookup finds nothing and the 3-element path is
+    # left as-is, so navigation stops one level short.
+    "standard pve": ["Live Events", "PVE", "Standard PVE", "PVE"],
+    "chapter": ["Live Events", "PVE", "Stipulation", "Chapter"],
+    "book": ["Live Events", "PVE", "Stipulation", "Book"],
+    "book pool": ["Live Events", "PVE", "Stipulation", "Book Pool"],
     # Hyper Blueprint
     "hyper blueprint": ["Live Events", "Hyper Blueprint", "Hyper Blueprint"],
     # === Data Configs ===
@@ -219,6 +230,7 @@ NAVIGATION_PATH_MAP = {
     "titan takeover boss": ["Live Events", "Titan Takeover", "Boss"],
     "tactics event config": ["Live Events", "Tactics", "Event Config"],
     "tactics boss config": ["Live Events", "Tactics", "Boss Config"],
+    "subscription": ["Data Configs", "Subscription", "Subscription 1.5"],
 }
 
 

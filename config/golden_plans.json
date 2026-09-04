@@ -43,6 +43,8 @@
     "step_count": 8,
     "uses_unique": true,
     "uses_last": false,
+    "uses_today_iso": true,
+    "uses_today_mdy": false,
     "saved_at": "2026-07-21T14:39:46",
     "template": [
       {
@@ -77,7 +79,7 @@
           "Event Name": "!!BUTTON_CANCEL",
           "Event Description": "!!BUTTON_CANCEL",
           "Event Marquee Text": "!!BUTTON_CANCEL",
-          "Schedule in UTC": "2026-05-22 00:00, 2026-07-21 11:00",
+          "Schedule in UTC": "2026-05-22 00:00, {{TODAY_ISO}} 11:00",
           "Preview Time": "3600",
           "Expired Time": "3600",
           "Event Icon": "RBE_Icon_Generic",
@@ -85,100 +87,6 @@
           "Event Sidebar Icon": "RBE_Icon_Generic",
           "Gradient Image": "RBE_banner_1_purple",
           "Point Currency": "PointCurrency_QuanVM_LiveopsTest_RBE_1"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "rbe||create/edit the contest superstars then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab contest superstars -> bấm vào add event -> bấm vào pvp -> sửa event id: vs_tournament_may2026_hieunm_1205 -> bấm vào define schedules -> bấm vào add schedule, start time: 2026-05-18 19:00, end time: {{today_iso}} 11:00 -> save -> sửa condition: win against any rarity -> bấm vào add css -> enter superstars or groups: body_oosbourne, attempt: 10000, amount: 1000 -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Create/Edit the Contest Superstars then Save",
-    "step_count": 17,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-21T14:49:04",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE",
-          "RBE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Hide LiveopsTest gate items checkbox": "false"
-        }
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Contest Superstars"
-      },
-      {
-        "action": "click",
-        "target": "Add Event"
-      },
-      {
-        "action": "click",
-        "target": "PVP"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Event ID": "VS_Tournament_May2026_hieunm_1205"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Define Schedules"
-      },
-      {
-        "action": "click",
-        "target": "Add Schedule"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Start Time": "2026-05-22 00:00",
-          "End Time": "2026-07-21 11:00"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Condition": "Win against any rarity"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Add CSS"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Superstars or Groups": "Body_OOsbourne",
-          "Attempt": "10000",
-          "Amount": "1000"
         }
       },
       {
@@ -246,64 +154,12 @@
       }
     ]
   },
-  "rbe||import/export tasks: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> export csv file task_test.csv -> import csv -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Import/Export Tasks",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-21T16:21:41",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE",
-          "RBE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Hide LiveopsTest gate items checkbox": "false"
-        }
-      },
-      {
-        "action": "edit_row",
-        "target": "hieunm_test_20260721_143633_7eb7b5"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Tasks"
-      },
-      {
-        "action": "download",
-        "target": "Export CSV",
-        "value": "task_test.csv"
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV",
-        "value": "task_test.csv"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
   "rbe||import/export leaderboards: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab leaderboards -> export csv file leaderboard_test.csv -> import csv -> save -> bấm vào logo the brick": {
     "feature": "RBE",
     "label": "Import/Export Leaderboards",
     "step_count": 9,
     "uses_unique": false,
-    "uses_last": false,
+    "uses_last": true,
     "saved_at": "2026-07-21T16:25:27",
     "template": [
       {
@@ -322,7 +178,7 @@
       },
       {
         "action": "edit_row",
-        "target": "hieunm_test_20260721_143633_7eb7b5"
+        "target": "{{LAST_ID}}"
       },
       {
         "action": "wait"
@@ -343,209 +199,6 @@
       },
       {
         "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "rbe||import/export milestones: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab milestones -> export csv file milestone_test.csv -> import csv -> save -> bấm vào logo the brick": {
-    "feature": "RBE",
-    "label": "Import/Export Milestones",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-21T16:27:40",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "RBE",
-          "RBE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Hide LiveopsTest gate items checkbox": "false"
-        }
-      },
-      {
-        "action": "edit_row",
-        "target": "hieunm_test_20260721_143633_7eb7b5"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Milestones"
-      },
-      {
-        "action": "download",
-        "target": "Export CSV",
-        "value": "milestone_test.csv"
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV",
-        "value": "milestone_test.csv"
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||search for a pve book: vào pve -> filter 1 id bất kỳ -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Search for a PVE Book",
-    "step_count": 4,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-27T09:41:38",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "ID contains": "RANDOM"
-        }
-      },
-      {
-        "action": "click",
-        "target": "Filter Data"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||clone the pve: vào pve -> clone 1 id contain ltpve bất kỳ -> sửa book name: hãy tự generate một id duy nhất bắt đầu bằng ltpve_hieunm_test -> bấm vào nút create book and open in v2 -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Clone the PVE",
-    "step_count": 5,
-    "uses_unique": true,
-    "uses_last": false,
-    "saved_at": "2026-07-27T09:43:16",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "clone_row",
-        "target": "ltpve"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Book Name": "{{UNIQUE_ID}}"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "clone"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||edit the book info and save: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào tab book information -> sửa book texture icon: engagement_pve_aug2025_wkend4 -> bấm vào nút save book info -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Edit the Book Info and Save",
-    "step_count": 7,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-27T09:44:50",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Book Information"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Book Texture Icon": "Engagement_PVE_Aug2025_Wkend4"
-        }
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||edit the chapter (schedule, loadout, rewards) then save: vào pve -> sửa id vừa clone -> đợi trang load -> sửa gate trong chapter info: liveopstest, start time: 04/27/2026, 19:00, end time: {{today_mdy}}, 11:00 -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Edit the Chapter (Schedule, Loadout, Rewards) then Save",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-27T09:48:05",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Gate": "LiveOpsTest",
-          "Start time": "04/27/2026, 19:00",
-          "End Time": "07/27/2026, 11:00"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
       },
       {
         "action": "process_deployment",
@@ -577,33 +230,6 @@
       {
         "action": "download",
         "target": "Export CSV",
-        "value": "Book_test.csv"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||import the book csv: vào pve -> import csv file book_test.csv -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Import the Book CSV",
-    "step_count": 3,
-    "uses_unique": false,
-    "uses_last": false,
-    "saved_at": "2026-07-27T09:49:13",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "upload",
-        "target": "Import CSV",
         "value": "Book_test.csv"
       },
       {
@@ -926,6 +552,8 @@
     "step_count": 11,
     "uses_unique": false,
     "uses_last": true,
+    "uses_today_iso": true,
+    "uses_today_mdy": false,
     "saved_at": "2026-07-27T11:39:37",
     "template": [
       {
@@ -946,7 +574,7 @@
       {
         "action": "update_form",
         "data": {
-          "Schedule in UTC": "2025-12-12 20:00:00, 2026-07-27 11:00:00"
+          "Schedule in UTC": "2025-12-12 20:00:00, {{TODAY_ISO}} 11:00:00"
         }
       },
       {
@@ -1032,13 +660,372 @@
       }
     ]
   },
+  "rbe||edit an rbe (tasks, ms, lb) then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> xóa tất cả các task -> bấm vào add new task -> sửa task 2: condition: win, league min: 7, league max: 24, attempt: 7, default score: 250, is hidden: on, accumulated: off, complete type 1: pvp:pvp, complete type 2: superstar:ss_oosbourne_ozzy, complete type 3: event_id:fqa_tournamentsd_test_hieunm, condition description: !!r44_task_win_descript, link end time: {{today_mdy}} 11:00, link start time: 2026-07-20 01:00:00 -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Edit an RBE (Tasks, MS, LB) then Save",
+    "step_count": 10,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": true,
+    "saved_at": "2026-08-06T14:56:18",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE",
+          "RBE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Hide LiveopsTest gate items checkbox": "false"
+        }
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Tasks"
+      },
+      {
+        "action": "delete_all_tasks"
+      },
+      {
+        "action": "click",
+        "target": "Add New Task"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Task 2 Condition": "win",
+          "Task 2 League Min": "7",
+          "Task 2 League Max": "24",
+          "Task 2 Attempt": "7",
+          "Task 2 Default Score": "250",
+          "Task 2 Is hidden": "on",
+          "Task 2 Accumulated": "off",
+          "Task 2 Complete Type 1": "PVP:PVP",
+          "Task 2 Complete Type 2": "superstar:SS_OOsbourne_Ozzy",
+          "Task 2 Complete Type 3": "event_id:FQA_TournamentSD_Test_HieuNM",
+          "Task 2 Condition Description": "!!R44_TASK_WIN_DESCRIPT",
+          "Task 2 Link End Time": "{{TODAY_MDY}} 11:00",
+          "Task 2 Link Start Time": "2026-07-20 01:00:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "rbe||import/export tasks: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> export csv file task_test.csv -> import csv -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Import/Export Tasks",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "saved_at": "2026-08-06T14:58:03",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE",
+          "RBE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Hide LiveopsTest gate items checkbox": "false"
+        }
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Tasks"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "task_test.csv"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "task_test.csv"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "rbe||import/export milestones: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab milestones -> export csv file milestone_test.csv -> import csv -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Import/Export Milestones",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-10T10:46:12",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE",
+          "RBE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Hide LiveopsTest gate items checkbox": "false"
+        }
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Milestones"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "milestone_test.csv"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "milestone_test.csv"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "rbe||create/edit the contest superstars then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab contest superstars -> bấm vào add event -> bấm vào pvp -> sửa event id: vs_tournament_may2026_hieunm_1205 -> bấm vào define schedules -> bấm vào add schedule, start time: 2026-05-18 19:00, end time: {{today_iso}} 11:00 -> save -> sửa condition: win against any rarity -> bấm vào add css -> enter superstars or groups: body_oosbourne, attempt: 10000, amount: 1000 -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Create/Edit the Contest Superstars then Save",
+    "step_count": 17,
+    "uses_unique": false,
+    "uses_last": false,
+    "uses_today_iso": true,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-10T10:58:47",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE",
+          "RBE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Hide LiveopsTest gate items checkbox": "false"
+        }
+      },
+      {
+        "action": "edit_row",
+        "target": "hieunm_test_08101038_d4c0"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Contest Superstars"
+      },
+      {
+        "action": "click",
+        "target": "Add Event"
+      },
+      {
+        "action": "click",
+        "target": "PVP"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Event ID": "VS_Tournament_May2026_hieunm_1205"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Define Schedules"
+      },
+      {
+        "action": "click",
+        "target": "Add Schedule"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Start Time": "2026-05-18 19:00",
+          "End Time": "{{TODAY_ISO}} 11:00"
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Condition": "Win against any rarity"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Add CSS"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Superstars or Groups": "Body_OOsbourne",
+          "Attempt": "10000",
+          "Amount": "1000"
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "rbe||edit an rbe (tasks, ms, lb) then save: vào rbe -> bỏ chọn checkbox hide liveopstest gate items -> sửa id vừa clone -> đợi trang load -> bấm vào tab tasks -> xóa tất cả các task -> bấm vào add new task -> sửa task 2: condition: win, league min: 7, league max: 24, attempt: 7, default score: 250, is hidden: on, accumulated: off, complete type 1: pvp:pvp, complete type 2: superstar:ss_oosbourne_ozzy, complete type 3: event_id:fqa_tournamentsd_test_hieunm, condition description: !!r44_task_win_descript, link end time: {{today_mdy}} 11:00, link start time: 2026-07-20 01:00:00 -> -> bấm vào add new task -> sửa task 3: condition: signpost, league min: 7, league max: 24, accumulated: off, link: whiplash://dat.action.quests/ltpve_hieunm_2605_1/ltpve_hieunm_2605_1_1, condition description: !!r44_task_win_descript, link end time: {{today_mdy}} 11:00, link start time: 2026-07-20 01:00:00 -> save -> bấm vào logo the brick": {
+    "feature": "RBE",
+    "label": "Edit an RBE (Tasks, MS, LB) then Save",
+    "step_count": 12,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": true,
+    "saved_at": "2026-08-10T17:42:01",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "RBE",
+          "RBE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Hide LiveopsTest gate items checkbox": "false"
+        }
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Tasks"
+      },
+      {
+        "action": "delete_all_tasks"
+      },
+      {
+        "action": "click",
+        "target": "Add New Task"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Task 2 Condition": "win",
+          "Task 2 League Min": "7",
+          "Task 2 League Max": "24",
+          "Task 2 Attempt": "7",
+          "Task 2 Default Score": "250",
+          "Task 2 Is hidden": "on",
+          "Task 2 Accumulated": "off",
+          "Task 2 Complete Type 1": "PVP:PVP",
+          "Task 2 Complete Type 2": "superstar:SS_OOsbourne_Ozzy",
+          "Task 2 Complete Type 3": "event_id:FQA_TournamentSD_Test_HieuNM",
+          "Task 2 Condition Description": "!!R44_TASK_WIN_DESCRIPT",
+          "Task 2 Link End Time": "{{TODAY_MDY}} 11:00",
+          "Task 2 Link Start Time": "2026-07-20 01:00:00"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Add New Task"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Task 3 Condition": "Signpost",
+          "Task 3 League Min": "7",
+          "Task 3 League Max": "24",
+          "Task 3 Accumulated": "off",
+          "Task 3 Link": "whiplash://dat.Action.quests/LTPVE_HieuNM_2605_1/LTPVE_HieuNM_2605_1_1",
+          "Task 3 Condition Description": "!!R44_TASK_WIN_DESCRIPT",
+          "Task 3 Link End Time": "{{TODAY_MDY}} 11:00",
+          "Task 3 Link Start Time": "2026-07-20 01:00:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
   "gacha||create the gacha event: vào gacha event -> bấm vào nút add new gacha -> đợi trang load -> sửa gate: liveopstest, eventid: hãy tự generate một id duy nhất bằng đầu bằng hieunm_test, schedule in utc: 2026-07-27 01:00:00, {{today_iso}} 11:00:00, currency: gachashard_jul2026_wknd4_main, cost: 100, priority: 2 -> save -> bấm vào tab display info -> sửa display name: !!button_cantuse, description: !!button_cantuse, loot table description: !!button_cantuse, gacha art: gacha_medium_armory_moments_june2026, gacha prefap: frontend_gacha_medium, top banner texture: gachaback_premium -> save -> bấm vào tab gacha pool -> import csv file gacha_pools_test.csv -> save -> bấm vào tab gacha weight -> import csv file gacha_weight_test.csv -> save -> bấm vào tab bonus items -> save -> bấm vào logo the brick": {
     "feature": "Gacha",
     "label": "Create the Gacha Event",
     "step_count": 19,
     "uses_unique": true,
     "uses_last": false,
-    "saved_at": "2026-07-27T17:47:50",
+    "uses_today_iso": true,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-19T16:05:09",
     "template": [
       {
         "action": "navigate",
@@ -1059,8 +1046,8 @@
         "action": "update_form",
         "data": {
           "Gate": "LiveOpsTest",
-          "Event ID": "{{UNIQUE_ID}}",
-          "Schedule in UTC": "2026-07-27 01:00:00, 2026-07-27 11:00:00",
+          "EventID": "{{UNIQUE_ID}}",
+          "Schedule in UTC": "2026-07-27 01:00:00, {{TODAY_ISO}} 11:00:00",
           "Currency": "GachaShard_Jul2026_wknd4_Main",
           "Cost": "100",
           "Priority": "2"
@@ -1134,6 +1121,284 @@
       {
         "action": "save_form",
         "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "gacha||import the gacha weight csv: vào gacha event -> sửa id vừa clone -> đợi trang load -> bấm vào tab gacha weight -> đợi trang load -> export csv file gacha_weight_test.csv -> import csv file gacha_weight_test.csv -> save -> bấm vào logo the brick": {
+    "feature": "Gacha",
+    "label": "Import the Gacha Weight CSV",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-19T16:11:03",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "Gacha Event",
+          "Gacha Event"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Gacha Weight"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "gacha_weight_test.csv"
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "gacha_weight_test.csv"
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "gacha||deploy and view diff: bấm vào logo the brick -> chọn checkbox gacha events -> process": {
+    "feature": "Gacha",
+    "label": "Deploy and view diff",
+    "step_count": 1,
+    "uses_unique": false,
+    "uses_last": false,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-19T16:11:12",
+    "template": [
+      {
+        "action": "process_deployment",
+        "options": [
+          "Gacha Events"
+        ]
+      }
+    ]
+  },
+  "pve||search for a pve book: vào pve -> filter 1 id bất kỳ -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Search for a PVE Book",
+    "step_count": 4,
+    "uses_unique": false,
+    "uses_last": false,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-24T16:37:59",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "ID contains": "RANDOM"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Filter Data"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||clone the pve: vào pve -> clone 1 id contain ltpve bất kỳ -> sửa book name: hãy tự generate một id duy nhất bắt đầu bằng ltpve_hieunm_test -> bấm vào nút create book and open in v2 -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Clone the PVE",
+    "step_count": 5,
+    "uses_unique": true,
+    "uses_last": false,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-24T16:44:48",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "clone_row",
+        "target": "ltpve"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Book Name": "{{UNIQUE_ID}}"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "clone"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||edit the book info and save: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào tab book information -> sửa book texture icon: engagement_pve_aug2025_wkend4 -> bấm vào nút save book info -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Edit the Book Info and Save",
+    "step_count": 7,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-24T17:10:04",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Book Information"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Book Texture Icon": "Engagement_PVE_Aug2025_Wkend4"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||edit the chapter (schedule, loadout, rewards) then save: vào pve -> sửa id vừa clone -> đợi trang load -> sửa gate trong chapter info: liveopstest, start time: 04/27/2026, 19:00, end time: {{today_mdy}}, 11:00 -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Edit the Chapter (Schedule, Loadout, Rewards) then Save",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": true,
+    "saved_at": "2026-08-24T17:11:55",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Gate": "LiveOpsTest",
+          "Start time": "04/27/2026, 19:00",
+          "End Time": "{{TODAY_MDY}}, 11:00"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||export the book csv: vào pve -> chọn 2 id contain ltpve bất kỳ -> export csv file book_test.csv -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Export the Book CSV",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": false,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-08-24T17:12:43",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "ID contains": "LTPVE"
+        }
+      },
+      {
+        "action": "click",
+        "target": "Filter Data"
+      },
+      {
+        "action": "checkbox",
+        "target": "ID",
+        "value": "random_2"
+      },
+      {
+        "action": "download",
+        "target": "Export CSV",
+        "value": "Book_test.csv"
       },
       {
         "action": "process_deployment",

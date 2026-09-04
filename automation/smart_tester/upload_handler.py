@@ -205,9 +205,25 @@ class UploadHandlerMixin:
         Returns (success, msg, None) if this pattern was found and handled
         to completion, or None if the pattern isn't present at all (caller
         falls back to the generic upload logic below, completely unchanged).
+
+        [FIX 2026-08] Native-chooser branch (Gacha Pool/Weight) used to treat
+        "no popup detected" as automatic success with ZERO verification —
+        confirmed live via "Create the Gacha Event" smoke run: Gacha Pool's
+        import click was reported PASS while the Gacha Pool table stayed
+        completely empty (the click/file-set never actually reached the
+        server). A raw CDP network capture (same technique already used by
+        the generic `_upload_fuzz_fast` path for RBE Milestones/Leaderboards)
+        is now started before the trigger click and checked as ground truth:
+        the native-chooser branch only reports PASS when the import
+        POST/PUT/PATCH actually returned 2xx, and reports FAIL (not a guessed
+        PASS) when neither a popup nor a successful network response was ever
+        observed. The Bootstrap-modal branch (Currency) is left exactly as
+        before — it already has a reliable popup/modal-closed signal and
+        wasn't the reported bug.
         """
         modal = None
         chooser_handled = False
+        _net_cdp, _net_state = self._start_upload_network_capture(page)
         try:
             trigger = (
                 page.locator("button, a, [role='button']")
@@ -215,18 +231,39 @@ class UploadHandlerMixin:
                 .first
             )
             if trigger.count() == 0 or not trigger.is_visible(timeout=500):
+                self._stop_upload_network_capture(_net_cdp)
                 return None
 
             trigger.scroll_into_view_if_needed()
 
+            # How long to wait for a native chooser depends on which shape this is,
+            # and the shape is knowable UP FRONT: Currency's modal already exists in
+            # the DOM (hidden) before the trigger is clicked, Gacha's tabs have no
+            # such modal at all. Gacha's trigger only opens the chooser inside the
+            # callback of a pre-save ajax round-trip, so a 2s window can expire
+            # before the chooser appears — and then the un-intercepted native OS
+            # dialog blocks the entire run. Give the native shape a real window
+            # without making Currency pay for it.
             try:
-                with page.expect_file_chooser(timeout=2000) as fc_info:
+                has_modal_shape = (
+                    page.locator(".modal")
+                    .filter(has=page.locator("input[type='file']"))
+                    .filter(has_text=re.compile(r"import from csv", re.IGNORECASE))
+                    .count()
+                    > 0
+                )
+            except Exception:
+                has_modal_shape = False
+            chooser_timeout = 2500 if has_modal_shape else 20000
+
+            try:
+                with page.expect_file_chooser(timeout=chooser_timeout) as fc_info:
                     trigger.click(force=True)
                 fc_info.value.set_files(file_path)
                 chooser_handled = True
                 print("   🧾 [Import-From-CSV] Native file chooser intercepted & filled directly")
             except Exception:
-                pass  # no chooser within 2s -> genuine Bootstrap-modal pattern, handle below
+                pass  # no chooser -> genuine Bootstrap-modal pattern, handle below
 
             if not chooser_handled:
                 modal = (
@@ -251,12 +288,26 @@ class UploadHandlerMixin:
                 print("   🧾 [Import-From-CSV modal] Clicked modal 'Import' submit button")
         except Exception as e:
             print(f"   ℹ️ [Import-From-CSV] pattern not detected/failed to handle: {e}")
+            self._stop_upload_network_capture(_net_cdp)
             return None
 
-        # Shared post-submit result detection — same building blocks the
-        # generic path below uses (network idle, confirmation prompts, then
-        # the result-popup scanner), so classification stays consistent
-        # whether the file was fed via the native chooser or the modal input.
+        if chooser_handled:
+            # ── Native-chooser shape (Gacha Pool / Gacha Weight) ──────────────
+            # Enforce the full required sequence in one place:
+            #   file picked → wait for the ajax_import_* API response → success
+            #   popup (or Warning/Continue re-post round) → dismiss it → page
+            #   reloads → only then does the caller run Save / the next step.
+            # Deliberately does NOT go through _scan_for_result_popup here: that
+            # scanner reads the `.alert-success` growl this flow emits BEFORE the
+            # file is even picked ("Gacha pool has been saved, please select CSV
+            # file") and used to return PASS on it — the false PASS that left the
+            # Gacha Pool tab empty.
+            ok, msg = self._await_import_completion(page, _net_state)
+            self._stop_upload_network_capture(_net_cdp)
+            return (ok, msg, None)
+
+        # Shared post-submit result detection for the Bootstrap-modal shape
+        # (Currency) — unchanged: it already has a reliable modal-closed signal.
         try:
             page.wait_for_load_state("networkidle", timeout=60000)
         except Exception:
@@ -274,25 +325,34 @@ class UploadHandlerMixin:
         found, res_type, res_text = self._scan_for_result_popup(page)
         self._ensure_popup_closed(page)
         if found:
+            self._stop_upload_network_capture(_net_cdp)
             return (res_type == "PASS", str(res_text or "")[:100], None)
 
-        if not chooser_handled:
-            # The Bootstrap-modal style dismisses itself on a successful ajax
-            # submit, so a still-open modal signals the submit failed silently
-            # (client-side validation, network error, etc.) rather than being
-            # a silent success.
-            try:
-                still_open = modal.is_visible(timeout=500)
-            except Exception:
-                still_open = False
-            if still_open:
-                return (False, "Import modal still open after submit — likely failed", None)
-            return (True, "Import completed (modal closed, no popup)", None)
-
-        # Native-chooser style (Gacha Pool/Weight): no popup at all is the
-        # normal silent-success signal — same as the generic upload path's
-        # handling for these same pages.
-        return (True, "Import completed (native file input, no popup)", None)
+        # Bootstrap-modal shape only (the native-chooser shape returned above).
+        # This modal dismisses itself on a successful ajax submit, so a
+        # still-open modal signals the submit failed silently (client-side
+        # validation, network error, ...) rather than being a silent success.
+        # A captured response from the import ENDPOINT ITSELF still wins over
+        # that heuristic (matched by URL, so an unrelated POST in the same window
+        # can't flip the verdict — that is why this uses _latest_import_response
+        # rather than the looser _resolve_upload_network_outcome).
+        net = self._latest_import_response(_net_state)
+        self._stop_upload_network_capture(_net_cdp)
+        if net is not None:
+            status = net.get("status") or 0
+            detail = f"HTTP {status} {net.get('statusText', '')} - {str(net.get('url', ''))[:120]}"
+            print(
+                f"   🌐 [Import-From-CSV modal] Import API resolved outcome: "
+                f"{'PASS' if 200 <= status < 300 else 'FAIL'} — {detail}"
+            )
+            return (200 <= status < 300, detail, None)
+        try:
+            still_open = modal.is_visible(timeout=500)
+        except Exception:
+            still_open = False
+        if still_open:
+            return (False, "Import modal still open after submit — likely failed", None)
+        return (True, "Import completed (modal closed, no popup)", None)
 
     def _upload_fuzz_fast(self, page, target_text, file_name, cached_selector=None):
         """Optimized upload for fuzzing: 15s timeout, cached selector. Returns (success, msg, selector)"""
@@ -574,6 +634,26 @@ class UploadHandlerMixin:
             except Exception as e:
                 print(f"   ⚠️ JS injection failed: {e}")
 
+            # --- NETWORK-LEVEL RESULT CAPTURE ---
+            # DOM/popup scanning above is a guess (some pages never render a popup,
+            # or a UI bug can dismiss it before we read it — see the Milestones/
+            # Leaderboards case: a redundant click after set_input_files acts as a
+            # "click outside the swal2 popup", silently CANCELLING the confirm
+            # before any request fires). The HTTP response is ground truth for
+            # whether the import actually succeeded.
+            #
+            # form_save.py._save_form captures this via a page.evaluate() XHR/fetch
+            # monkey-patch (Playwright's page.on("response") doesn't fire over CDP
+            # connect_over_cdp). That technique does NOT work here: confirmed live
+            # that RBE Milestones/Leaderboards reload the page (full navigation) right
+            # after the import POST succeeds — navigation resets `window`, wiping out
+            # any page.evaluate()-injected patch before Python reads it back, so
+            # window.__x reads back as undefined even though the POST really
+            # happened and returned 200. Use a raw CDP Network-domain session instead
+            # (page.context.new_cdp_session) — its event stream is tracked at the
+            # protocol/target level and survives page navigation.
+            _net_cdp, _net_state = self._start_upload_network_capture(page)
+
             # 2. Upload File
             try:
                 if btn.get_attribute("type") == "file":
@@ -595,23 +675,47 @@ class UploadHandlerMixin:
                         fc_info.value.set_files(full_path)
                 time.sleep(0.3)  # Reduced from 0.5s
 
-                # If this is the Chapter Import UI, click the submit button after file is set
+                # If this is the Chapter Import UI, click the submit button after file is set.
+                # BUT: on some pages (RBE Milestones/Leaderboards) selecting the file
+                # ALREADY fires the 'change' handler that opens the swal2 "Are you
+                # sure?" confirm — there is no separate submit step there, the
+                # trigger button is purely a file-picker. Re-clicking it in that case
+                # dispatches a click that bubbles to document; SweetAlert2's
+                # allowOutsideClick listener sees a click outside `.swal2-popup` and
+                # silently CANCELS the confirm — no request ever fires, so there's no
+                # loading spinner and no result popup (confirmed live via CDP:
+                # popup appears ~20ms after set_input_files, then vanishes with 0
+                # network calls after the redundant click). Only click the submit
+                # button when a confirm/result popup is NOT already open — that's
+                # the genuine two-step shape (e.g. Chapter Import).
                 if "is_import_csv_ui" in locals() and is_import_csv_ui:
                     try:
-                        if (
-                            submit_import_btn
-                            and submit_import_btn.count() > 0
-                            and submit_import_btn.is_visible()
-                        ):
-                            submit_import_btn.click(force=True)
-                            print(
-                                "   🧾 [Chapter Import] Clicked submit button: Import CSV"
-                            )
-                            time.sleep(0.4)
-                    except Exception as _click_import_err:
-                        print(
-                            f"   ⚠️ [Chapter Import] Failed to click Import CSV button: {_click_import_err}"
+                        _popup_already_open = (
+                            page.locator(".swal2-popup:visible, .modal.show").count() > 0
                         )
+                    except Exception:
+                        _popup_already_open = False
+                    if _popup_already_open:
+                        print(
+                            "   ℹ️ Confirm/result popup already open after file select — "
+                            "skipping redundant submit click (single-step import UI)."
+                        )
+                    else:
+                        try:
+                            if (
+                                submit_import_btn
+                                and submit_import_btn.count() > 0
+                                and submit_import_btn.is_visible()
+                            ):
+                                submit_import_btn.click(force=True)
+                                print(
+                                    "   🧾 [Chapter Import] Clicked submit button: Import CSV"
+                                )
+                                time.sleep(0.4)
+                        except Exception as _click_import_err:
+                            print(
+                                f"   ⚠️ [Chapter Import] Failed to click Import CSV button: {_click_import_err}"
+                            )
 
                 # SweetAlert "Are you sure? / Yes, do it!" must be confirmed before result toasts
                 self._confirm_csv_overwrite_prompt_if_present(page)
@@ -626,6 +730,18 @@ class UploadHandlerMixin:
                     print("   ✅ Network idle — import finished.")
                 except Exception:
                     print("   ⚠️ Network idle timeout (60s), checking for result anyway...")
+
+                # Check the captured network response FIRST — it's ground truth,
+                # not a guess based on DOM text. HTTP 2xx on the import POST/PUT/PATCH
+                # means the server accepted it; 4xx/5xx means it didn't, regardless of
+                # whether any popup happened to render.
+                net_result = self._resolve_upload_network_outcome(_net_state)
+                self._stop_upload_network_capture(_net_cdp)
+                if net_result is not None:
+                    is_pass, msg = net_result
+                    print(f"   🌐 Network response resolved outcome: {'PASS' if is_pass else 'FAIL'} — {msg[:100]}")
+                    self._ensure_popup_closed(page)
+                    return (is_pass, msg, cached_selector)
 
                 # Check for explicit error/success popup that appeared during the wait
                 # (other features DO show a popup; Gacha Weight does not).
@@ -829,6 +945,7 @@ class UploadHandlerMixin:
                     time.sleep(0.05)  # 50ms intervals for faster detection
 
             except Exception as upload_err:
+                self._stop_upload_network_capture(_net_cdp)
                 self._ensure_popup_closed(page)
                 return False, f"Upload failed: {upload_err}", cached_selector
 
@@ -1019,8 +1136,451 @@ class UploadHandlerMixin:
             return False, "Timeout (60s)", cached_selector
 
         except Exception as e:
+            self._stop_upload_network_capture(locals().get("_net_cdp"))
             self._ensure_popup_closed(page)
             return False, str(e), cached_selector
+
+    def _start_upload_network_capture(self, page):
+        """Start a raw CDP Network-domain capture for the import POST/PUT/PATCH.
+
+        Deliberately NOT a page.evaluate() XHR/fetch monkey-patch (the technique
+        form_save.py._save_form uses) — confirmed live via CDP that RBE
+        Milestones/Leaderboards reload the whole page right after the import
+        POST succeeds. A page-injected JS patch lives in `window` and gets wiped
+        the instant that navigation happens, so by the time Python reads it back
+        the capture is empty even though the POST really returned 200. A CDP
+        session's event stream is tracked at the protocol/target level and
+        survives page navigation.
+
+        Returns (cdp_session_or_None, state_dict). state_dict is always a dict
+        (even on failure) so the caller can pass it to
+        _resolve_upload_network_outcome unconditionally.
+        """
+        state = {"methods": {}, "results": []}
+        try:
+            cdp = page.context.new_cdp_session(page)
+            cdp.send("Network.enable")
+
+            def _on_request(evt):
+                method = (evt.get("request", {}).get("method") or "").upper()
+                state["methods"][evt.get("requestId")] = method
+
+            def _on_response(evt):
+                method = state["methods"].get(evt.get("requestId"), "")
+                if method not in ("POST", "PUT", "PATCH"):
+                    return
+                resp = evt.get("response", {})
+                state["results"].append(
+                    {
+                        "method": method,
+                        "url": resp.get("url", ""),
+                        "status": resp.get("status"),
+                        "statusText": resp.get("statusText", ""),
+                    }
+                )
+
+            cdp.on("Network.requestWillBeSent", _on_request)
+            cdp.on("Network.responseReceived", _on_response)
+            return cdp, state
+        except Exception as e:
+            print(f"   ⚠️ Could not start CDP network capture: {e}")
+            return None, state
+
+    def _stop_upload_network_capture(self, cdp):
+        if cdp is None:
+            return
+        try:
+            cdp.detach()
+        except Exception:
+            pass
+
+    def _resolve_upload_network_outcome(self, net_state):
+        """Inspect responses captured by _start_upload_network_capture.
+
+        Returns (is_pass, msg), or None if nothing was captured (caller falls
+        back to DOM/popup scanning). HTTP 2xx is PASS, anything else is FAIL.
+
+        Confirmed live (RBE Milestones/Leaderboards): other incidental
+        POST calls (status polls, the post-import page reload — itself a POST
+        here, not the usual GET) can land in the same networkidle window as
+        the real import call. Prefer the response whose URL identifies it as
+        the import endpoint (Brick's convention: `import_<feature>_csv`) over
+        blindly taking the last POST, so an unrelated later call can't flip
+        the verdict.
+        """
+        results = (net_state or {}).get("results") or []
+        if not results:
+            return None
+
+        for r in results:
+            print(f"      📡 {r.get('method')} {r.get('status')} {str(r.get('url',''))[:100]}")
+
+        import_candidates = [r for r in results if "import" in str(r.get("url", "")).lower()]
+        chosen = import_candidates[-1] if import_candidates else results[-1]
+        status = chosen.get("status") or 0
+        detail = (
+            f"HTTP {status} {chosen.get('statusText','')} - "
+            f"{chosen.get('method','')} {str(chosen.get('url',''))[:150]}"
+        )
+        return (200 <= status < 300, detail)
+
+    # ------------------------------------------------------------------
+    # Import completion gate (Gacha Pool / Gacha Weight "Import from CSV")
+    # ------------------------------------------------------------------
+    # Required flow, dictated by the page's OWN JavaScript (read live from the
+    # jQuery handlers via `jQuery._data(el,'events')`, not guessed):
+    #
+    #   click "Import from CSV"
+    #     → growl "Saving gacha pool, please wait..."   (PROMPT, not a result)
+    #     → clicks the page's Save, and in that ajax callback:
+    #         growl "Gacha pool has been saved, please select CSV file" (PROMPT)
+    #         + opens the native file chooser
+    #   file picked → importGachaPool(formData, ignore_warning=false)
+    #     → loading() overlay + POST /wp_gacha/ajax_import_gacha_pool
+    #     → .done → Swal({title:"Gacha pool successfully imported", type:"success"})
+    #               .then(() => { window.onbeforeunload = function(){};
+    #                             location.reload(); })          ← THE reload
+    #     → .fail → handleImportCsvFail:
+    #         • responseText.error_detail → error Swal            ← real FAIL
+    #         • warnings && !ignoreWarning → Swal(type:"warning",
+    #             title:"Warning", confirmButtonText:"Continue")
+    #             → on Continue: importGachaPool(formData, TRUE) ← 2nd POST
+    #
+    # Two consequences the old code got wrong:
+    #  1. The success swal's confirm button is not cosmetic cleanup — clicking it
+    #     is what fires `location.reload()`. Skipping it (or closing the popup
+    #     generically) leaves the page showing STALE pre-import data, and the
+    #     next `save_form` step then submits that stale form back over the rows
+    #     that were just imported.
+    #  2. The "Warning" round arrives over HTTP 4xx. Treating the first non-2xx
+    #     import response as a final verdict aborts a file that would import
+    #     fine after clicking "Continue".
+    def _latest_import_response(self, net_state):
+        """Last captured POST/PUT/PATCH response that is actually the import
+        endpoint (Brick convention: `.../ajax_import_<feature>` /
+        `import_<feature>_csv`). Unrelated POSTs — the pre-save call this very
+        flow makes, status polls — must never decide the import verdict."""
+        results = (net_state or {}).get("results") or []
+        for r in reversed(results):
+            url = str(r.get("url", "")).lower()
+            if "import" in url or "upload" in url:
+                return r
+        return None
+
+    def _read_import_dialog(self, page):
+        """Snapshot the currently visible swal2 / Bootstrap result dialog.
+
+        Returns dict(kind, title, text, icon, confirmText, hasCancel) or None.
+        swal2 keeps ALL icon nodes in the DOM (display:none except the active
+        one), so icon detection must be visibility-gated — a plain
+        `querySelector('.swal2-success')` matches even on an error popup.
+        """
+        js = """
+        () => {
+          // NOTE: must NOT use `offsetParent !== null` here (the idiom used
+          // elsewhere in this repo). `.swal2-container` and `.modal.show` are
+          // `position: fixed`, and Chrome returns null for offsetParent on any
+          // fixed-position element — verified live — so that check reports every
+          // swal/modal as invisible and the reader would never see a dialog at
+          // all. Box-size + computed style works for fixed elements, and still
+          // filters swal2's display:none icon nodes.
+          const vis = el => {
+            if (!el) return false;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          };
+          const iconOf = (root) => {
+            for (const kind of ['success', 'error', 'warning', 'info', 'question']) {
+              if (vis(root.querySelector('.swal2-icon.swal2-' + kind))
+                  || vis(root.querySelector('.swal2-' + kind + ':not(.swal2-styled)'))) return kind;
+            }
+            return '';
+          };
+          const cont = document.querySelector('.swal2-container');
+          if (vis(cont)) {
+            const popup = cont.querySelector('.swal2-popup') || cont;
+            const titleEl = cont.querySelector('.swal2-title');
+            const confirm = cont.querySelector('button.swal2-confirm');
+            return {
+              kind: 'swal',
+              title: titleEl ? (titleEl.innerText || '').trim() : '',
+              text: (popup.innerText || '').trim().slice(0, 400),
+              icon: iconOf(cont),
+              confirmText: confirm ? (confirm.innerText || '').trim() : '',
+              hasCancel: !!vis(cont.querySelector('button.swal2-cancel')),
+            };
+          }
+          const modal = Array.from(document.querySelectorAll('.modal.show, .modal.in'))
+            .find(m => vis(m) && (m.innerText || '').trim()
+                    && !m.querySelector('input:not([type=hidden]), select, textarea'));
+          if (modal) {
+            const titleEl = modal.querySelector('.modal-title');
+            const btns = Array.from(modal.querySelectorAll('button, a')).filter(vis);
+            const confirm = btns.find(b => /^(continue|proceed|yes|ok)$/i.test((b.textContent || '').trim()));
+            return {
+              kind: 'modal',
+              title: titleEl ? (titleEl.innerText || '').trim() : '',
+              text: (modal.innerText || '').trim().slice(0, 400),
+              icon: '',
+              confirmText: confirm ? (confirm.textContent || '').trim() : '',
+              hasCancel: btns.some(b => /^(cancel|no|close)$/i.test((b.textContent || '').trim())),
+            };
+          }
+          return null;
+        }
+        """
+        try:
+            return page.evaluate(js)
+        except Exception:
+            return None
+
+    def _click_dialog_button(self, page, label=None):
+        """Click a button in the visible swal2/Bootstrap dialog via JS (survives
+        the swal2 backdrop that intercepts Playwright pointer events). Swallows
+        'execution context destroyed' — that exception means the click already
+        landed and triggered a navigation, i.e. success, not failure."""
+        js = """
+        (label) => {
+          // Same fixed-position caveat as _read_import_dialog: box-size based,
+          // because offsetParent is null for `position: fixed` swal/modal roots.
+          const vis = el => {
+            if (!el) return false;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          };
+          const pick = (root) => {
+            const btns = Array.from(root.querySelectorAll('button, a')).filter(vis);
+            if (label) {
+              const m = btns.find(b => (b.textContent || '').trim().toLowerCase()
+                                        === String(label).trim().toLowerCase());
+              if (m) return m;
+            }
+            return btns.find(b => b.classList.contains('swal2-confirm'))
+                || btns.find(b => /^(ok|continue|proceed|yes|close)$/i.test((b.textContent || '').trim()))
+                || btns[0];
+          };
+          const cont = document.querySelector('.swal2-container');
+          if (vis(cont)) { const b = pick(cont); if (b) { b.click(); return true; } }
+          const modal = Array.from(document.querySelectorAll('.modal.show, .modal.in')).find(vis);
+          if (modal) { const b = pick(modal); if (b) { b.click(); return true; } }
+          return false;
+        }
+        """
+        try:
+            return bool(page.evaluate(js, label))
+        except Exception:
+            return False
+
+    def _dismiss_success_and_wait_for_reload(self, page, timeout_ms=45000):
+        """Step "Popup success → Trang load lại" of the required flow.
+
+        Clicking the success dialog's confirm button is what runs the page's own
+        `location.reload()`. If no navigation follows (dialog already dismissed
+        by something else, or a feature that doesn't self-reload) the data IS
+        already persisted server-side — the only remaining risk is the caller
+        saving a stale form over it, so reload ourselves rather than continuing
+        on a stale DOM.
+        """
+        def _accept_dialog(dlg):
+            try:
+                dlg.accept()
+            except Exception:
+                pass
+
+        page.on("dialog", _accept_dialog)  # in case a beforeunload prompt fires
+        try:
+            navigated = False
+            try:
+                with page.expect_navigation(wait_until="load", timeout=timeout_ms):
+                    self._click_dialog_button(page)
+                navigated = True
+                print("   🔄 [Import] Page reloaded itself after the success dialog was dismissed")
+            except Exception:
+                pass
+
+            if not navigated:
+                try:
+                    self._ensure_popup_closed(page)
+                except Exception:
+                    pass
+                try:
+                    page.evaluate("window.onbeforeunload = null;")
+                except Exception:
+                    pass
+                try:
+                    page.reload(wait_until="load", timeout=timeout_ms)
+                    print("   🔄 [Import] No self-reload observed → forced page.reload() "
+                          "so the next step can't save a stale form over the imported rows")
+                except Exception as e:
+                    print(f"   ⚠️ [Import] Could not reload page after import: {e}")
+        finally:
+            try:
+                page.remove_listener("dialog", _accept_dialog)
+            except Exception:
+                pass
+
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+        if hasattr(self, "_wait_for_long_loading"):
+            try:
+                self._wait_for_long_loading(page, timeout_ms=30000)
+            except Exception:
+                pass
+        try:
+            page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        time.sleep(0.8)
+
+    def _await_import_completion(self, page, net_state, timeout_s=150):
+        """Block until the import is genuinely resolved, then return (ok, msg).
+
+        Implements: pick file → wait for the import API response → wait for the
+        success popup (handling the Warning/Continue re-post round) → dismiss it
+        → wait out the page reload. Only then may the caller run the next step.
+
+        Never reports PASS on silence: with no dialog and no import response we
+        have no evidence the CSV reached the server, which is exactly the false
+        PASS that left the Gacha Pool tab empty.
+        """
+        deadline = time.time() + timeout_s
+        # Grace windows (seconds) — how long to keep waiting for the swal that
+        # Brick renders in the ajax callback AFTER the response itself lands.
+        GRACE_AFTER_2XX = 6.0
+        GRACE_AFTER_ERR = 10.0
+        net_sig, net_since = None, None
+        warning_rounds = 0
+        logged_prompt = False
+
+        while time.time() < deadline:
+            net = self._latest_import_response(net_state)
+            if net is not None:
+                sig = (net.get("url"), net.get("status"), len((net_state or {}).get("results") or []))
+                if sig != net_sig:
+                    net_sig, net_since = sig, time.time()
+                    print(
+                        f"   📡 [Import] API {net.get('method')} {net.get('status')} "
+                        f"{str(net.get('url', ''))[:110]}"
+                    )
+
+            info = self._read_import_dialog(page)
+            if info:
+                title = str(info.get("title") or "")
+                text = str(info.get("text") or "")
+                icon = str(info.get("icon") or "")
+                confirm_text = str(info.get("confirmText") or "")
+                blob = f"{title} {text}".strip()
+
+                if self._is_pre_import_prompt_text(blob):
+                    if not logged_prompt:
+                        print(f"   ⏳ [Import] Prompt dialog (not a result), waiting: {blob[:70]}")
+                        logged_prompt = True
+                    time.sleep(0.3)
+                    continue
+
+                # A dialog that ASKS something is never the result. Two live
+                # examples in this very flow (Gacha Weight, verified): the
+                # pre-import "Are you sure? Importing data via csv overrides
+                # implemented data..." (type warning, confirm "Yes, do it!") and
+                # handleImportCsvFail's `warnings` round (title "Warning",
+                # confirm "Continue" → re-POSTs with ignore_warning=true).
+                # Detected structurally — an affirmative confirm button PLUS a
+                # cancel button (or a warning/question icon). A real result popup
+                # has only an OK/Close button, never a Cancel.
+                is_confirm_round = bool(
+                    re.match(r"^(continue|proceed|yes)", confirm_text.strip(), re.IGNORECASE)
+                ) and (
+                    icon in ("warning", "question")
+                    or bool(re.match(r"^\s*warning\b", title, re.IGNORECASE))
+                    or bool(info.get("hasCancel"))
+                )
+
+                if is_confirm_round and warning_rounds < 3:
+                    warning_rounds += 1
+                    print(
+                        f"   🟠 [Import] Confirm/warning round {warning_rounds} → clicking "
+                        f"'{confirm_text}' (proceeds / re-imports with ignore_warning=true): {text[:90]}"
+                    )
+                    self._click_dialog_button(page, confirm_text)
+                    net_sig, net_since = None, None  # a NEW import POST is coming
+                    time.sleep(0.8)
+                    if hasattr(self, "_wait_for_long_loading"):
+                        try:
+                            self._wait_for_long_loading(page, timeout_ms=30000)
+                        except Exception:
+                            pass
+                    continue
+
+                verdict = self._classify_popup_message(blob)
+                if icon == "success":
+                    verdict = "PASS"
+                elif icon == "error":
+                    verdict = "FAIL"
+
+                if verdict == "PASS":
+                    print(f"   ✅ [Import] Success dialog: {blob[:130]}")
+                    self._dismiss_success_and_wait_for_reload(page)
+                    return True, f"Import confirmed: {blob[:140]}"
+
+                if verdict == "FAIL":
+                    print(f"   ❌ [Import] Failure dialog: {blob[:180]}")
+                    try:
+                        self._ensure_popup_closed(page)
+                    except Exception:
+                        pass
+                    return False, f"❌ Import failed: {blob[:180]}"
+
+                # Unclassifiable dialog: only decide once the API has spoken.
+                if net is not None and not (200 <= (net.get("status") or 0) < 300):
+                    try:
+                        self._ensure_popup_closed(page)
+                    except Exception:
+                        pass
+                    return False, (
+                        f"❌ Import failed (HTTP {net.get('status')}): {blob[:150]}"
+                    )
+                time.sleep(0.3)
+                continue
+
+            # ── No dialog on screen ───────────────────────────────────────
+            if net is not None and net_since is not None:
+                status = net.get("status") or 0
+                waited = time.time() - net_since
+                if 200 <= status < 300:
+                    if waited >= GRACE_AFTER_2XX:
+                        # 2xx but the app never rendered a dialog (some tabs just
+                        # re-render). Data is persisted; still reload so the next
+                        # step works against fresh rows.
+                        print(
+                            f"   ✅ [Import] API returned HTTP {status} and no dialog appeared "
+                            f"within {GRACE_AFTER_2XX:.0f}s — treating as imported"
+                        )
+                        self._dismiss_success_and_wait_for_reload(page)
+                        return True, f"Import confirmed by API (HTTP {status})"
+                elif waited >= GRACE_AFTER_ERR:
+                    return False, (
+                        f"❌ Import failed: API returned HTTP {status} "
+                        f"{net.get('statusText', '')} and no confirmable popup appeared"
+                    )
+            time.sleep(0.3)
+
+        # Timed out. Do not guess PASS.
+        net = self._latest_import_response(net_state)
+        if net is not None and 200 <= (net.get("status") or 0) < 300:
+            print("   ⚠️ [Import] Timed out waiting for the success popup, but the import "
+                  "API returned 2xx — reloading and reporting PASS on the API evidence")
+            self._dismiss_success_and_wait_for_reload(page)
+            return True, f"Import confirmed by API (HTTP {net.get('status')}, popup never resolved)"
+        return False, (
+            f"❌ Import not confirmed within {timeout_s}s — no confirmation popup and no 2xx "
+            f"import API response was observed (the CSV may never have been submitted)"
+        )
 
     def _confirm_csv_overwrite_prompt_if_present(self, page, max_rounds=6):
         """
@@ -1198,8 +1758,16 @@ class UploadHandlerMixin:
                     page, target_btn_name or "Import CSV", real_file_name
                 )
 
-                # Safety net: message says success but classifier returned fail
-                if not success and self._classify_popup_message(msg) == "PASS":
+                # Safety net: message says success but classifier returned fail.
+                # Skipped for verdicts we already resolved from the import API +
+                # result dialog (prefixed "❌"): those messages legitimately quote
+                # the failing dialog / say "no success popup was observed", and
+                # keyword-reclassifying them would flip a proven FAIL to PASS.
+                if (
+                    not success
+                    and not str(msg or "").lstrip().startswith("❌")
+                    and self._classify_popup_message(msg) == "PASS"
+                ):
                     print(f"      🔧 Upload corrected to PASS from message: {msg[:80]}")
                     success = True
 

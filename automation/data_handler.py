@@ -5,6 +5,114 @@ import re
 from automation.constants import DOWNLOAD_DIR
 
 
+# ---------------------------------------------------------------------------
+# Per-run suffix chain handling (uniquify / apply_rename_map)
+# ---------------------------------------------------------------------------
+# The gacha pool/weight fixtures in downloads/ are rewritten IN PLACE every run
+# (there is no fresh export step for them), so `uniquify` used to append its
+# per-run suffix on top of the previous run's suffix, forever:
+#   GachaPool_Aug2026_wk3_FEATURED
+#     _hieunm_test_08191045_4176_0819105028_hieunm_test_08191056_c737_hieunm_test_08191121_0392
+# (118 chars after 3 runs — heading for the DB column limit, and unreadable in
+# the UI). Strip any previously-appended chain first, then append exactly one.
+#
+# The two chunk shapes are the two suffix generators in
+# action_fixer/deployment_fixers.py `_inject_gacha_pool_weight_uniquify`:
+# the run's unique_id (`_hieunm_test_<MMDDHHMM>_<4 hex>`) and its no-unique_id
+# fallback (a bare `_<MMDDHHMMSS>` timestamp).
+_BARE_TS_CHUNK = r"_\d{8,14}"
+
+
+def _suffix_chunk_regex(suffix):
+    """Regex source matching ONE appended suffix chunk, derived STRUCTURALLY from
+    `suffix` itself: literal words stay literal, digit/hex runs are generalized
+    so a chunk from an earlier run (different timestamp) still matches. Keeping
+    the literal words ("hieunm_test") is what makes stripping safe — it can't
+    chew into a real pool name."""
+    tokens = [t for t in re.split(r"[_\s]+", str(suffix or "")) if t]
+    if not tokens:
+        return None
+    # No literal word to anchor on (e.g. the bare `_MMDDHHMMSS` fallback suffix
+    # from action_fixer) → every token would be a generalized digit/hex class,
+    # which is indistinguishable from a real trailing name segment like
+    # "GachaPool_20260819". Refuse to strip rather than corrupt the name; that
+    # path just keeps the old append-only behaviour.
+    if all(re.fullmatch(r"[0-9a-fA-F]+", t) for t in tokens):
+        return None
+    parts = []
+    for t in tokens:
+        if re.fullmatch(r"[0-9a-fA-F]+", t):
+            # Hex-permissive even for all-digit tokens: the unique_id's 4-char
+            # random tail is hex, so THIS run's copy can be "0392" while an
+            # earlier run's was "c737". A digits-only class here would fail to
+            # match that earlier chunk and abort the strip loop mid-chain.
+            parts.append(r"[0-9a-fA-F]{%d,%d}" % (max(1, len(t) - 4), len(t) + 6))
+        else:
+            parts.append(re.escape(t))
+    return r"_" + r"_".join(parts)
+
+
+def _chain_regex(chunk_regex):
+    """One or more consecutive appended chunks (structural or bare timestamp)."""
+    return r"(?:(?:" + chunk_regex + r")|(?:" + _BARE_TS_CHUNK + r"))+"
+
+
+def _drifted_name_regex(base, chunk_regex):
+    """Regex matching `base` even when a run-suffix chain has been spliced in at
+    ANY `_` boundary, not just appended at the end.
+
+    Needed because an older (pre-longest-first) apply_rename_map replaced the
+    shorter name inside the longer one, leaving the companion file with e.g.
+    `GachaPool_..._FEATURED_hieunm_test_08191045_4176_SHARDS_EXTRA` — the chain
+    sits in the MIDDLE. Every base token stays literal, so this can only match a
+    real occurrence of the base with chain noise around its joints.
+    """
+    if not base or not chunk_regex:
+        return None
+    tokens = [t for t in str(base).split("_") if t]
+    if not tokens:
+        return None
+    chain = _chain_regex(chunk_regex)
+    parts = [re.escape(tokens[0])]
+    for t in tokens[1:]:
+        parts.append(r"(?:" + chain + r")?_" + re.escape(t))
+    # Trailing chain optional; the lookahead stops a shorter name from matching
+    # inside a longer sibling (…_FEATURED must not match …_FEATURED_SHARDS_EXTRA).
+    return "".join(parts) + r"(?:" + chain + r")?(?![A-Za-z0-9_])"
+
+
+def _strip_run_suffixes(value, chunk_regex, max_chunks=12):
+    """Remove a trailing chain of previously-appended run suffixes from `value`.
+
+    A bare-timestamp chunk is only stripped when a structural chunk sits
+    immediately before it — that is how the observed garbage chains are built,
+    and it means a pristine name that merely ends in digits (e.g.
+    "GachaPool_20260819") is never touched.
+    """
+    out = str(value or "")
+    if not chunk_regex:
+        return out
+    tail_re = re.compile(chunk_regex + r"$")
+    bare_re = re.compile(_BARE_TS_CHUNK + r"$")
+    for _ in range(max_chunks):
+        m = tail_re.search(out)
+        if m and m.start() > 0:
+            out = out[: m.start()]
+            continue
+        mb = bare_re.search(out)
+        if mb and mb.start() > 0:
+            candidate = out[: mb.start()]
+            if tail_re.search(candidate):  # part of a suffix chain, not the name
+                out = candidate
+                continue
+        break
+    # Also drop chains spliced INTO the middle of the name (see
+    # _drifted_name_regex) — the structural chunk only, never a bare timestamp,
+    # since a mid-name numeric run is plausibly part of the real name.
+    out = re.sub(chunk_regex + r"(?=_)", "", out)
+    return out
+
+
 class DataHandlerMixin:
     """Chứa logic xử lý file CSV, Download"""
 
@@ -29,20 +137,41 @@ class DataHandlerMixin:
                     "Error: no rename map available — run a 'uniquify' "
                     "manipulate_csv step on another file earlier in this plan first"
                 )
+            bases = getattr(self, "_last_csv_rename_bases", None) or {}
+            chunk_re = getattr(self, "_last_csv_suffix_chunk_re", None)
             try:
                 with open(filepath, "r", encoding="utf-8-sig") as f:
                     content = f.read()
                 cnt = 0
-                for old_v, new_v in rename_map.items():
+                fuzzy = 0
+                # Longest first: a shorter name can be a prefix of a longer one
+                # (…_FEATURED vs …_FEATURED_SHARDS_EXTRA) and must not shadow it.
+                for old_v in sorted(rename_map, key=len, reverse=True):
+                    new_v = rename_map[old_v]
                     n = content.count(old_v)
                     if n:
                         content = content.replace(old_v, new_v)
                         cnt += n
+                        continue
+                    # Exact old value absent → this file's copy of the name
+                    # carries a different suffix chain than the pool file did
+                    # (files drift when one is uniquified more often than the
+                    # other). Re-anchor on the base name + any suffix chain.
+                    base = bases.get(old_v)
+                    pattern = _drifted_name_regex(base, chunk_re)
+                    if not pattern:
+                        continue
+                    # lambda replacement: `new_v` is data, never a regex template
+                    content, k = re.subn(pattern, lambda _m, _n=new_v: _n, content)
+                    if k:
+                        cnt += k
+                        fuzzy += 1
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(content)
                 return (
                     f"Success: Replaced {cnt} occurrence(s) across "
                     f"{len(rename_map)} renamed value(s)"
+                    + (f" ({fuzzy} matched by base name after suffix drift)" if fuzzy else "")
                 )
             except Exception as e:
                 return f"Logic Error: {e}"
@@ -168,16 +297,37 @@ class DataHandlerMixin:
                 suffix = clean_val(suffix)
                 if not suffix:
                     return "Invalid UNIQUIFY format: empty suffix"
+                # Strip the previous run's suffix chain before appending this
+                # run's — these fixtures are rewritten in place every run, so
+                # plain appending stacks suffixes forever (see module header).
+                chunk_re = _suffix_chunk_regex(suffix)
                 rename_map = {}
+                bases = {}
+                restacked = 0
                 for r in rows:
                     old_v = r[t_col]
                     if old_v not in rename_map:
-                        rename_map[old_v] = f"{old_v}{suffix}"
+                        base = _strip_run_suffixes(old_v, chunk_re)
+                        if base != old_v:
+                            restacked += 1
+                        bases[old_v] = base
+                        rename_map[old_v] = f"{base}{suffix}"
                     r[t_col] = rename_map[old_v]
                 self._last_csv_rename_map = rename_map
+                # Bases are kept so apply_rename_map can still match a companion
+                # file whose copy of these names carries a DIFFERENT (older or
+                # shorter) suffix chain — that desync is exactly what made the
+                # gacha weight import fail with "Gacha Pool ... does not exist".
+                self._last_csv_rename_bases = bases
+                self._last_csv_suffix_chunk_re = chunk_re
                 msg = (
                     f"Uniquified {len(rename_map)} distinct value(s) in "
                     f"column '{col}' (+{suffix})"
+                    + (
+                        f", stripped a stale suffix chain from {restacked}"
+                        if restacked
+                        else ""
+                    )
                 )
 
             # --- DELETE LOGIC ---

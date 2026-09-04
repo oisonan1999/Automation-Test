@@ -314,6 +314,13 @@ Classes: `RBESmartTester` (line 2121), `RBEFuzzGenerator` (line 2248), `GenericC
 - In `smart_tester/upload_handler.py` `_upload_fuzz_fast`, the post-upload "confirm" loop MUST scope selectors to `.modal.show/.modal.in/.swal2-popup` — a bare `button:has-text('Import')` also matches the PAGE-LEVEL Import CSV trigger and re-clicking it reopens the OS file chooser → native dialog BLOCKS the run (gacha pool bug)
 - A `page.on("filechooser", lambda fc: fc.set_files([]))` guard (removed in `finally`) swallows any stray chooser. Never leave the listener registered — it conflicts with the next `expect_file_chooser`
 
+### Gacha "Import from CSV" Needs A Real Completion Gate (upload_handler.py)
+- `.btn-import-pool` does NOT import on click: it growls "Saving gacha pool, please wait...", clicks the page's Save, and only in that ajax callback opens the file chooser while growling `vit_message('Gacha pool has been saved, please select CSV file', 'success')`. That growl is `.alert.alert-success`, so `_scan_for_result_popup`'s visibility-only success branch returned **PASS before the import POST existed** (empty Gacha Pool tab + Save over stale data)
+- Real signal: file picked → POST `ajax_import_gacha_pool` → `.done` → `Swal("... successfully imported")`, and **its `.then()` runs `location.reload()`** — the confirm click is functional, not cleanup. `.fail` is HTTP 4xx and may be the `warnings` round (swal "Warning"/"Continue" → re-POST with `ignore_warning=true`), so a 4xx is not a final verdict
+- Implemented by `_await_import_completion` + `_dismiss_success_and_wait_for_reload` + `_latest_import_response` (native-chooser branch of `_try_upload_via_import_from_csv_modal`); pre-import prompt texts filtered by `popup_classifier._is_pre_import_prompt_text` / `_first_result_text`
+- **`offsetParent !== null` is always false for `position: fixed` elements in Chrome** — `.swal2-container` / `.modal.show` are fixed, so dialog readers must use `getBoundingClientRect()` + computed style (that's also how swal2's `display:none` icon nodes are excluded → success/error/warning detection)
+- `handle_upload`'s "message says success → PASS" safety net is skipped for messages prefixed `❌` (they quote failing dialogs / say "no success popup observed" and would flip a proven FAIL)
+
 ### Golden Plan Cache (ai/plan_cache.py)
 - Smoke runner caches a case's action plan after a full-PASS run and replays it next time, **skipping the LLM** (kills ~30-40% non-determinism). Store: `config/golden_plans.json`
 - Key = `golden_key(feature, RAW testcase cell)` (whitespace-normalized; stable since CSV is fixed). Use the RAW `testcase`, NOT `case_command` (which has concrete IDs injected)

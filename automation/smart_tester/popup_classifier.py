@@ -13,8 +13,72 @@ from playwright.sync_api import Page
 from automation.constants import DOWNLOAD_DIR
 
 
+# Toast/growl/dialog texts that are PROMPTS emitted BEFORE the import request is
+# even sent — never an import RESULT.
+#
+# Confirmed live by reading Gacha Event's own jQuery handlers
+# (`jQuery._data(el,'events')`): clicking "Import from CSV" (`.btn-import-pool`)
+# first growls "Saving gacha pool, please wait...", then clicks the page's Save,
+# and only in that save's ajax callback opens the file chooser while growling
+#     vit_message('Gacha pool has been saved, please select CSV file', 'success')
+# `$.bootstrapGrowl` renders that as `.alert.alert-success`, and its text contains
+# "saved" — so `_scan_for_result_popup` matched it as the import SUCCESS popup and
+# returned PASS *before the import POST had even been fired*. That is exactly the
+# false PASS behind "Gacha Pool tab is empty but the run says imported".
+_PRE_IMPORT_PROMPT_RE = re.compile(
+    r"please\s+select\s+(a\s+|the\s+)?(csv|file)"
+    r"|please\s+choose\s+(a\s+|the\s+)?(csv|file)"
+    r"|please\s+wait"
+    r"|has\s+been\s+saved\s*,\s*please"
+    r"|vui\s+lòng\s+(chọn|đợi)"
+    r"|đang\s+lưu",
+    re.IGNORECASE,
+)
+
+
 class PopupClassifierMixin:
     """Result popup: scan, classify success/error, ensure closed"""
+
+    def _is_pre_import_prompt_text(self, text):
+        """True for growls/dialogs that only ASK for input ("...please select CSV
+        file", "Saving..., please wait") — these must never be classified as an
+        import result. See _PRE_IMPORT_PROMPT_RE for the live-verified case."""
+        if not text:
+            return False
+        return bool(_PRE_IMPORT_PROMPT_RE.search(str(text)))
+
+    def _first_result_text(self, page, selector, timeout=2000):
+        """First visible element matching `selector` whose text is a real result
+        (not a pre-import prompt). Returns None if there is no such element.
+
+        Iterates ALL matches instead of trusting `wait_for_selector`'s first hit:
+        a pre-import growl and the genuine result popup can be on screen at the
+        same time, and the growl is usually the older/earlier node.
+        """
+        try:
+            page.wait_for_selector(selector, state="visible", timeout=timeout)
+        except Exception:
+            return None
+        try:
+            candidates = page.locator(selector).all()
+        except Exception:
+            return None
+        for el in candidates:
+            try:
+                if not el.is_visible():
+                    continue
+                text = (el.inner_text(timeout=500) or "").strip()[:200]
+                if not text:
+                    continue
+                if self._is_pre_import_prompt_text(text):
+                    print(
+                        f"   ⏭️ Ignoring pre-import prompt toast (not a result): {text[:70]}"
+                    )
+                    continue
+                return text
+            except Exception:
+                continue
+        return None
 
     def _classify_popup_message(self, text):
         """PASS/FAIL/None from popup text. Success keywords always beat error heuristics."""
@@ -69,32 +133,26 @@ class PopupClassifierMixin:
     def _scan_for_result_popup(self, page):
         try:
             # Check Error popup first (priority) - Wait actively for 2s
-            try:
-                err = page.wait_for_selector(
-                    ".swal2-error, .alert-danger, .toast-error, .notification-error, .swal2-icon-error, [class*='error'][class*='icon'], .error-message",
-                    state="visible",
-                    timeout=2000,
-                )
-                if err:
-                    text = err.inner_text().strip()[:200]
-                    print(f"   🔍 DEBUG: Found ERROR popup: {text[:50]}...")
-                    return True, "FAIL", text
-            except Exception as e:
-                print(f"   🔍 DEBUG: No error popup found ({type(e).__name__})")
+            err_text = self._first_result_text(
+                page,
+                ".swal2-error, .alert-danger, .toast-error, .notification-error, .swal2-icon-error, [class*='error'][class*='icon'], .error-message",
+            )
+            if err_text:
+                print(f"   🔍 DEBUG: Found ERROR popup: {err_text[:50]}...")
+                return True, "FAIL", err_text
+            print("   🔍 DEBUG: No error popup found")
 
-            # Check Success popup - Wait actively for 2s
-            try:
-                succ = page.wait_for_selector(
-                    ".swal2-success, .alert-success, .toast-success, .notification-success, .swal2-icon-success, [class*='success'][class*='icon']",
-                    state="visible",
-                    timeout=2000,
-                )
-                if succ:
-                    text = succ.inner_text().strip()[:200]
-                    print(f"   🔍 DEBUG: Found SUCCESS popup: {text[:50]}...")
-                    return True, "PASS", text
-            except Exception as e:
-                print(f"   🔍 DEBUG: No success popup found ({type(e).__name__})")
+            # Check Success popup - Wait actively for 2s.
+            # NOTE: pre-import prompt growls are filtered out inside
+            # _first_result_text — they render as `.alert-success` too.
+            succ_text = self._first_result_text(
+                page,
+                ".swal2-success, .alert-success, .toast-success, .notification-success, .swal2-icon-success, [class*='success'][class*='icon']",
+            )
+            if succ_text:
+                print(f"   🔍 DEBUG: Found SUCCESS popup: {succ_text[:50]}...")
+                return True, "PASS", succ_text
+            print("   🔍 DEBUG: No success popup found")
 
             # NEW: Check generic modal body content and classify by keywords
             # First try: Use evaluate() to read DOM directly (can read hidden modals)
@@ -136,6 +194,11 @@ class PopupClassifierMixin:
 
                 if dom_result:
                     text = dom_result.get("text", "")
+                    if text and self._is_pre_import_prompt_text(text):
+                        print(
+                            f"   ⏭️ Ignoring pre-import prompt modal (not a result): {text[:70]}"
+                        )
+                        text = ""
                     if text:
                         # Check if type already determined from history
                         if dom_result.get("type"):
@@ -190,6 +253,11 @@ class PopupClassifierMixin:
                         ):
                             continue
                         text = modal.inner_text(timeout=500).strip()
+                        if text and self._is_pre_import_prompt_text(text):
+                            print(
+                                f"   ⏭️ Ignoring pre-import prompt modal (not a result): {text[:70]}"
+                            )
+                            continue
                         if text:
                             # Same shared-keyword classification as the DOM path above,
                             # defaulting ambiguous text to FAIL rather than PASS.

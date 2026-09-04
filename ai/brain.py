@@ -98,6 +98,55 @@ def _normalize_command_text(text):
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
+def _strip_comments_outside_strings(text):
+    """
+    Xóa <!-- HTML comment -->, /* block comment */, và // line comment —
+    NHƯNG chỉ khi chúng nằm NGOÀI string literal (theo dõi trạng thái
+    in_string + escape khi quét). Bắt buộc phải string-aware: rất nhiều field
+    value hợp lệ trong app (deeplink "Link" field "whiplash://...", hoặc bất
+    kỳ http(s)://... value) chứa "//" ngay trong nội dung — một regex toàn
+    cục sẽ hiểu nhầm đó là comment và xóa mất toàn bộ phần JSON còn lại sau
+    nó.
+    """
+    out = []
+    i = 0
+    n = len(text)
+    in_string = False
+    escape = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if text.startswith("<!--", i):
+            end = text.find("-->", i + 4)
+            i = end + 3 if end != -1 else n
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = end + 2 if end != -1 else n
+            continue
+        if text.startswith("//", i):
+            nl = text.find("\n", i)
+            i = nl if nl != -1 else n
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def clean_json_string(text):
     """
     Hàm làm sạch chuỗi JSON (Nuclear Cleaning):
@@ -116,16 +165,18 @@ def clean_json_string(text):
     # 1. Xóa Markdown code block (```json ... ```)
     text = re.sub(r"```json|```", "", text)
 
-    # 2. Xóa comment HTML (ĐÂY LÀ NGUYÊN NHÂN GÂY LỖI CỦA BẠN)
-    # Sử dụng [\s\S] để bắt cả ký tự xuống dòng
-    text = re.sub(r"<!--[\s\S]*?-->", "", text)
-
-    # 3. Xóa comment Block kiểu C /* ... */
-    text = re.sub(r"/\*[\s\S]*?\*/", "", text)
-
-    # 4. Xóa comment dòng kiểu JS // ...
-    # (Dùng cờ MULTILINE để xóa từ // đến hết dòng)
-    text = re.sub(r"//.*$", "", text, flags=re.MULTILINE)
+    # 2-4. [BUG FIX] Xóa comment HTML <!-- -->, block /* */, và line // ...
+    # NHƯNG chỉ khi nằm NGOÀI string literal. Trước đây dùng re.sub toàn cục
+    # trên cả text — CỰC KỲ NGUY HIỂM vì rất nhiều field value hợp lệ trong
+    # app chứa "//" ngay trong nội dung (deeplink "Link" field dạng
+    # "whiplash://dat.Action.quests/...", hoặc bất kỳ http(s)://... value).
+    # re.sub(r"//.*$", ...) khớp vào "//" bên TRONG string đó rồi xóa sạch
+    # toàn bộ phần còn lại của response — silent, nhìn giống hệt response bị
+    # cắt cụt giữa chừng (đây chính là nguyên nhân thật của các lỗi "truncated
+    # JSON" lặp lại nhiều lần trên testcase RBE Tasks có field Link). Quét
+    # thủ công theo trạng thái in_string để KHÔNG bao giờ đụng vào nội dung
+    # trong quotes.
+    text = _strip_comments_outside_strings(text)
 
     # 5. Trích xuất đoạn JSON list [...] hoặc object {...} nằm ngoài cùng
     # [FIX] Dùng rfind() thay vì regex để tìm ] cuối cùng
@@ -134,8 +185,24 @@ def clean_json_string(text):
 
     if first_bracket != -1:
         if last_bracket != -1 and last_bracket > first_bracket:
-            # Có cả [ và ] - extract từ [ đến ]
-            text = text[first_bracket : last_bracket + 1]
+            # [BUG GUARD] rfind() tìm ký tự "]" CUỐI CÙNG trong toàn bộ text,
+            # nhưng nếu response bị cắt cụt giữa chừng (model dừng lại mà
+            # KHÔNG đóng array ngoài cùng), đây có thể vô tình khớp vào một
+            # "]" của một sub-array bên trong (ví dụ "path":["RBE"]) rất gần
+            # đầu chuỗi — cắt bỏ gần như toàn bộ nội dung JSON hợp lệ còn lại.
+            # Phân biệt hai trường hợp bằng cách kiểm tra CẤU TRÚC: nếu đoạn
+            # [first_bracket:last_bracket+1] tự nó đã cân bằng dấu (không còn
+            # { [ nào mở dở khi quét hết đoạn đó), thì last_bracket đúng là
+            # dấu đóng ngoài cùng thật — tin tưởng và cắt bỏ phần đuôi (có thể
+            # là prose thừa). Nếu đoạn đó VẪN còn { [ mở dở, nghĩa là
+            # last_bracket chỉ là "]" của một sub-array giữa chừng và response
+            # thực sự bị cắt cụt — giữ nguyên tới hết chuỗi để bước closer
+            # phía dưới tự đóng đúng ở cuối chuỗi THẬT.
+            candidate = text[first_bracket : last_bracket + 1]
+            if _unclosed_bracket_stack(candidate):
+                text = text[first_bracket:]
+            else:
+                text = candidate
         else:
             # Có [ nhưng thiếu ] - lấy từ [ đến hết (sẽ fix brackets sau)
             text = text[first_bracket:]
@@ -145,7 +212,11 @@ def clean_json_string(text):
         last_brace = text.rfind("}")
         if first_brace != -1:
             if last_brace != -1 and last_brace > first_brace:
-                text = text[first_brace : last_brace + 1]
+                candidate = text[first_brace : last_brace + 1]
+                if _unclosed_bracket_stack(candidate):
+                    text = text[first_brace:]
+                else:
+                    text = candidate
             else:
                 text = text[first_brace:]
 
@@ -222,57 +293,93 @@ def clean_json_string(text):
                 if last_colon != -1:
                     text = text[: last_colon + 1] + ' ""'
 
-        # 8.3. Fix incomplete key-value pairs
-        text = re.sub(r':\s*"([^"]*?)$', r': "\1"', text)
+        # [REMOVED] 8.3 "Fix incomplete key-value pairs" used to unconditionally
+        # re-run `r':\s*"([^"]*?)$'` here — but 8.2 above already closes any
+        # genuinely dangling trailing string correctly (with a quote-parity
+        # check). Once 8.2 has run, text always ends with a real closing
+        # quote as its ABSOLUTE last character. Re-running this regex after
+        # that can spuriously match an INTERNAL colon inside the value's own
+        # text (e.g. the ":" in "whiplash:" after a URL got shortened) and
+        # treat the closing quote 8.2 just added as if it were a fresh
+        # "opening" quote for an empty value — corrupting it into `: ""`
+        # (stray space + duplicated quote). Verified live: this produced the
+        # exact `"whiplash: ""` artifact seen in repeated RBE Task Link
+        # failures. Safe to drop entirely — it added no coverage 8.2 lacks.
 
-        # 8.4. Đếm số mở/đóng ngoặc và thêm thiếu
-        open_braces = text.count("{")
-        close_braces = text.count("}")
-        open_brackets = text.count("[")
-        close_brackets = text.count("]")
-
-        # 8.5. Thêm closing brackets nếu thiếu
-        # Strategy: Phân tích cấu trúc để thêm đúng vị trí
-
-        if open_braces > close_braces:
-            missing_braces = open_braces - close_braces
-            print(f"   🔧 Auto-fix: Need to add {missing_braces} missing '}}'")
-
-            # Tìm vị trí comma cuối cùng trước last object
-            # Pattern: `...},\n    {"action": "save_form"}`
-            # Cần thêm } SAU "r80"} (trước dấu comma đầu tiên sau nó)
-
-            # Find position after last complete data object
-            # Look for pattern: "value"}}, OR "value"},
-            last_complete = max(text.rfind('"}}'), text.rfind('"}},'))
-
-            if last_complete == -1:
-                # Not found - find last "value"},
-                last_complete = text.rfind('"},')
-
-            if last_complete != -1:
-                # Insert after the closing "
-                insert_pos = last_complete + 1  # After "
-                text = text[:insert_pos] + "}" * missing_braces + text[insert_pos:]
-                print(f"   ✅ Inserted }} after position {insert_pos}")
-            else:
-                # Fallback: add before final ]
-                last_bracket_pos = text.rfind("]")
-                if last_bracket_pos != -1:
-                    text = (
-                        text[:last_bracket_pos]
-                        + "}" * missing_braces
-                        + text[last_bracket_pos:]
-                    )
-                else:
-                    text += "}" * missing_braces
-
-        if open_brackets > close_brackets:
-            missing_brackets = open_brackets - close_brackets
-            print(f"   🔧 Auto-fix: Will add {missing_brackets} missing ']'")
-            text += "]" * missing_brackets
+        # 8.4/8.5. Đóng các { [ còn thiếu (bị cắt cụt giữa chừng) theo đúng
+        # thứ tự lồng nhau bằng stack, thay vì đếm tổng số mở/đóng rồi
+        # tìm-và-chèn theo pattern text như trước — cách chèn theo pattern
+        # (rfind '"}}' / '"},') có thể tìm nhầm một object ĐÃ đóng đúng ở
+        # GIỮA chuỗi (rất phổ biến khi response bị cắt cụt: mọi object trước
+        # đó đều hợp lệ, chỉ object CUỐI CÙNG bị thiếu dấu đóng) và chèn dấu
+        # đóng vào sai vị trí đó, cắt đứt phần JSON hợp lệ còn lại phía sau.
+        # Đóng ở CUỐI chuỗi theo stack luôn đúng cho trường hợp cắt cụt.
+        text = _close_unclosed_brackets(text)
 
     return text.strip()
+
+
+def _unclosed_bracket_stack(text):
+    """
+    Quét toàn bộ text (bỏ qua nội dung nằm trong string literal) và trả về
+    stack các { [ còn MỞ (chưa được đóng) khi quét xong. Stack rỗng nghĩa là
+    mọi { [ trong text đều đã được đóng cân bằng.
+    """
+    stack = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    return stack
+
+
+def _close_unclosed_brackets(text):
+    """
+    Đóng các { [ còn mở ở CUỐI chuỗi theo đúng thứ tự lồng nhau (LIFO). An
+    toàn cho response bị cắt cụt giữa chừng (trường hợp phổ biến nhất gây
+    thiếu dấu đóng) — luôn thêm đúng số lượng và đúng thứ tự dấu đóng cần
+    thiết ở cuối chuỗi, không đoán một vị trí chèn ở giữa.
+    """
+    stack = _unclosed_bracket_stack(text)
+    added = "".join("}" if c == "{" else "]" for c in reversed(stack))
+    if added:
+        print(f"   🔧 Auto-fix: Closing {len(added)} unclosed bracket(s)/brace(s) at end: {added}")
+        text += added
+    return text
+
+
+def _print_json_error_context(label, cleaned_text, error):
+    """
+    Debug helper: prints the ACTUAL string that failed json.loads (post
+    clean_json_string, NOT the raw LLM output) with a window around the
+    reported error position. Printing raw_output[:N] on parse failure is
+    misleading — clean_json_string's regex fixes (quote conversion, brace
+    insertion, etc.) can shift/alter content anywhere in the string, so the
+    error's line/col/char refers to a string that may already differ from
+    what was captured before cleaning.
+    """
+    pos = getattr(error, "pos", None)
+    if pos is None or not cleaned_text:
+        print(f"   {label} (cleaned, first 500): {cleaned_text[:500]}...")
+        return
+    start = max(0, pos - 150)
+    end = min(len(cleaned_text), pos + 150)
+    print(f"   {label} (cleaned, ~300 chars around char {pos}):")
+    print(f"   ...{cleaned_text[start:pos]}<<<HERE>>>{cleaned_text[pos:end]}...")
 
 
 def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase=None):
@@ -489,9 +596,7 @@ def single_model_pipeline(user_command):
         return plan
     except json.JSONDecodeError as e:
         print(f"   ❌ Fast Mode Parse Error: {e}")
-        print(f"   Raw (first 500): {json_output[:500]}...")
-        if len(final_json_str) < 2000:
-            print(f"   📝 Cleaned:\n{final_json_str}")
+        _print_json_error_context("Fast Mode", final_json_str, e)
 
         # Retry once: flush VRAM fragmentation then call again
         print("   🔄 Retry Fast Mode (fresh context)...")
@@ -504,8 +609,9 @@ def single_model_pipeline(user_command):
                 plan_retry = json.loads(retry_str)
                 print(f"   ✅ Fast Mode retry OK: {len(plan_retry)} bước")
                 return plan_retry
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e_retry:
                 print("   ❌ Qwen retry failed → returning empty plan")
+                _print_json_error_context("Fast Mode retry", retry_str, e_retry)
         return []
 
 
@@ -544,10 +650,20 @@ def _call_claude_via_mushigen(prompt, model_name, wall_start):
         resp.raise_for_status()
         data = resp.json()
         wall_elapsed = time.time() - wall_start
-        text = next(
-            (b["text"] for b in data.get("content", []) if b.get("type") == "text"),
-            "",
-        )
+        content_blocks = data.get("content", [])
+        # [BUG FIX] With thinking={"type":"adaptive"} + effort="high" (below),
+        # a long turn's answer can legitimately arrive as MULTIPLE "text"
+        # content blocks interleaved with "thinking" blocks (or a very long
+        # text answer chunked across several sequential "text" blocks by the
+        # Bedrock-shaped gateway) — NOT always a single block. The previous
+        # `next(...)` grabbed only the FIRST "text" block and silently
+        # dropped everything after it, which looks exactly like the response
+        # being truncated mid-JSON even though usage.output_tokens is nowhere
+        # near max_tokens. Concatenate ALL "text" blocks in order instead.
+        text_blocks = [
+            b.get("text", "") for b in content_blocks if b.get("type") == "text"
+        ]
+        text = "".join(text_blocks)
         usage = data.get("usage", {})
         print(f"\n   ⏱️  TIMING [{model_name}] (careful/claude via mushigen):")
         print(f"      Total (wall):  {wall_elapsed:6.2f}s")
@@ -555,6 +671,11 @@ def _call_claude_via_mushigen(prompt, model_name, wall_start):
             f"      Tokens: in={usage.get('input_tokens')} out={usage.get('output_tokens')} "
             f"cache_read={usage.get('cache_read_input_tokens', 0)}"
         )
+        if len(text_blocks) > 1:
+            print(
+                f"      ⚠️  {len(text_blocks)} separate 'text' content blocks "
+                f"concatenated (stop_reason={data.get('stop_reason')})"
+            )
         return text
     except Exception as e:
         print(f"❌ Claude API Error via Mushigen ({model_name}): {e}")
@@ -604,7 +725,11 @@ def call_claude(prompt, model_name=None):
             **kwargs,
         )
         wall_elapsed = time.time() - wall_start
-        text = next((b.text for b in response.content if b.type == "text"), "")
+        # [BUG FIX] Same issue as _call_claude_via_mushigen: with adaptive
+        # thinking + high effort, a long answer can arrive as multiple "text"
+        # blocks — concatenate all of them instead of taking only the first.
+        text_blocks = [b.text for b in response.content if b.type == "text"]
+        text = "".join(text_blocks)
 
         usage = response.usage
         print(f"\n   ⏱️  TIMING [{model_name}] (careful/claude):")
@@ -613,6 +738,11 @@ def call_claude(prompt, model_name=None):
             f"      Tokens: in={usage.input_tokens} out={usage.output_tokens} "
             f"cache_read={getattr(usage, 'cache_read_input_tokens', 0)}"
         )
+        if len(text_blocks) > 1:
+            print(
+                f"      ⚠️  {len(text_blocks)} separate 'text' content blocks "
+                f"concatenated (stop_reason={getattr(response, 'stop_reason', None)})"
+            )
         return text
     except Exception as e:
         print(f"❌ Claude API Error ({model_name}): {e}")
@@ -648,7 +778,7 @@ def claude_careful_pipeline(user_command):
         return plan
     except json.JSONDecodeError as e:
         print(f"   ❌ Careful Mode (Claude) Parse Error: {e}")
-        print(f"   Raw (first 500): {raw_output[:500]}...")
+        _print_json_error_context("Careful Mode (Claude)", final_json_str, e)
 
         print("   🔄 Retry Careful Mode (Claude)...")
         retry_output = call_claude(prompt)
@@ -658,8 +788,9 @@ def claude_careful_pipeline(user_command):
                 plan_retry = json.loads(retry_str)
                 print(f"   ✅ Careful Mode (Claude) retry OK: {len(plan_retry)} bước")
                 return plan_retry
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e_retry:
                 print("   ❌ Careful Mode (Claude) retry cũng fail.")
+                _print_json_error_context("Careful Mode (Claude) retry", retry_str, e_retry)
 
         print("   ⚠️  Falling back to Fast Mode (Qwen3).")
         return single_model_pipeline(user_command)

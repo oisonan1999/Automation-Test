@@ -31,6 +31,8 @@ GOLDEN_FILE = os.path.join(
 
 _UNIQUE_TOKEN = "{{UNIQUE_ID}}"
 _LAST_TOKEN = "{{LAST_ID}}"
+_TODAY_ISO_TOKEN = "{{TODAY_ISO}}"
+_TODAY_MDY_TOKEN = "{{TODAY_MDY}}"
 # Không tokenize chuỗi quá ngắn để tránh thay nhầm các giá trị tình cờ trùng.
 _MIN_TOKEN_LEN = 4
 
@@ -82,8 +84,17 @@ def invalidate(feature: str, testcase_raw: str) -> bool:
 
 
 # --- Tokenize / Detokenize --------------------------------------------------
-def tokenize_plan(plan, unique_id: str | None, last_id: str | None):
-    """Trả về (template, uses_unique, uses_last). Thay giá trị ID động bằng placeholder."""
+def tokenize_plan(
+    plan, unique_id: str | None, last_id: str | None, testcase_raw: str | None = None
+):
+    """Trả về (template, uses_unique, uses_last, uses_today_iso, uses_today_mdy).
+
+    Thay giá trị ID động bằng placeholder. Nếu testcase_raw (CSV gốc) chứa
+    {{TODAY_ISO}}/{{TODAY_MDY}}, brain.py đã resolve nó thành ngày cụ thể
+    ("hôm nay" tại thời điểm chạy) TRƯỚC KHI AI thấy command — nếu không
+    tokenize lại ở đây, ngày đó sẽ bị đóng băng vĩnh viễn vào golden template
+    và mọi lần replay sau sẽ dùng ngày CŨ (lúc save) thay vì ngày hiện tại.
+    """
     s = json.dumps(plan, ensure_ascii=False)
     # Thay chuỗi dài trước để tránh chồng lấn một phần.
     pairs = [(_UNIQUE_TOKEN, unique_id), (_LAST_TOKEN, last_id)]
@@ -96,13 +107,32 @@ def tokenize_plan(plan, unique_id: str | None, last_id: str | None):
                 uses_unique = True
             else:
                 uses_last = True
-    return json.loads(s), uses_unique, uses_last
+
+    uses_today_iso = uses_today_mdy = False
+    raw_upper = (testcase_raw or "").upper()
+    if "{{TODAY_ISO}}" in raw_upper or "{{TODAY_MDY}}" in raw_upper:
+        today = datetime.date.today()
+        if "{{TODAY_ISO}}" in raw_upper:
+            iso_str = today.strftime("%Y-%m-%d")
+            if iso_str in s:
+                s = s.replace(iso_str, _TODAY_ISO_TOKEN)
+                uses_today_iso = True
+        if "{{TODAY_MDY}}" in raw_upper:
+            mdy_str = today.strftime("%m/%d/%Y")
+            if mdy_str in s:
+                s = s.replace(mdy_str, _TODAY_MDY_TOKEN)
+                uses_today_mdy = True
+
+    return json.loads(s), uses_unique, uses_last, uses_today_iso, uses_today_mdy
 
 
 def detokenize_plan(template, unique_id: str | None, last_id: str | None):
     s = json.dumps(template, ensure_ascii=False)
     s = s.replace(_UNIQUE_TOKEN, unique_id or "")
     s = s.replace(_LAST_TOKEN, last_id or "")
+    today = datetime.date.today()
+    s = s.replace(_TODAY_ISO_TOKEN, today.strftime("%Y-%m-%d"))
+    s = s.replace(_TODAY_MDY_TOKEN, today.strftime("%m/%d/%Y"))
     return json.loads(s)
 
 
@@ -149,7 +179,9 @@ def _check_missing_process_deployment(template, testcase_raw: str) -> None:
 def record_success(feature, testcase_raw, plan, unique_id, last_id, label=""):
     """Lưu plan đã chạy PASS sạch thành golden template."""
     try:
-        template, uses_unique, uses_last = tokenize_plan(plan, unique_id, last_id)
+        template, uses_unique, uses_last, uses_today_iso, uses_today_mdy = tokenize_plan(
+            plan, unique_id, last_id, testcase_raw=testcase_raw
+        )
         _check_missing_process_deployment(template, testcase_raw)
         store = load_golden()
         store[golden_key(feature, testcase_raw)] = {
@@ -158,6 +190,8 @@ def record_success(feature, testcase_raw, plan, unique_id, last_id, label=""):
             "step_count": len(template) if isinstance(template, list) else 1,
             "uses_unique": uses_unique,
             "uses_last": uses_last,
+            "uses_today_iso": uses_today_iso,
+            "uses_today_mdy": uses_today_mdy,
             "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "template": template,
         }

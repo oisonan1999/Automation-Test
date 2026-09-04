@@ -7,6 +7,7 @@ import os
 import json
 import sys
 import asyncio
+import traceback
 from playwright.sync_api import sync_playwright
 
 # Map from clone-modal field name (lowercase) → feature key in smoke_last_ids.json
@@ -404,6 +405,8 @@ class BrickAutomation(
         """Core logic chạy Playwright - được gọi sau khi event loop policy đã được set đúng."""
         report_logs = []
         last_update_form_data = {}  # Track most recent update_form data for clone ID capture
+        _current_step_idx = -1
+        _current_step = None
         with sync_playwright() as p:
             try:
                 browser, page = self.get_existing_page(p)
@@ -429,6 +432,7 @@ class BrickAutomation(
                     "process_deployment",
                     "reorder",
                     "delete_all_tasks",
+                    "pve_book_fuzz_test",
                 }
 
                 # Safety-net mapping (in case ai_brain.py fix_action_plan missed something)
@@ -476,7 +480,20 @@ class BrickAutomation(
                     "check_tabs": "check_fields",
                 }
 
-                for step in action_plan:
+                for _current_step_idx, step in enumerate(action_plan):
+                    _current_step = step
+                    _pre_log_len = len(report_logs)
+
+                    def _enrich_step_logs():
+                        """Back-fill step_idx/step_data onto log entries this iteration
+                        appended, so a self-heal agent can address exactly which action
+                        plan step failed. setdefault: a branch that already sets these
+                        keys explicitly keeps its own values."""
+                        for _entry in report_logs[_pre_log_len:]:
+                            if isinstance(_entry, dict):
+                                _entry.setdefault("step_idx", _current_step_idx)
+                                _entry.setdefault("step_data", copy.deepcopy(step))
+
                     act = step.get("action")
 
                     # Auto-fix invalid action name via safety map
@@ -580,9 +597,11 @@ class BrickAutomation(
                                     "step": "Navigate",
                                     "status": "FAIL",
                                     "details": f"{str(e)[:200]}",
+                                    "traceback": traceback.format_exc(),
                                 }
                             )
                             # Stop this case so smoke classification is accurate
+                            _enrich_step_logs()
                             break
                     elif act == "checkbox":
                         val_lower = val.lower().strip()
@@ -668,6 +687,7 @@ class BrickAutomation(
                             print(
                                 f"      ⚠️ Click failed for '{tgt}'. Stopping execution to prevent errors."
                             )
+                            _enrich_step_logs()
                             break
                     elif act == "wait" or act == "wait_for_page_load":
                         print("      ⏳ Explicit WAIT requested...")
@@ -692,15 +712,28 @@ class BrickAutomation(
                         # empty by the time the smoke runner freezes this same action_plan
                         # object into the golden plan cache (plan_cache.record_success) —
                         # producing a golden template with "data": {} that replays as a no-op.
-                        self._smart_update_form(page, copy.deepcopy(popup_data))
-                        last_update_form_data = popup_data  # Track for clone ID capture
-                        report_logs.append(
-                            {
-                                "step": "Form",
-                                "status": "PASS",
-                                "details": str(popup_data),
-                            }
-                        )
+                        try:
+                            self._smart_update_form(page, copy.deepcopy(popup_data))
+                            last_update_form_data = popup_data  # Track for clone ID capture
+                            report_logs.append(
+                                {
+                                    "step": "Form",
+                                    "status": "PASS",
+                                    "details": str(popup_data),
+                                }
+                            )
+                        except Exception as e:
+                            report_logs.append(
+                                {
+                                    "step": "Form",
+                                    "status": "FAIL",
+                                    "details": str(e)[:200],
+                                    "traceback": traceback.format_exc(),
+                                }
+                            )
+                            print(f"      ❌ update_form failed: {e}")
+                            _enrich_step_logs()
+                            break
                     elif act == "save_form":
                         # Safety net: dismissing a result modal (e.g. after CSV import)
                         # can trigger a page reload with its own spinner. If the
@@ -728,6 +761,7 @@ class BrickAutomation(
                             print(
                                 f"      🛑 Stopping execution due to save error. Remaining steps will be skipped."
                             )
+                            _enrich_step_logs()
                             break  # STOP: Không chạy tiếp các bước sau khi Save bị lỗi
                         else:
                             report_logs.append(
@@ -947,10 +981,44 @@ class BrickAutomation(
                         else:
                             print("      ⚠️ Smart Test returned no logs.")
 
+                    elif act == "pve_book_fuzz_test":
+                        logs, structured_report = self.run_pve_book_csv_fuzz(
+                            page, val, step.get("options", {})
+                        )
+                        report_logs.extend(logs)
+                        self.pve_book_fuzz_report = structured_report
+
                     elif act == "upload":
                         upload_logs = self.handle_upload(page, tgt, val)
                         report_logs.extend(upload_logs)
                         self.close_popup(page)
+                        # A confirmed-successful CSV import commonly triggers a page/table
+                        # reload right after the server responds (Gacha Pool/Weight etc.).
+                        # handle_upload already waits this out internally on its own
+                        # success path, but this is a last-resort safety net at the
+                        # dispatcher level so the NEXT step (navigate/update_form/...)
+                        # never races an in-flight reload regardless of which internal
+                        # upload path returned.
+                        if hasattr(self, "_wait_for_long_loading"):
+                            try:
+                                self._wait_for_long_loading(page, timeout_ms=15000)
+                            except Exception:
+                                pass
+                        # Same "stop on failure" contract as Save below: if the import
+                        # never actually succeeded, every later step (switching tabs,
+                        # filling fields that reference the just-imported rows, deploying)
+                        # is doomed anyway — confirmed live via "Create the Gacha Event":
+                        # a failed Gacha Pool import used to let the run barrel ahead into
+                        # Gacha Weight/Deployment on an empty pool table.
+                        if any(
+                            isinstance(_l, dict) and _l.get("status") in ("FAIL", "CRASH")
+                            for _l in upload_logs
+                        ):
+                            print(
+                                "      🛑 Stopping execution due to upload/import failure. Remaining steps will be skipped."
+                            )
+                            _enrich_step_logs()
+                            break
 
                     elif act == "manipulate_csv":
                         report_logs.append(
@@ -1073,6 +1141,7 @@ class BrickAutomation(
                                 }
                             )
 
+                    _enrich_step_logs()
                     time.sleep(1)
                 # ====================================================
                 # [MỚI] TỰ ĐỘNG REFRESH TRANG SAU KHI HOÀN THÀNH
@@ -1101,4 +1170,11 @@ class BrickAutomation(
                 return report_logs
             except Exception as e:
                 print(f"CRASH: {e}")
-                return [{"step": "System", "status": "CRASH", "details": str(e)}]
+                return [{
+                    "step": "System",
+                    "status": "CRASH",
+                    "details": str(e),
+                    "traceback": traceback.format_exc(),
+                    "step_idx": _current_step_idx,
+                    "step_data": copy.deepcopy(_current_step) if _current_step is not None else None,
+                }]

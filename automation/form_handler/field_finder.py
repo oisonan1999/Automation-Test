@@ -1079,6 +1079,51 @@ class FieldFinderMixin:
         except:
             pass
 
+        ai_result = self._try_ai_fallback_locator(page, label_text)
+        if ai_result is not None:
+            return ai_result
+
+        return None
+
+    def _try_ai_fallback_locator(self, page, label_text):
+        """Last resort when every heuristic above fails: ask Claude Sonnet to
+        pick the right element from a DOM snapshot of the current scope
+        (page already scoped to modal, if one is open, by the caller)."""
+        try:
+            from ai.ai_locator_fallback import (
+                ask_ai_for_locator,
+                capture_dom_snapshot,
+                cleanup_snapshot_attrs,
+            )
+        except Exception as e:
+            print(f"         ⚠️ AI-fallback locator unavailable: {e}")
+            return None
+
+        try:
+            snapshot = capture_dom_snapshot(page)
+        except Exception as e:
+            print(f"         ⚠️ AI-fallback DOM snapshot error: {e}")
+            return None
+
+        if not snapshot:
+            return None
+
+        result = ask_ai_for_locator(label_text, snapshot)
+        if result is None:
+            cleanup_snapshot_attrs(page)
+            return None
+
+        candidate = page.locator(f"[data-ai-fb-idx='{result['index']}']").first
+        if candidate.count() > 0 and candidate.is_visible():
+            print(
+                f"         🤖 AI-fallback locator used: '{label_text}' → "
+                f"index {result['index']} ({result.get('reason', '')})"
+            )
+            cleanup_snapshot_attrs(page, keep_index=result["index"])
+            return candidate
+
+        print(f"         ⚠️ AI-fallback locator rejected (not found/visible): '{label_text}'")
+        cleanup_snapshot_attrs(page)
         return None
 
     # ============================
