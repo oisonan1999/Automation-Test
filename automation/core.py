@@ -1,12 +1,78 @@
 # automation/core.py
 import ast
+import copy
 import time
 import re
 import os
 import json
 import sys
 import asyncio
+import traceback
 from playwright.sync_api import sync_playwright
+
+# Map from clone-modal field name (lowercase) → feature key in smoke_last_ids.json
+_CLONE_FIELD_TO_FEATURE = {
+    "book name": "PVE",
+    "rules based tournament id": "RBE",
+    "cloned rules based tournament id": "RBE",
+    "new event id": "Gacha",
+    "new ff id": "Faction Feud",
+    "new tournament id": "Showdown",
+    "bracket id": "Showdown",
+    "nrb id": "Showdown",
+    "new offer id": "Offer",
+    "new section id": "Offer Section",
+    "currency id": "Currency",
+    "grabbag id": "Grabbag",
+    "new tier id": "Fight Card Slots",
+    "fightcard id": "Fight Card",
+    "faction boss battle name": "Faction Boss",
+    "new key": "Perk/Perk Slot",
+    "new superstar id": "SuperStar",
+    "loc id": "Localization",
+    "moment poster id": "Moment Poster",
+}
+
+_SMOKE_ID_FILE = os.path.join(os.path.dirname(__file__), "..", "config", "smoke_last_ids.json")
+
+
+def _persist_clone_id(last_update_form_data: dict):
+    """
+    After save_form(mode='clone') succeeds, extract the new ID from the most
+    recent update_form data and persist it to smoke_last_ids.json.
+    Logs a confirmation line so the user knows it was saved.
+    """
+    if not last_update_form_data:
+        return
+
+    new_id = None
+    feature = None
+    for key, val in last_update_form_data.items():
+        if _CLONE_FIELD_TO_FEATURE.get(key.lower().strip()) and val:
+            new_id = str(val).strip()
+            feature = _CLONE_FIELD_TO_FEATURE[key.lower().strip()]
+            break
+
+    if not new_id or not feature:
+        return
+
+    try:
+        ids = {}
+        if os.path.exists(_SMOKE_ID_FILE):
+            with open(_SMOKE_ID_FILE, "r", encoding="utf-8") as f:
+                ids = json.load(f)
+        existing = ids.get(feature, [])
+        if isinstance(existing, str):
+            existing = [existing]
+        if new_id not in existing:
+            existing.append(new_id)
+        ids[feature] = existing
+        os.makedirs(os.path.dirname(_SMOKE_ID_FILE), exist_ok=True)
+        with open(_SMOKE_ID_FILE, "w", encoding="utf-8") as f:
+            json.dump(ids, f, ensure_ascii=False, indent=2)
+        print(f"      💾 Clone ID saved → '{feature}': '{new_id}' (smoke_last_ids.json)")
+    except Exception as e:
+        print(f"      ⚠️ Could not save clone ID: {e}")
 
 # --- IMPORT CÁC MODULE CON ---
 from automation.constants import DOWNLOAD_DIR
@@ -35,6 +101,32 @@ class BrickAutomation(
         blocking modals like "DNU Warning".
         Uses SmartTesterMixin._ensure_popup_closed when available.
         """
+        # CRITICAL: Import CSV Warning popup cần bấm "Continue" để app thực sự ghi đè.
+        try:
+            warning_modal = (
+                page.locator(
+                    ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+                )
+                .filter(has_text=re.compile(r"\bwarning\b", re.IGNORECASE))
+                .first
+            )
+            continue_btn = warning_modal.locator(
+                "button:has-text('Continue'), button:has-text('Proceed')"
+            ).first
+            if (
+                warning_modal.count() > 0
+                and warning_modal.is_visible()
+                and continue_btn.is_visible()
+            ):
+                print(
+                    "      🟠 Warning popup detected (continue needed) -> clicking Continue..."
+                )
+                continue_btn.click(force=True)
+                time.sleep(0.35)
+                return
+        except Exception:
+            pass
+
         try:
             ensure_fn = getattr(self, "_ensure_popup_closed", None)
             if callable(ensure_fn):
@@ -57,6 +149,205 @@ class BrickAutomation(
                 btn.click(force=True)
         except Exception:
             pass
+
+    def _ensure_swal2_clone_confirmation_yes(self, page, max_rounds=5):
+        """
+        Auto-confirm SweetAlert2 clone prompt:
+        e.g. "Do you want to clone the Contest Superstar Section?"
+        Popup has buttons "Yes" (swal2-confirm) and "No"/"No" (cancel/deny).
+        """
+        try:
+            for _ in range(max_rounds):
+                popup = page.locator(".swal2-popup:visible").first
+                if popup.count() == 0 or not popup.is_visible():
+                    return False
+
+                text = ""
+                try:
+                    text = popup.inner_text(timeout=500).strip().lower()
+                except:
+                    text = (popup.get_attribute("data-text") or "").lower()
+
+                # Only handle clone prompts
+                if "clone" not in text:
+                    return False
+
+                yes_btn = popup.locator(
+                    "button.swal2-confirm, button:has-text('Yes'), button:has-text('yes')"
+                ).first
+
+                if yes_btn.count() > 0 and yes_btn.is_visible():
+                    print(
+                        "      🟡 SweetAlert2 clone confirmation detected -> clicking Yes..."
+                    )
+                    yes_btn.click(force=True)
+                    time.sleep(0.35)
+
+                    # Wait briefly for popup to disappear
+                    try:
+                        popup.wait_for(state="hidden", timeout=3000)
+                    except:
+                        pass
+                    return True
+
+                time.sleep(0.2)
+        except Exception:
+            return False
+
+        return False
+
+    def _ensure_rbe_are_you_sure_closed(self, page):
+        """
+        Dismiss two categories of blocking popups that appear in RBE/Contest flows:
+
+        1. Confirmation modals:
+           "Are you sure?" / "This event schedule is outside of the RBE's schedule"
+        2. DNU Warning:
+           "[X] is currently in the DNU list" (SweetAlert2 or Bootstrap modal, OK only)
+
+        IMPORTANT: Never dismiss the "Defining Schedules" modal - that is a real data entry
+        dialog, not a blocking confirmation.
+        """
+        dismissed = False
+        try:
+            # --- PASS 1: Confirmation modals ("Are you sure" / "outside of RBE schedule") ---
+            # Regex is intentionally specific: requires "are you sure" OR the exact phrase
+            # "outside of the rbe.*schedule". The old bare "rbe.*schedule" pattern was too
+            # broad and matched the "Defining Schedules" modal body text, causing it to be
+            # dismissed before "Add Schedule" could be clicked.
+            confirm_re = re.compile(
+                r"(are you sure|outside of the rbe.*schedule)",
+                re.IGNORECASE,
+            )
+
+            candidates = page.locator(
+                ".modal.show, .modal.in, [role='dialog']:not([aria-hidden='true']), .swal2-popup:visible"
+            )
+            count = candidates.count()
+            for i in range(count):
+                try:
+                    modal = candidates.nth(i)
+                    if not modal.is_visible():
+                        continue
+                    modal_text = modal.inner_text(timeout=600).strip()
+                    # Skip "Defining Schedules" modal - it is a data entry form, not a confirmation
+                    if "defining schedules" in modal_text.lower():
+                        continue
+                    if not confirm_re.search(modal_text):
+                        continue
+                    # Prefer explicit OK-like button; never guess on generic primary button
+                    btn = modal.locator(
+                        "button:has-text('OK'), button:has-text('Ok'), "
+                        "button:has-text('Confirm'), button:has-text('Yes'), "
+                        "button:has-text('Proceed'), button:has-text('Continue')"
+                    ).first
+                    if btn.count() > 0 and btn.is_visible():
+                        print("      🔕 Are-you-sure modal detected; clicking OK...")
+                        btn.click(force=True)
+                        time.sleep(0.35)
+                        dismissed = True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        try:
+            # --- PASS 2: DNU Warning popup ---
+            # "PointCurrency_XXX is currently in the DNU list" - SweetAlert2 or Bootstrap.
+            # Only has an OK button; must be dismissed so subsequent actions can proceed.
+            #
+            # IMPORTANT: use specific phrase matching, NOT bare "dnu" — gate dropdown options
+            # in clone modals contain "DNU" gate names, causing the entire clone modal to
+            # match and btn-primary (= Clone button) to be clicked prematurely.
+            dnu_re = re.compile(
+                r"dnu\s+warning|currently in the dnu\s+(list|blacklist)|is in the dnu\s+(list|blacklist)",
+                re.IGNORECASE,
+            )
+            dnu_candidates = page.locator(
+                ".modal.show, .modal.in, .swal2-popup:visible, [role='dialog']:visible"
+            ).filter(has_text=dnu_re)
+            if dnu_candidates.count() > 0 and dnu_candidates.first.is_visible():
+                dnu_modal = dnu_candidates.first
+                # Never use button.btn-primary — it matches Clone/Save buttons in regular modals.
+                # DNU warning modals only have an explicit OK/Confirm button.
+                ok_btn = dnu_modal.locator(
+                    "button:has-text('OK'), button:has-text('Ok'), "
+                    "button.swal2-confirm"
+                ).first
+                if ok_btn.count() > 0 and ok_btn.is_visible():
+                    print("      🔔 DNU Warning detected; clicking OK to dismiss...")
+                    ok_btn.click(force=True)
+                    time.sleep(0.35)
+                    dismissed = True
+        except Exception:
+            pass
+
+        try:
+            # --- PASS 3: Generic CSV-import "Warning" confirmation (Continue/Cancel) ---
+            # e.g. Offer CSV import: title "Warning", body lists per-line warnings
+            # ("Offer already exists and will be overridden", "Gate X is a live gate"),
+            # buttons Continue/Cancel. The import is NOT committed until Continue is
+            # clicked. This is a safety net for when the upload step's own closer
+            # (upload_handler.py _upload_fuzz_fast) races the popup's render timing and
+            # moves on before it appears — this guard runs again right before the NEXT
+            # navigate/click/etc., so the popup never gets a chance to block that step.
+            # Scoped to require the word "warning" + an explicit Continue/Proceed button
+            # so it never matches the DNU Warning (OK-only) or unrelated modals.
+            warning_candidates = page.locator(
+                ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+            ).filter(has_text=re.compile(r"\bwarning\b", re.IGNORECASE))
+            for _ in range(3):
+                if (
+                    warning_candidates.count() == 0
+                    or not warning_candidates.first.is_visible()
+                ):
+                    break
+                warn_modal = warning_candidates.first
+                continue_btn = warn_modal.locator(
+                    "button:has-text('Continue'), button:has-text('Proceed')"
+                ).first
+                if continue_btn.count() == 0 or not continue_btn.is_visible():
+                    break
+                print(
+                    "      🟠 CSV-import Warning popup detected before next step; clicking Continue..."
+                )
+                continue_btn.click(force=True)
+                time.sleep(0.4)
+                dismissed = True
+        except Exception:
+            pass
+
+        try:
+            # --- PASS 4: Leftover success/result popup (OK-only) ---
+            # e.g. Gacha Pool CSV import: swal2-success icon, "Gacha pool successfully
+            # imported", single "OK" button. If the upload step's own result-scan
+            # (upload_handler.py _upload_fuzz_fast -> _scan_for_result_popup) loses the
+            # timing race (popup renders a beat after networkidle resolves), this is a
+            # safety net so the popup never blocks the NEXT step (e.g. save_form can't
+            # find its button because this modal is still covering the page).
+            # Scoped to an explicit success icon class so it never matches arbitrary
+            # text — does not rely on guessing keywords inside unrelated modals.
+            success_candidates = page.locator(
+                ".modal.show, .modal.in, [role='dialog']:visible, .swal2-popup:visible, .swal-modal:visible"
+            ).filter(
+                has=page.locator(".swal2-icon-success, .swal2-success, .alert-success")
+            )
+            if success_candidates.count() > 0 and success_candidates.first.is_visible():
+                ok_modal = success_candidates.first
+                ok_btn = ok_modal.locator(
+                    "button.swal2-confirm, button:has-text('OK'), button:has-text('Ok')"
+                ).first
+                if ok_btn.count() > 0 and ok_btn.is_visible():
+                    print(
+                        "      ✅ Success popup detected before next step; clicking OK..."
+                    )
+                    ok_btn.click(force=True)
+                    time.sleep(0.35)
+                    dismissed = True
+        except Exception:
+            pass
+
+        return dismissed
 
     def get_existing_page(self, p):
         try:
@@ -113,6 +404,9 @@ class BrickAutomation(
     def _execute_with_playwright(self, action_plan):
         """Core logic chạy Playwright - được gọi sau khi event loop policy đã được set đúng."""
         report_logs = []
+        last_update_form_data = {}  # Track most recent update_form data for clone ID capture
+        _current_step_idx = -1
+        _current_step = None
         with sync_playwright() as p:
             try:
                 browser, page = self.get_existing_page(p)
@@ -137,10 +431,16 @@ class BrickAutomation(
                     "wait_for_page_load",
                     "process_deployment",
                     "reorder",
+                    "delete_all_tasks",
+                    "pve_book_fuzz_test",
                 }
 
                 # Safety-net mapping (in case ai_brain.py fix_action_plan missed something)
                 SAFETY_MAP = {
+                    "delete_all": "delete_all_tasks",
+                    "remove_all_tasks": "delete_all_tasks",
+                    "clear_all_tasks": "delete_all_tasks",
+                    "delete_all_task": "delete_all_tasks",
                     "select_random_ids": "checkbox",
                     "select_ids": "checkbox",
                     "check_checkbox": "checkbox",
@@ -149,6 +449,7 @@ class BrickAutomation(
                     "export": "download",
                     "import_csv": "upload",
                     "import": "upload",
+                    "process_import": "upload",
                     "click_logo": "process_deployment",
                     "click_logo_the_brick": "process_deployment",
                     "click_the_brick": "process_deployment",
@@ -179,7 +480,20 @@ class BrickAutomation(
                     "check_tabs": "check_fields",
                 }
 
-                for step in action_plan:
+                for _current_step_idx, step in enumerate(action_plan):
+                    _current_step = step
+                    _pre_log_len = len(report_logs)
+
+                    def _enrich_step_logs():
+                        """Back-fill step_idx/step_data onto log entries this iteration
+                        appended, so a self-heal agent can address exactly which action
+                        plan step failed. setdefault: a branch that already sets these
+                        keys explicitly keeps its own values."""
+                        for _entry in report_logs[_pre_log_len:]:
+                            if isinstance(_entry, dict):
+                                _entry.setdefault("step_idx", _current_step_idx)
+                                _entry.setdefault("step_data", copy.deepcopy(step))
+
                     act = step.get("action")
 
                     # Auto-fix invalid action name via safety map
@@ -243,6 +557,19 @@ class BrickAutomation(
 
                     print(f"▶️ Executing: {act} -> {tgt} {val}")
 
+                    # Nếu đang có popup confirm "Are you sure?" kiểu Bootstrap (ví dụ:
+                    # "This event schedule is outside of the RBE's schedule...") thì phải OK trước
+                    # khi tiếp tục các bước click/update/save, tránh AI bị block/nhảy bước sai.
+                    try:
+                        if act in {"click", "select", "update_form", "save_form",
+                                   "navigate", "process_deployment"}:
+                            # Handle SweetAlert2 clone confirmation first (Yes/No)
+                            self._ensure_swal2_clone_confirmation_yes(page)
+                            # Then handle existing Bootstrap confirmation modals
+                            self._ensure_rbe_are_you_sure_closed(page)
+                    except Exception:
+                        pass
+
                     if act == "navigate":
                         nav_data = step.get("path") if step.get("path") else tgt
                         print(
@@ -270,9 +597,11 @@ class BrickAutomation(
                                     "step": "Navigate",
                                     "status": "FAIL",
                                     "details": f"{str(e)[:200]}",
+                                    "traceback": traceback.format_exc(),
                                 }
                             )
                             # Stop this case so smoke classification is accurate
+                            _enrich_step_logs()
                             break
                     elif act == "checkbox":
                         val_lower = val.lower().strip()
@@ -358,6 +687,7 @@ class BrickAutomation(
                             print(
                                 f"      ⚠️ Click failed for '{tgt}'. Stopping execution to prevent errors."
                             )
+                            _enrich_step_logs()
                             break
                     elif act == "wait" or act == "wait_for_page_load":
                         print("      ⏳ Explicit WAIT requested...")
@@ -375,19 +705,50 @@ class BrickAutomation(
                     elif act == "clone_row":
                         self._click_icon_in_row(page, tgt, "clone")
                     elif act == "update_form":
-                        self._smart_update_form(page, popup_data)
-                        report_logs.append(
-                            {
-                                "step": "Form",
-                                "status": "PASS",
-                                "details": str(popup_data),
-                            }
-                        )
+                        # Pass a deep copy: special-case handlers (Contest Superstar,
+                        # RBE task panel, ...) pop consumed keys off `data` in place.
+                        # `popup_data` is the SAME dict object as step["data"] inside
+                        # `action_plan`, so mutating it directly would leave step["data"]
+                        # empty by the time the smoke runner freezes this same action_plan
+                        # object into the golden plan cache (plan_cache.record_success) —
+                        # producing a golden template with "data": {} that replays as a no-op.
+                        try:
+                            self._smart_update_form(page, copy.deepcopy(popup_data))
+                            last_update_form_data = popup_data  # Track for clone ID capture
+                            report_logs.append(
+                                {
+                                    "step": "Form",
+                                    "status": "PASS",
+                                    "details": str(popup_data),
+                                }
+                            )
+                        except Exception as e:
+                            report_logs.append(
+                                {
+                                    "step": "Form",
+                                    "status": "FAIL",
+                                    "details": str(e)[:200],
+                                    "traceback": traceback.format_exc(),
+                                }
+                            )
+                            print(f"      ❌ update_form failed: {e}")
+                            _enrich_step_logs()
+                            break
                     elif act == "save_form":
+                        # Safety net: dismissing a result modal (e.g. after CSV import)
+                        # can trigger a page reload with its own spinner. If the
+                        # upload step's own wait lost that race, wait it out here too
+                        # — otherwise _save_form searches for the Save button while
+                        # the page is still mid-reload and finds nothing.
+                        try:
+                            if hasattr(self, "_wait_for_long_loading"):
+                                self._wait_for_long_loading(page, timeout_ms=20000)
+                        except Exception:
+                            pass
                         mode = step.get("mode", "save")
                         save_result = self._save_form(page, mode=mode)
-                        if isinstance(save_result, str) and save_result.startswith(
-                            "Error:"
+                        if isinstance(save_result, str) and (
+                            save_result.startswith("Error:") or save_result == "Fail"
                         ):
                             report_logs.append(
                                 {
@@ -400,6 +761,7 @@ class BrickAutomation(
                             print(
                                 f"      🛑 Stopping execution due to save error. Remaining steps will be skipped."
                             )
+                            _enrich_step_logs()
                             break  # STOP: Không chạy tiếp các bước sau khi Save bị lỗi
                         else:
                             report_logs.append(
@@ -412,21 +774,130 @@ class BrickAutomation(
                             # [CRITICAL] After save_form(clone), check for Locked Item popup
                             # Cloning navigates to the new item's edit page which may be locked
                             if mode == "clone":
+                                # Persist the new clone ID so downstream "vừa clone" substitution works
+                                _persist_clone_id(last_update_form_data)
                                 print(
                                     "      ⏳ Waiting for cloned item page to load..."
                                 )
-                                time.sleep(1.5)
+                                # Regression speed-up: reduce sleep aggressively to reach edit_row before tool timeout.
+                                time.sleep(0.1)
                                 popup_handled = self._handle_locked_item_popup(page)
                                 if popup_handled:
-                                    time.sleep(1.0)
+                                    time.sleep(0.1)
                                     print(
                                         "      ✅ Lock handled for cloned item. Ready to update form."
                                     )
                                 else:
-                                    time.sleep(0.5)
+                                    time.sleep(0.1)
 
                     elif act == "download":
                         try:
+                            # PVE Export Chapters special handling:
+                            # For Export Chapter, BookID must come from page header "Event: <BookID> (....)"
+                            # Then fill into input#searchChapterTemplate and select inside #listbox-searchChapterTemplate.
+                            if str(tgt or "").strip().lower() == "export chapter":
+                                book_id = None
+                                try:
+                                    # 1) Extract BookID from page text: "Event: LTPVE_.... (4149)"
+                                    # We'll scan visible text nodes and match "Event:" prefix.
+                                    book_id = page.evaluate("""() => {
+                                        const re = /Event:\\s*([^:\\s(]+)\\s*(?=[:(])/i;
+                                        const walker = document.createTreeWalker(
+                                            document.body,
+                                            NodeFilter.SHOW_TEXT,
+                                            null,
+                                            false
+                                        );
+                                        let node;
+                                        while(node = walker.nextNode()){
+                                            const t = (node.nodeValue || '').trim();
+                                            if(!t) continue;
+                                            const m = t.match(re);
+                                            if(m && m[1]) return m[1].trim();
+                                        }
+                                        return null;
+                                    }""")
+                                    if book_id:
+                                        book_id = str(book_id).strip()
+                                        print(
+                                            f"   🔍 Export Chapter: extracted BookID from page: '{book_id}'"
+                                        )
+                                except Exception as _extract_e:
+                                    print(
+                                        f"   ⚠️ Export Chapter: failed extracting BookID from page: {_extract_e}"
+                                    )
+                                    book_id = None
+
+                                # 2) Fallback: if extraction fails, try from downloads/chapter_test.csv
+                                if not book_id:
+                                    try:
+                                        import csv as _csv
+
+                                        csv_path = os.path.join(
+                                            DOWNLOAD_DIR, str(val or "chapter_test.csv")
+                                        )
+                                        prefer_path = os.path.join(
+                                            DOWNLOAD_DIR, "chapter_test.csv"
+                                        )
+                                        if os.path.exists(prefer_path):
+                                            csv_path = prefer_path
+
+                                        if os.path.exists(csv_path):
+                                            with open(
+                                                csv_path, "r", encoding="utf-8-sig"
+                                            ) as f:
+                                                reader = _csv.DictReader(f)
+                                                headers = reader.fieldnames or []
+                                                book_col = None
+                                                for h in headers:
+                                                    hl = str(h).strip().lower()
+                                                    if (
+                                                        hl == "bookid"
+                                                        or hl == "book id"
+                                                        or hl.endswith("bookid")
+                                                        or "bookid" in hl
+                                                    ):
+                                                        book_col = h
+                                                        break
+                                                if book_col is None and headers:
+                                                    book_col = headers[0]
+                                                for r in reader:
+                                                    raw_book_id = (
+                                                        r.get(book_col)
+                                                        if book_col
+                                                        else None
+                                                    )
+                                                    if raw_book_id:
+                                                        book_id = str(
+                                                            raw_book_id
+                                                        ).strip()
+                                                    break
+                                    except Exception as _csv_e:
+                                        print(
+                                            f"   ⚠️ Export Chapter: CSV fallback BookID error: {_csv_e}"
+                                        )
+
+                                # 3) Select BookID using the correct multiselect in DOM
+                                if book_id:
+                                    try:
+                                        ok = self._select_book_id_in_chapter_template_multiselect(
+                                            page, book_id
+                                        )
+                                        if ok:
+                                            time.sleep(1.0)
+                                        else:
+                                            print(
+                                                "   ⚠️ Export Chapter: BookID selection failed (best-effort)."
+                                            )
+                                    except Exception as _sel_e:
+                                        print(
+                                            f"   ⚠️ Export Chapter: BookID selection exception: {_sel_e}"
+                                        )
+                                else:
+                                    print(
+                                        "   ⚠️ Export Chapter: BookID is empty; skipping template selection (best-effort)."
+                                    )
+
                             btn = self._find_download_trigger(page, tgt)
                             if btn:
                                 with page.expect_download(timeout=30000) as dl:
@@ -434,10 +905,26 @@ class BrickAutomation(
                                         btn.click()
                                     else:
                                         btn.evaluate("el=>el.click()")
+                                # Resolve the save filename robustly. The AI sometimes puts the
+                                # filename in `target` instead of `value` (e.g. download ->
+                                # "Book_test.csv" with empty value). An empty save name makes
+                                # os.path.join(DOWNLOAD_DIR, "") resolve to the directory itself →
+                                # save_as() raises "[Errno 21] Is a directory". Fall back to a
+                                # filename-shaped target, then the browser's suggested filename.
+                                _data_exts = (".csv", ".xlsx", ".xls", ".json", ".txt")
+                                save_name = (val or "").strip()
+                                if not save_name:
+                                    if str(tgt or "").strip().lower().endswith(_data_exts):
+                                        save_name = str(tgt).strip()
+                                    else:
+                                        save_name = (
+                                            dl.value.suggested_filename or "download.csv"
+                                        )
+
                                 # IMPORTANT: Some UI actions (esp. Import CSV) may trigger temp downloads
                                 # like "*_imported.csv" and "*_report_*.csv". We must NOT persist them
                                 # into DOWNLOAD_DIR, otherwise user sees "imported/report" artifacts.
-                                filename_lower = str(val or "").lower()
+                                filename_lower = save_name.lower()
                                 tgt_lower = str(tgt or "").lower()
 
                                 is_temp_artifact = any(
@@ -455,17 +942,19 @@ class BrickAutomation(
                                         {
                                             "step": "Download",
                                             "status": "SKIP",
-                                            "details": f"Discarded temp download: {val}",
+                                            "details": f"Discarded temp download: {save_name}",
                                         }
                                     )
                                     # Do not save_as into DOWNLOAD_DIR
                                 else:
-                                    dl.value.save_as(os.path.join(DOWNLOAD_DIR, val))
+                                    dl.value.save_as(
+                                        os.path.join(DOWNLOAD_DIR, save_name)
+                                    )
                                     report_logs.append(
                                         {
                                             "step": "Download",
                                             "status": "PASS",
-                                            "details": val,
+                                            "details": save_name,
                                         }
                                     )
                             else:
@@ -492,10 +981,44 @@ class BrickAutomation(
                         else:
                             print("      ⚠️ Smart Test returned no logs.")
 
+                    elif act == "pve_book_fuzz_test":
+                        logs, structured_report = self.run_pve_book_csv_fuzz(
+                            page, val, step.get("options", {})
+                        )
+                        report_logs.extend(logs)
+                        self.pve_book_fuzz_report = structured_report
+
                     elif act == "upload":
                         upload_logs = self.handle_upload(page, tgt, val)
                         report_logs.extend(upload_logs)
                         self.close_popup(page)
+                        # A confirmed-successful CSV import commonly triggers a page/table
+                        # reload right after the server responds (Gacha Pool/Weight etc.).
+                        # handle_upload already waits this out internally on its own
+                        # success path, but this is a last-resort safety net at the
+                        # dispatcher level so the NEXT step (navigate/update_form/...)
+                        # never races an in-flight reload regardless of which internal
+                        # upload path returned.
+                        if hasattr(self, "_wait_for_long_loading"):
+                            try:
+                                self._wait_for_long_loading(page, timeout_ms=15000)
+                            except Exception:
+                                pass
+                        # Same "stop on failure" contract as Save below: if the import
+                        # never actually succeeded, every later step (switching tabs,
+                        # filling fields that reference the just-imported rows, deploying)
+                        # is doomed anyway — confirmed live via "Create the Gacha Event":
+                        # a failed Gacha Pool import used to let the run barrel ahead into
+                        # Gacha Weight/Deployment on an empty pool table.
+                        if any(
+                            isinstance(_l, dict) and _l.get("status") in ("FAIL", "CRASH")
+                            for _l in upload_logs
+                        ):
+                            print(
+                                "      🛑 Stopping execution due to upload/import failure. Remaining steps will be skipped."
+                            )
+                            _enrich_step_logs()
+                            break
 
                     elif act == "manipulate_csv":
                         report_logs.append(
@@ -569,9 +1092,36 @@ class BrickAutomation(
                                     }
                                 )
 
+                    elif act == "delete_all_tasks":
+                        try:
+                            delete_logs = self.delete_all_tasks(page)
+                            report_logs.extend(delete_logs)
+                        except Exception as e:
+                            print(f"   ❌ Delete All Tasks Error: {e}")
+                            report_logs.append(
+                                {
+                                    "step": "Delete All Tasks",
+                                    "status": "FAIL",
+                                    "details": str(e),
+                                }
+                            )
+
                     elif act == "process_deployment":
                         options = step.get("options", [])
                         print(f"   🚀 Process Deployment: {options}")
+                        # Dismiss any lingering popup before navigating home
+                        try:
+                            swal = page.locator(".swal2-popup")
+                            if swal.count() > 0 and swal.first.is_visible():
+                                ok_btn = swal.first.locator(
+                                    "button.swal2-confirm, button:has-text('OK'), button:has-text('Yes')"
+                                )
+                                if ok_btn.count() > 0 and ok_btn.first.is_visible():
+                                    ok_btn.first.click(force=True)
+                                    time.sleep(0.3)
+                                    print("      ✅ Dismissed lingering popup before navigating home")
+                        except Exception:
+                            pass
                         try:
                             self.process_deployment(page, options)
                             report_logs.append(
@@ -591,6 +1141,7 @@ class BrickAutomation(
                                 }
                             )
 
+                    _enrich_step_logs()
                     time.sleep(1)
                 # ====================================================
                 # [MỚI] TỰ ĐỘNG REFRESH TRANG SAU KHI HOÀN THÀNH
@@ -619,4 +1170,11 @@ class BrickAutomation(
                 return report_logs
             except Exception as e:
                 print(f"CRASH: {e}")
-                return [{"step": "System", "status": "CRASH", "details": str(e)}]
+                return [{
+                    "step": "System",
+                    "status": "CRASH",
+                    "details": str(e),
+                    "traceback": traceback.format_exc(),
+                    "step_idx": _current_step_idx,
+                    "step_data": copy.deepcopy(_current_step) if _current_step is not None else None,
+                }]

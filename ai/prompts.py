@@ -4,13 +4,13 @@
 
 def get_fast_mode_prompt(user_command):
     """
-    Prompt cho Fast Mode (Single Model Pipeline - Qwen2.5-Coder)
+    Prompt cho Fast Mode (Single Model Pipeline - Qwen3)
     Sử dụng Few-Shot Learning với 14 examples.
     """
     return f"""You are a strict JSON converter. You MUST use action names from examples below.
 
 CRITICAL: ONLY these action names are valid:
-navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click, wait, check_fields, reorder
+navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle, process_deployment, clone_row, edit_row, update_form, save_form, click, wait, check_fields, reorder, delete_all_tasks
 
 LEARN FROM THESE 5 EXAMPLES (COPY the action names EXACTLY):
 
@@ -19,8 +19,19 @@ Input: "Vào Live Events -> Gacha Event -> Gacha Event -> Clone ID: EventGacha_t
 Output: [{{"action":"navigate","path":["Live Events","Gacha Event","Gacha Event"]}},{{"action":"clone_row","target":"EventGacha_test_15"}},{{"action":"update_form","data":{{"New Event ID":"test_230226_8","Gate":"r80","Use another currency":"select","Currency":"GachaShard_Feb2026_Wknd1_Main"}}}},{{"action":"save_form","mode":"clone"}},{{"action":"wait"}},{{"action":"update_form","data":{{"Schedule in UTC":"2026-02-23 00:00:00, 2026-02-23 11:00:00","Milestones Type":"Disable"}}}},{{"action":"save_form","mode":"save"}},{{"action":"process_deployment","options":["Gacha Events"]}}]
 
 Example 2:
-Input: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID -> Export CSV test.csv"
+Input: "Vào Live Events -> Offer -> Offer Section -> Chọn 2 ID bất kỳ -> Export CSV test.csv"
 Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}}]
+RULE: "Chọn N [entity] bất kỳ" = checkbox(random_N), NOT edit_row. "Chọn/Tick/Select" + table row = checkbox. Only "Sửa/Edit" = edit_row.
+
+Example 2b (SPECIFIC ID checkbox - NOT random):
+Input: "Vào PVE -> Chọn ID "LTPVE_May2026_Wk4_Contest" -> Export CSV"
+Output: [{{"action":"navigate","path":["Live Events","PVE","Standard PVE"]}},{{"action":"checkbox","target":"ID","value":"LTPVE_May2026_Wk4_Contest"}},{{"action":"download","target":"Export CSV"}}]
+RULE: "Chọn ID 'SPECIFIC_ID'" = checkbox(target="ID", value="SPECIFIC_ID"). Use the EXACT ID string as value. NEVER use process_deployment for this. This selects a specific named row, different from "Chọn N ID bất kỳ" (random selection).
+
+Example 2c (SPECIFIC ID checkbox, COLON format — do NOT confuse with edit_row):
+Input: "Vào Offer -> Chọn ID: nov2024_wk3_webpp_wcs_strap_130gem_show -> Export CSV file offer_test.csv"
+Output: [{{"action":"navigate","path":["Live Events","Offer","Offer"]}},{{"action":"checkbox","target":"ID","value":"nov2024_wk3_webpp_wcs_strap_130gem_show"}},{{"action":"download","target":"Export CSV","value":"offer_test.csv"}}]
+RULE: "Chọn ID: X" (WITH a colon, no quotes) is STILL checkbox, exactly like "Chọn ID 'X'". The verb "Chọn" (select/tick) is what decides the action — checkbox — regardless of whether the ID after it is quoted, has a colon, or neither. Only the verb "Sửa"/"Edit" before "ID:" triggers edit_row (see "Sửa" CONTEXT DETECTION below, e.g. "Sửa ID: FF_ABC" = edit_row). NEVER invent or reuse an unrelated ID from a different example as the edit_row target — "Chọn ID: X" never becomes edit_row.
 
 Example 3:
 Input: "Click logo The Brick -> Chọn checkbox Offers -> Bấm Process"
@@ -34,6 +45,7 @@ Example 4b (Superstar - EDIT RANDOM):
 Input: "Vào Superstar -> Đợi trang load -> Sửa một Superstar bất kỳ"
 Output: [{{"action":"navigate","path":["Superstar"]}},{{"action":"wait"}},{{"action":"edit_row","target":"RANDOM"}}]
 RULE: "Sửa một [entity] bất kỳ" = edit_row("RANDOM"). The word before "bất kỳ" is the entity type, NOT a target ID.
+RULE: "Sửa ID vừa clone" / "Sửa ID vừa tạo" = edit_row("RANDOM"). NEVER invent placeholder strings like "cloned_item_id".
 
 Example 5:
 Input: "Clone EventGacha_ABC -> New ID: test_1, Gate: feb2026"
@@ -46,13 +58,15 @@ Example 6:
 Input: "Vào Offer Section -> Chọn 2 ID -> Export test.csv -> Smart test -> Import -> Process"
 Output: [{{"action":"navigate","path":["Live Events","Offer","Offer Section"]}},{{"action":"checkbox","target":"ID","value":"random_2"}},{{"action":"download","target":"Export CSV","value":"test.csv"}},{{"action":"smart_test_cycle","value":"test.csv"}},{{"action":"upload","target":"Import CSV","value":"test.csv"}},{{"action":"process_deployment","options":["Offers"]}}]
 
-Example 7:
+Example 7 (NAVIGATE HOME ONLY — no Process):
 Input: "Bấm logo The Brick"
 Output: [{{"action":"process_deployment","options":[]}}]
+RULE: "Bấm logo The Brick" or "Click logo" ALONE (WITHOUT "Chọn checkbox" and WITHOUT "Process" after it) = navigate home only. options MUST be []. Do NOT add any checkbox names to options.
 
-Example 8:
+Example 8 (NAVIGATE HOME ONLY — no Process):
 Input: "Click The Brick"
 Output: [{{"action":"process_deployment","options":[]}}]
+RULE: Same — "Click The Brick" alone = navigate home, options=[]. NEVER add checkboxes unless user says "Chọn checkbox X -> Process".
 
 Example 9:
 Input: "Vào Data Configs -> Perk -> Perk"
@@ -66,6 +80,16 @@ RULE for Example 10b: When "Sửa [Field]: [Value]" appears BETWEEN a download (
 Example 10:
 Input: "Export perk_test.csv -> Smart test -> Import -> Chọn checkbox Perks -> Bấm Process"
 Output: [{{"action":"download","target":"Export CSV","value":"perk_test.csv"}},{{"action":"smart_test_cycle","value":"perk_test.csv"}},{{"action":"upload","target":"Import CSV","value":"perk_test.csv"}},{{"action":"process_deployment","options":["Perks"]}}]
+
+Example 10c (STANDALONE PAGE-LEVEL IMPORT - no Export, no edit):
+Input: "Vào PVE -> Import CSV file Book_test.csv -> Bấm vào logo The Brick"
+Output: [{{"action":"navigate","path":["Live Events","PVE","Standard PVE"]}},{{"action":"upload","target":"Import CSV","value":"Book_test.csv"}},{{"action":"process_deployment","options":[]}}]
+RULE for Example 10c: "Import CSV file <name>" on a list page (no preceding Export, no edit_row) is a SINGLE page-level import → exactly ONE {{"action":"upload","target":"Import CSV","value":"<name>"}}. NEVER emit "import_csv" or "process_import" (INVALID actions). NEVER repeat the import step — emit it ONCE only.
+
+Example 10d (NON-STANDARD EXPORT BUTTON LABEL — STILL A DOWNLOAD, NO RE-IMPORT):
+Input: "Vào PVE -> Sửa ID: LTPVE_test_123 -> Đợi trang load -> Bấm vào tab Import/Export Chapters -> Export Chapter theo BookID file chapter_test.csv -> Xóa tất cả giá trị trong cột SS1 Entry Req -> Xóa tất cả giá trị trong cột SS2 Entry Req -> Save -> Bấm vào logo The Brick"
+Output: [{{"action":"navigate","path":["Live Events","PVE","Standard PVE"]}},{{"action":"edit_row","target":"LTPVE_test_123"}},{{"action":"wait"}},{{"action":"click","target":"Import/Export Chapters"}},{{"action":"download","target":"Export Chapter","value":"chapter_test.csv"}},{{"action":"manipulate_csv","target":"chapter_test.csv","operation":"set","data":"SS1 Entry Req="}},{{"action":"manipulate_csv","target":"chapter_test.csv","operation":"set","data":"SS2 Entry Req="}},{{"action":"save_form"}},{{"action":"process_deployment","options":[]}}]
+RULE for Example 10d: "Export <AnyWord> ... file <name.csv>" is ALWAYS a download step — not only the literal phrase "Export CSV". Take the button target from the word right after "Export" (e.g. "Export Chapter"); ignore filler qualifiers in between like "theo BookID". NEVER drop the download just because the wording doesn't match the generic "Export CSV" phrasing — a manipulate_csv on a file that was never downloaded FAILS ("File not found"). Also note: unlike Example 10b, this command has NO "Import CSV" mention anywhere — do NOT invent an upload/re-import step the command didn't ask for; go straight from the manipulate_csv edits to Save.
 
 Example 11:
 Input: "Click logo The Brick -> Chọn Gacha Events -> Process"
@@ -129,16 +153,42 @@ RULE for Example 23: Use {{"action":"reorder"}} when user wants to drag an item 
     * "Di chuyển offer_A lên vị trí 2" → {{"action":"reorder","target":"offer_A","position":2}}
   - CRITICAL: "kéo X xuống dưới" / "move X down" WITHOUT naming another item → position:9999 (last). NEVER emit all-None!
   - CRITICAL: "target" MUST be the exact item name extracted from the user command (non-empty string). NEVER output {{"target":""}}, {{"target":null}}, or omit "target". If you cannot identify the item name, do NOT emit a reorder action at all.
+Example 24 (SEARCH/FILTER - uses filter input, NOT checkbox):
+Input: "Vào PVE -> Filter 1 Book bất kỳ -> Bấm vào logo The Brick"
+Output: [{{"action":"navigate","path":["PVE"]}},{{"action":"update_form","data":{{"ID contains":"RANDOM"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"process_deployment","options":[]}}]
+RULE for Example 24: "Filter N/một [entity] bất kỳ" = type a keyword in the "ID contains" search box + click "Filter Data". Use "RANDOM" as the value — it will be resolved to an actual row ID at runtime. This is a SEARCH action, NOT checkbox row-selection. NEVER use checkbox for "Filter" — only "Chọn/Tick" means checkbox.
+Example 24b (OFFER FILTER — also uses "ID contains"):
+Input: "Vào Offer -> Filter một ID bất kỳ -> Bấm vào logo The Brick"
+Output: [{{"action":"navigate","path":["Offer"]}},{{"action":"update_form","data":{{"ID contains":"RANDOM"}}}},{{"action":"click","target":"Filter Data"}},{{"action":"process_deployment","options":[]}}]
+RULE for Example 24b: EVERY filter page (Offer, Offer Section, Drip Offer, PVE, RBE, Gacha, Currency, etc.) uses the SAME "ID contains" search box. ALWAYS use the key "ID contains" for any "Filter ... bất kỳ" command. NEVER use "Offer Name" or any other label.
+
+Example 25 (RBE TASKS TAB — per-task fields keyed "Task N <Field>"):
+Input: "Bấm vào tab Tasks -> Sửa Task 3: Condition: Signpost, League Min: 5, League Max: 20, Attempt: 7, Default Score: 250, Is hidden: on, Accumulated: off, Complete Type 1: PVP:PVP, Link Start Time: 2026-07-24 19:00, Link End Time: 2026-07-27 19:00 -> Save"
+Output: [{{"action":"click","target":"Tasks"}},{{"action":"update_form","data":{{"Task 3 Condition":"Signpost","Task 3 League Min":"5","Task 3 League Max":"20","Task 3 Attempt":"7","Task 3 Default Score":"250","Task 3 Is hidden":"on","Task 3 Accumulated":"off","Task 3 Complete Type 1":"PVP:PVP","Task 3 Link Start Time":"2026-07-24 19:00","Task 3 Link End Time":"2026-07-27 19:00"}}}},{{"action":"save_form","mode":"save"}}]
+RULE for Example 25: On the RBE "Tasks" tab each task is a numbered card ("Task 1", "Task 2", ...). EVERY field for a task MUST be keyed with the "Task <N> " prefix EXACTLY as written in the command (e.g. "Task 3 Condition", "Task 3 Is hidden"). When editing field(s) on task(s) that ALREADY EXIST on the page, put ALL of them in ONE update_form. Recognized field labels: Condition, Description (localization), Count, Complete Type 1/2/3, Default Score, Link, Link Start Time, Link End Time, League Min, League Max, Attempt, Is hidden, Accumulated. Complete Type values use "Category:Value" form (e.g. "PVP:PVP", "superstar:SS_BretHart_BTI", "damage:1250"). Is hidden / Accumulated take on/off. NEVER drop the "Task N" prefix. This "ONE update_form" rule is ONLY for existing tasks — see Example 25c for creating brand-new tasks, which works differently.
+
+Example 25b (RBE TASKS TAB — DELETE ALL TASKS, before re-creating them):
+Input: "Bấm vào tab Tasks -> Xóa tất cả các task -> Sửa Task 1: Condition: win, Default Score: 100 -> Save"
+Output: [{{"action":"click","target":"Tasks"}},{{"action":"delete_all_tasks"}},{{"action":"update_form","data":{{"Task 1 Condition":"win","Task 1 Default Score":"100"}}}},{{"action":"save_form","mode":"save"}}]
+RULE for Example 25b: "Xóa tất cả các task" / "Delete all tasks" / "Remove all tasks" is ALWAYS {{"action":"delete_all_tasks"}} — a DEDICATED action, NOT {{"action":"click","target":"Delete All Tasks"}} (there is no such button; only a per-task trash icon exists, and a literal click for it always fails "Cannot find clickable element"). This action deletes every task down to Task 1 (Task 1 itself can never be deleted). Use it whenever the command says to delete/clear/remove ALL tasks, not for deleting one specific task.
+
+Example 25c (RBE TASKS TAB — ADD MULTIPLE NEW TASKS, each needs its own "Add New Task" click + its own update_form):
+Input: "Bấm vào tab Tasks -> Xóa tất cả các task -> Thêm Task 2: Condition: win, League Min: 7, League Max: 24, Attempt: 7 -> Thêm Task 3: Condition: Signpost, League Min: 5, League Max: 20 -> Save"
+Output: [{{"action":"click","target":"Tasks"}},{{"action":"delete_all_tasks"}},{{"action":"click","target":"Add New Task"}},{{"action":"update_form","data":{{"Task 2 Condition":"win","Task 2 League Min":"7","Task 2 League Max":"24","Task 2 Attempt":"7"}}}},{{"action":"click","target":"Add New Task"}},{{"action":"update_form","data":{{"Task 3 Condition":"Signpost","Task 3 League Min":"5","Task 3 League Max":"20"}}}},{{"action":"save_form","mode":"save"}}]
+RULE for Example 25c: A brand-new task's card (Task 2, Task 3, ...) does not exist until "Add New Task" is clicked once for it — there is nothing on the page to fill yet. So for N new tasks, emit N separate pairs of {{"action":"click","target":"Add New Task"}} followed by ONE update_form containing ONLY that task's fields, in ascending task-number order. Do NOT wait and cram every new task's fields into a single update_form after all the clicks — each task's fields must immediately follow ITS OWN "Add New Task" click. Each per-task update_form still uses the "Task <N> <Field>" key format from Example 25. This is the opposite of Example 25's rule, which only applies to tasks that already exist.
 CRITICAL RULES:
 - NEVER use {{"action":"click","target":"The Brick"}} or {{"action":"click","target":"logo"}}
-- "Click The Brick", "Bấm logo", "Click logo" → ALWAYS use {{"action":"process_deployment","options":[]}}
+- "Bấm logo The Brick" / "Click logo" ALONE (no "Chọn checkbox" and no "Process" after) → {{"action":"process_deployment","options":[]}} (navigate home only, options MUST be [])
+- ONLY add options AND use process_deployment with options when command EXPLICITLY says "Chọn checkbox X" AND "Bấm Process" / "Process" after the logo click
+- EXAMPLE: "... -> Bấm vào logo The Brick" (end of command) → {{"action":"process_deployment","options":[]}}
+- EXAMPLE: "... -> Bấm vào logo The Brick -> Chọn checkbox RBE -> Process" → {{"action":"process_deployment","options":["RBE"]}}
 
 - CLONE ACTION (CRITICAL - NEVER SKIP):
   * "Bấm nút Clone ID: X", "Clone ID: X", "Clone X" → ALWAYS start with {{"action":"clone_row","target":"X"}}
   * RANDOM CLONE: "Clone bất kỳ", "Clone một ID bất kỳ", "Clone random" → {{"action":"clone_row","target":"RANDOM"}}
   * The word "ID" after "Clone" is part of the label ("Clone ID:"), NOT a form field name
   * AFTER clone_row, ALWAYS use update_form for modal fields (New ID/New FF ID/New Event ID, Gate, Currency, radio, etc.)
-  * Clone modal field names vary by event type: "New Event ID" (Gacha), "New FF ID" (Faction Feud), "New ID" (generic)
+  * Clone modal field names vary by event type: "New Event ID" (Gacha), "New FF ID" (Faction Feud), "Cloned Rules Based Tournament ID" (RBE), "New ID" (generic)
   * NEVER jump directly to save_form(clone) without update_form for modal fields first!
   * CORRECT: clone_row("RANDOM") → update_form({{New FF ID, Gate}}) → save_form(mode=clone) → wait → update_form(post-clone fields) → save_form
   * WRONG: clone_row("RANDOM") → save_form(mode=clone) (missing update_form for modal fields!)
@@ -151,6 +201,56 @@ CRITICAL RULES:
   * NEVER drop the radio step — Currency dropdown only appears AFTER radio is selected
   * CORRECT data order: {{"New Event ID": "...", "Gate": "...", "Use another currency": "select", "Currency": "..."}}
   * WRONG: {{"New Event ID": "...", "Gate": "...", "Currency": "..."}} (missing radio!)
+
+- MULTISELECT MULTIPLE VALUES (list fields like "Contest Superstar ID"):
+  * When a field value is wrapped in square brackets with multiple items, output a JSON LIST.
+  * Command syntax: "Contest Superstar ID: [SS_A, SS_B]" → {{"Contest Superstar ID": ["SS_A", "SS_B"]}}
+  * A SINGLE value stays a plain string: "Contest Superstar ID: SS_A" → {{"Contest Superstar ID": "SS_A"}}
+  * Only bracketed values become lists. Never turn a datetime pair (e.g. "Schedule: 2026-02-23 00:00:00, 2026-02-23 11:00:00") into a list — those stay a comma-separated STRING.
+  * Example: "Sửa RBE Event: RBE_x, Contest Superstar ID: [SS_A, SS_B], Rewards: SoftCurrency, Quantity: 100"
+    → {{"action":"update_form","data":{{"RBE Event":"RBE_x","Contest Superstar ID":["SS_A","SS_B"],"Rewards":"SoftCurrency","Quantity":"100"}}}}
+
+- FIGHT CARD V3 — PVE TAB (CRITICAL — NEVER SKIP):
+  * Fight Card V3 has multiple tabs. PVE fields (RBE Event, Contest Superstar ID, Rewards, Quantity) are ONLY accessible after clicking the "PVE" tab.
+  * "Bấm vào tab PVE" / "Click tab PVE" → MUST generate {{"action":"click","target":"PVE"}} BEFORE any update_form with PVE fields.
+  * "Bật toggle Contest Superstar" → include {{"Contest Superstar": "on"}} as the FIRST key in the update_form data dict (before RBE Event, Contest Superstar ID, Rewards, Quantity).
+  * CORRECT (with toggle): edit_row(ID) → wait → click("PVE") → update_form({{"Contest Superstar":"on","RBE Event":...,"Contest Superstar ID":...,"Rewards":...,"Quantity":...}}) → save_form
+  * CORRECT (without toggle): edit_row(RANDOM) → wait → click("PVE") → update_form({{"RBE Event":...,"Contest Superstar ID":...,"Rewards":...,"Quantity":...}}) → save_form
+  * WRONG: edit_row(RANDOM) → wait → update_form({{"RBE Event":...}}) ← missing click("PVE") means fields will NOT be found!
+
+- CLASSIC PVE (v2) — CONTEST SUPERSTAR NORMAL/HARD/HELL PANELS (CRITICAL — NEVER SPLIT):
+  * Standard PVE's (formerly "Classic PVE") Contest Superstar toggle opens THREE panels (Normal, Hard, Hell), each with its own "Node 1"/"Node 2" and Soft Currency fields, plus one top-level RBE selector shared by all three.
+  * ALL of these fields — the toggle, RBE, and every panel's Node 1 / SoftCurrency — MUST go in ONE SINGLE update_form data dict. NEVER emit one update_form per field/panel; the toggle+panel special-case handler only runs when "Contest Superstar" is present in the SAME call as the panel fields, so splitting them makes every later call silently fail (field not found, looks stuck).
+  * Command syntax: "Contest Superstar: on -> RBE: X, Normal Node 1: Y, SoftCurrency: N, Hard Node 1: Y, SoftCurrency: N, Hell Node 1: Y, SoftCurrency: N"
+  * CORRECT: edit_row(ID) → wait → update_form({{"Contest Superstar":"on","RBE":"X","Normal Node 1":"Y","SoftCurrency":"N","Hard Node 1":"Y","Hell Node 1":"Y"}}) → save_form
+    (SoftCurrency only needs to appear once when the amount is the same across Normal/Hard/Hell — it applies to all three panels.)
+  * WRONG: update_form({{"Contest Superstar":"on","RBE":"X"}}) → update_form({{"Normal Node 1":"Y"}}) → update_form({{"SoftCurrency":"N"}}) → update_form({{"Hard Node 1":"Y"}}) → ... (one call per field — breaks the special-case handler)
+
+- TITAN TAKEOVER BOSS — "RESTRICTION SLOT N" EDIT MODAL (CRITICAL — SINGLE KEY, DO NOT SPLIT):
+  * Battle Setup tab has "Restriction Slot 1"/"Restriction Slot 2" fields with an Edit button that opens a Group/AND/OR condition-builder modal (NOT a plain text field).
+  * Command syntax: "Edit Restriction Slot 1, sửa Group 1: [\"Ascended_1\",\"group:Color_Black\"]" → put the WHOLE "Group N: [...]" spec as the STRING value of a single key literally named "Restriction Slot N".
+  * CORRECT: update_form({{"Restriction Slot 1": "Group 1: [\"Ascended_1\",\"group:Color_Black\"]"}})
+  * WRONG: update_form({{"Group 1": "[\"Ascended_1\",\"group:Color_Black\"]"}}) ← missing the "Restriction Slot N" key, the special-case handler will never trigger
+  * WRONG: splitting into update_form({{"Restriction Slot 1":"Ascended_1"}}) → update_form({{"Restriction Slot 1":"group:Color_Black"}}) ← must be ONE call with the full bracketed list as the value
+
+- "GIỐNG NHƯ <FIELD>" / "SAME AS <FIELD>" VALUES (deterministic — DO NOT try to guess the literal):
+  * When a field's value is "Giống như <Field>" / "same as <Field>" (e.g. "Display Name: Giống như Boss ID"), output the phrase VERBATIM as the string value — do NOT invent or copy a literal ID yourself.
+  * CORRECT: update_form({{"Display Name": "Giống như Boss ID", ...}})
+  * A deterministic post-processor resolves this to the real value of "Boss ID"/"New Boss ID" elsewhere in the plan; if you substitute your own guess instead, it will likely be wrong and this safety net won't run.
+
+- MULTI-FEATURE COMMANDS (CRITICAL — NEVER SKIP NAVIGATE):
+  * When command touches multiple features (e.g. FCV3 then RBE), EACH feature section MUST start with its own navigate.
+  * "Bấm vào logo The Brick" between features = {{"action":"process_deployment","options":[]}} ONLY — NEVER add options unless explicit "Chọn checkbox X -> Process" follows.
+  * After each logo click, "Vào X" ALWAYS generates navigate(X) + edit_row(RANDOM/ID) — NEVER use update_form(ID contains) as a substitute.
+  * "Bấm vào tab X" ALWAYS generates click("X") immediately BEFORE the save_form in that feature's section.
+  * CORRECT multi-feature flow example:
+    "Vào FCV3 -> Sửa ... -> tab PVE -> Sửa ... -> Save -> logo -> Vào RBE -> Sửa ... -> tab Contest Superstars -> Save -> logo"
+    → navigate(FCV3) → edit_row(RANDOM) → wait → click("PVE") → update_form({{PVE fields}}) → save_form
+    → process_deployment(options=[])
+    → navigate(RBE) → edit_row(RANDOM) → wait → click("Contest Superstars") → save_form
+    → process_deployment(options=[])
+  * WRONG: navigate(FCV3)→...→save_form→process_deployment(["PVE","RBE"])→update_form({{"ID contains":X}})→save_form
+    ← TWO errors: (1) wrong options, (2) missing navigate(RBE)+edit_row, (3) missing click("Contest Superstars")
 
 - CLONE MODAL SUBMIT + POST-CLONE EDITING (CRITICAL):
   * After filling the Clone modal (New ID, Gate, radio, Currency), ALWAYS add {{"action":"save_form","mode":"clone"}} to click the Clone button
@@ -193,18 +293,30 @@ CRITICAL RULES:
   * manipulate_csv schema: {{"action":"manipulate_csv","target":"<filename>","operation":"set","data":"<ColumnName>=<Value>"}}
   * The target filename MUST match the previously downloaded file. Separate multiple CSV column edits with separate manipulate_csv steps.
   * Example: "Export perk.csv → Sửa Event Type: PVE_STIPULATION → Import perk.csv" = download + manipulate_csv(set,Event Type=PVE_STIPULATION) + upload. NEVER update_form here.
+  * ⚠️ manipulate_csv values are written into the raw CSV cell VERBATIM — copy the value EXACTLY as typed after the colon, character for character. Do NOT add/remove "AM"/"PM", do NOT reformat dates, do NOT add trailing punctuation. This is DIFFERENT from update_form datetime fields (which DO need "AM/PM" for the UI picker widget) — manipulate_csv has no such requirement.
+  * Example: "Sửa cột End Times: 07/31/2026, 11:00" (between Export and Import) → manipulate_csv(set,"End Times=07/31/2026, 11:00") — NOT "...11:00 AM". The command has no AM/PM, so the CSV value has none either.
   * Example: "Sửa FF ID: FF_ABC -> Đợi trang load -> sửa Gate: r80" = edit_row("FF_ABC") + wait + update_form({{"Gate":"r80"}}) + save_form
   * WRONG: update_form({{"FF ID":"FF_ABC","Gate":"r80"}})
   * RANDOM ROW: "Sửa FF ID bất kỳ", "Sửa một dòng bất kỳ", "Edit any row", "Sửa bất kỳ" → edit_row("RANDOM")
   * "Sửa một [entity] bất kỳ" (e.g., "Sửa một Superstar bất kỳ") → edit_row("RANDOM"). The word before "bất kỳ" is entity type, NOT target ID.
   * Example: "Sửa Faction War ID bất kỳ" → {{"action":"edit_row","target":"RANDOM"}}
   * Example: "Sửa một Superstar bất kỳ" → {{"action":"edit_row","target":"RANDOM"}}
+  * RECENTLY CLONED/CREATED ROW: "Sửa ID vừa clone", "Sửa ID vừa tạo", "edit the just-cloned row" → edit_row("RANDOM")
+  * NEVER invent placeholder strings like "cloned_item_id", "last_clone_id", "new_item_id" — always use "RANDOM" when no concrete ID is given
 
 - MULTIPLE DATETIME VALUES (IMPORTANT):
   * Fields like "Schedules In UTC" may have 2+ datetime inputs (Start, End)
   * Keep comma-separated values in ONE string: "02/10/2026 07:15 AM, 02/10/2026 11:00 AM"
   * System will auto-split and fill each datetime input
   * DO NOT create separate fields for Start/End
+
+- MULTIPLE FIELDS SEPARATED BY COMMA (IMPORTANT):
+  * When command has "Field1: val1, Field2: val2" (each part has its own colon), they are SEPARATE fields
+  * Create SEPARATE JSON keys for each: {{"Field1": "val1", "Field2": "val2"}}
+  * WRONG: {{"Field1": "val1, Field2": "val2"}} — merging key into the value is invalid JSON
+  * Example: "Enter Superstars or Groups: Body_OOsbourne, Attempt: 10000"
+    → {{"Superstars or Groups": "Body_OOsbourne", "Attempt": "10000"}}
+  * Rule: if a segment after a comma contains ":", it is a new field, NOT part of the previous value
 
 - SECTION-QUALIFIED DATETIME FIELDS (IMPORTANT):
   * When user specifies fields like "PreEvent Phase Start Date Time(UTC)", "Active Phase End Date Time (UTC)"
@@ -277,6 +389,19 @@ CRITICAL RULES:
   * DO NOT group all values into one update_form! Each value must have its own cycle.
   * Common filter button names: "Filter Data", "Filter", "Apply Filter", "Search"
 
+- FILTER SINGLE ITEM (CRITICAL - NOT a checkbox):
+  * "Filter 1/một/N [entity] bất kỳ" → fill the filter search box with "RANDOM" + click "Filter Data"
+  * "RANDOM" is a sentinel resolved at runtime to an actual visible row ID in the table.
+  * "Filter" ALWAYS means using the search input box — NEVER a checkbox row-selection
+  * ONLY "Chọn/Tick/Select N [entity]" triggers {{"action":"checkbox"}}
+  * ⚠️ The filter field name is ALWAYS "ID contains" — EVERY page (PVE, RBE, Gacha,
+    Currency, Fight Card, Superstar, Offer, Offer Section, Drip Offer, etc.) uses the
+    same "ID contains" search box. NEVER use "Offer Name" or any per-page label.
+  * Example (PVE): "Filter 1 Book bất kỳ" → update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
+  * Example (Offer): "Filter một ID bất kỳ" on Offer page → update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
+  * WRONG: {{"action":"checkbox","target":"Book","value":"random_1"}} for "Filter 1 Book bất kỳ"
+  * CORRECT (all pages): update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
+
 NOW CONVERT THIS COMMAND (use same action names as examples above):
 "{user_command}"
 
@@ -318,8 +443,9 @@ def get_reasoning_prompt(user_command):
        - ID-like fields: ID, EventID, BagID, SectionID, FF ID, Boss Event ID, Offer ID, Gacha ID, Mission ID
        - "sửa [normal field]: [value]" AFTER arrow -> Update form action (fill form field)
        - RANDOM ROW: "Sửa [Field] bất kỳ", "Sửa một [Field] bất kỳ", "Edit any row" → edit_row("RANDOM")
+       - RECENTLY CLONED/CREATED: "Sửa ID vừa clone", "Sửa ID vừa tạo" → edit_row("RANDOM"). NEVER use placeholder strings like "cloned_item_id".
        - Example: "Sửa FF ID bất kỳ" = edit_row("RANDOM")
-       - Example: "Sửa FF ID: FF_ABC -> sửa Gate: r80" = TWO actions: 
+       - Example: "Sửa FF ID: FF_ABC -> sửa Gate: r80" = TWO actions:
          * 1) Edit item with FF ID = FF_ABC (click Edit button)
          * 2) Update form field Gate = r80
     9. **CRITICAL - Wait Action Detection**:
@@ -333,7 +459,7 @@ def get_reasoning_prompt(user_command):
        - The phrase "Clone ID:" means "click the Clone button for the row with ID = X"
        - "ID" here is part of the label, NOT a form field - do NOT treat it as update_form data
        - AFTER clone_row, ALWAYS generate update_form for modal fields (New ID/New FF ID/New Event ID, Gate, Currency...)
-       - Clone modal field names vary by event type: "New Event ID" (Gacha), "New FF ID" (Faction Feud), "New ID" (generic)
+       - Clone modal field names vary by event type: "New Event ID" (Gacha), "New FF ID" (Faction Feud), "Cloned Rules Based Tournament ID" (RBE), "New ID" (generic)
        - NEVER skip update_form for modal fields! clone_row → save_form(clone) without update_form is WRONG!
        - Example: "Clone một ID bất kỳ -> New FF ID: FF_Test, Gate: r80" =
          * clone_row("RANDOM") + update_form({{New FF ID: FF_Test, Gate: r80}}) + save_form(mode=clone)
@@ -394,7 +520,7 @@ def get_reasoning_prompt(user_command):
 
 def get_formatting_prompt(user_command, analysis_clean):
     """
-    Prompt cho Formatting Phase (Qwen2.5-Coder) trong Careful Mode.
+    Prompt cho Formatting Phase (Qwen3) trong Careful Mode.
     Chuyển đổi analysis thành JSON Action Plan.
     """
     return f"""
@@ -404,7 +530,7 @@ def get_formatting_prompt(user_command, analysis_clean):
     Task: Convert them into a detailed, sequential JSON Action Plan.
 
     - VALID actions: navigate, checkbox, download, upload, manipulate_csv, smart_test_cycle
-    - clone_row, edit_row, update_form, save_form, scan_tabs, check_fields, click, wait, process_deployment, reorder
+    - clone_row, edit_row, update_form, save_form, scan_tabs, check_fields, click, wait, process_deployment, reorder, delete_all_tasks
     
     INVALID action names (NEVER USE): select_random_ids, export_csv, import_csv, click_logo, select_checkbox, click_button ❌
 
@@ -414,10 +540,25 @@ def get_formatting_prompt(user_command, analysis_clean):
        - Format: {{{{ "action": "navigate", "path": ["Menu1", "Menu2", "Menu3"] }}}}
        - Example: "Vào Data Configs -> Perk -> Perk" -> {{{{ "action": "navigate", "path": ["Data Configs", "Perk", "Perk"] }}}}
        - NEVER generate multiple separate navigate actions
-    2. "checkbox": 
-       - Rule: Use for "Chọn", "Tick", "Select".
-       - Format: {{{{ "action": "checkbox", "target": "ColumnName", "value": "random_N" or "all" }}}}
-       - Example: "Chọn 2 BagID bất kỳ" -> value: "random_2", target: "BagID".
+    2. "checkbox":
+       - Rule: Use ONLY for selecting rows in a DATA TABLE ("Chọn", "Tick", "Select" a row/ID).
+       - Format: {{{{ "action": "checkbox", "target": "ColumnName", "value": "random_N" or "all" or "SPECIFIC_ID" }}}}
+       - Example (random): "Chọn 2 BagID bất kỳ" -> value: "random_2", target: "BagID".
+       - Example (specific ID): "Chọn ID 'LTPVE_May2026_Wk4_Contest'" -> {{{{"action":"checkbox","target":"ID","value":"LTPVE_May2026_Wk4_Contest"}}}}
+       - RULE: "Chọn ID 'X'" or "Chọn [entity] 'X'" with a NAMED ID = checkbox with value="X" (exact ID string). NOT process_deployment.
+       - ⚠️ IMPORTANT: "Bỏ chọn checkbox <Label>" / "Tick checkbox <Label>" / "Un-tick <Label>" referring to a FILTER or UI toggle (NOT a table row) → use update_form instead:
+         Example: "Bỏ chọn checkbox Hide LiveOpsTest gate items" → {{{{"action":"update_form","data":{{{{"Hide LiveOpsTest gate items checkbox":"false"}}}}}}}}
+         Example: "Tick checkbox Hide Feeders" → {{{{"action":"update_form","data":{{{{"Hide Feeders checkbox":"true"}}}}}}}}
+         Rule: if the target of "checkbox" is a page filter/UI label (not a column in the table), use update_form with key "<Label> checkbox".
+       - ⚠️ CRITICAL: "Filter N/một [entity] bất kỳ" is NOT a checkbox action!
+         "Filter" = search using the filter input box + click "Filter Data".
+         "RANDOM" is a sentinel resolved at runtime to an actual visible row ID.
+         Only "Chọn/Tick/Select N [entity]" triggers checkbox action.
+         ⚠️ Filter field name is ALWAYS "ID contains" on EVERY page
+           (Offer/Offer Section/Drip Offer/PVE/RBE/Gacha/Currency/etc.).
+           NEVER use "Offer Name" or any other label.
+         WRONG: {{{{"action":"checkbox","target":"Book","value":"random_1"}}}} for "Filter 1 Book bất kỳ"
+         CORRECT (all pages): update_form({{"ID contains":"RANDOM"}}) + click("Filter Data")
     3. "download": 
        - Rule: Use for "Export".
        - Format: {{{{ "action": "download", "target": "Export CSV", "value": "filename.csv" }}}}
@@ -439,8 +580,10 @@ def get_formatting_prompt(user_command, analysis_clean):
        - Example: "Edit ABC -> Acquire lock -> Update field" = edit_row("ABC") + wait + update_form
        - RANDOM ROW: "Sửa bất kỳ", "Sửa [Field] bất kỳ", "Edit any", "Edit any row" → target = "RANDOM"
        - "Sửa một [entity] bất kỳ" (e.g., "Sửa một Superstar bất kỳ") → target = "RANDOM" (the entity type is NOT a target ID)
+       - RECENTLY CLONED/CREATED: "Sửa ID vừa clone", "Sửa ID vừa tạo" → target = "RANDOM". NEVER invent placeholder strings like "cloned_item_id", "last_clone_id", "new_item_id".
        - Example: "Sửa Faction War ID bất kỳ" → {{{{ "action": "edit_row", "target": "RANDOM" }}}}
        - Example: "Sửa một Superstar bất kỳ" → {{{{ "action": "edit_row", "target": "RANDOM" }}}}
+       - Example: "Sửa ID vừa clone" → {{{{ "action": "edit_row", "target": "RANDOM" }}}}
     9. "update_form": {{{{ "action": "update_form", "data": {{{{ "Label": "Value", ... }}}} }}}}
        - Used to fill forms/popups. 
        - MUST extract ALL fields mentioned in user command.
@@ -480,6 +623,13 @@ def get_formatting_prompt(user_command, analysis_clean):
           * "Kéo alex_drip_test lên đầu" → {{{{ "action": "reorder", "target": "alex_drip_test", "position": 1 }}}}
           * "Kéo alex_drip_test xuống dưới quanvm" → {{{{ "action": "reorder", "target": "alex_drip_test", "after": "quanvm" }}}}
           * "Đặt offer_A trước offer_B" → {{{{ "action": "reorder", "target": "offer_A", "before": "offer_B" }}}}
+    16. "delete_all_tasks": {{{{ "action": "delete_all_tasks" }}}}
+        - RBE "Tasks" tab ONLY. Use when user says "Xóa tất cả các task", "Delete all tasks",
+          "Remove all tasks", "Clear all tasks" — deletes every task down to Task 1
+          (Task 1 can never be removed by the app).
+        - NEVER emit {{{{ "action": "click", "target": "Delete All Tasks" }}}} — no such button
+          exists (only a per-task trash icon), that click always fails.
+        - No "target" field needed/used.
     CRITICAL RULES:
     1. **SEQUENCE IS KING**: Process command strictly LEFT to RIGHT.
        - "Go to A -> B -> C -> Clone D" => 1. navigate [A,B,C], 2. clone D.
@@ -514,8 +664,10 @@ def get_formatting_prompt(user_command, analysis_clean):
        - NEVER leave value empty!
 
     8. **CLICK THE BRICK / PROCESS MAPPING** (CRITICAL):
-       - "Click The Brick", "Bấm The Brick", "Click logo", "Về Home" → {{{{ "action": "process_deployment", "options": [] }}}}
-       - "Process", "Deploy", "Triển khai" after test → {{{{ "action": "process_deployment", "options": ["X"] }}}}
+       - "Bấm vào logo The Brick" / "Click logo" / "Về Home" ALONE (without "Chọn checkbox" and without "Process") → {{{{ "action": "process_deployment", "options": [] }}}} (navigate home only — do NOT add any checkbox to options)
+       - ONLY generate process_deployment WITH options when command EXPLICITLY has BOTH "Chọn checkbox X" AND "Bấm Process" / "Process" keywords
+       - EXAMPLE "Bấm vào logo The Brick" alone → {{{{ "action": "process_deployment", "options": [] }}}}
+       - EXAMPLE "Bấm vào logo The Brick -> Chọn checkbox RBE -> Process" → {{{{ "action": "process_deployment", "options": ["RBE"] }}}}
        - IMPORTANT: If user specifies checkbox (e.g., "Chọn Offers rồi Process"), include in options
        
        - DEPLOYMENT CHECKBOXES (exact names from Home screen):
@@ -561,6 +713,14 @@ def get_formatting_prompt(user_command, analysis_clean):
            -> {{{{ "Schedules In UTC": "02/10/2026, 07:15 AM - 02/10/2026, 11:00 AM" }}}}
          * System will auto-detect and split to fill multiple datetime inputs
          * DO NOT create separate "Start Time" and "End Time" fields unless explicitly mentioned
+
+       - **MULTIPLE FIELDS SEPARATED BY COMMA** (CRITICAL):
+         * When command has "Field1: val1, Field2: val2" (each part has its own colon), they are SEPARATE fields
+         * Create SEPARATE JSON keys: {{{{ "Field1": "val1", "Field2": "val2" }}}}
+         * WRONG: {{{{ "Field1": "val1, Field2": "val2" }}}} — this is invalid JSON and wrong semantics
+         * Example: "Enter Superstars or Groups: Body_OOsbourne, Attempt: 10000"
+           -> {{{{ "Superstars or Groups": "Body_OOsbourne", "Attempt": "10000" }}}}
+         * Rule: if a segment after a comma contains ":", treat it as a new field key
 
        - **SECTION-QUALIFIED DATETIME FIELDS** (IMPORTANT):
          * When user specifies "PreEvent Phase Start Date Time(UTC)", "Active Phase End Date Time (UTC)"
@@ -611,6 +771,7 @@ def get_formatting_prompt(user_command, analysis_clean):
        - Clone modal field names by event type:
          * Gacha: "New Event ID"
          * Faction Feud: "New FF ID"
+         * RBE: "Cloned Rules Based Tournament ID"
          * Generic: "New ID" or "New Event ID"
        - Output:
          [

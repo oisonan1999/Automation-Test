@@ -9,6 +9,11 @@ from copy import deepcopy
 import requests
 from dotenv import load_dotenv
 
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
 from ai.prompts import (
     get_fast_mode_prompt,
     get_reasoning_prompt,
@@ -22,10 +27,26 @@ load_dotenv()
 # Module-level variable to track the actual mode used in the last parse
 last_actual_mode = "fast"
 
+# Periodic model reload: force-unload after this many formatting calls to clear VRAM fragmentation.
+_RELOAD_EVERY_N_CALLS = 15
+_formatting_call_count = 0
+
 # === CONFIGURATION ===
-MODEL_REASONING = "deepseek-r1:8b"  # 8B: 19.7 tok/s vs 14B: 11.4 tok/s trên M4. Output chỉ là analysis text → 8B đủ chất lượng
-MODEL_FORMATTING = "qwen2.5-coder:14b"  # Giữ 14B cho formatting vì cần JSON chính xác
+# MODEL_REASONING = "deepseek-r1:8b"  # Unused: dual-model pipeline disabled (Qwen alone = 100% correct)
+MODEL_FORMATTING = "qwen3:8b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+
+# Careful Mode (Claude API) — opt-in alternative to the Ollama fast pipeline
+MODEL_CLAUDE_CAREFUL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# Mushigen gateway (internal AI control plane) — same Bedrock-passthrough env
+# vars Claude Code CLI uses. When CLAUDE_CODE_USE_BEDROCK=1, call_claude() talks
+# to ANTHROPIC_BEDROCK_BASE_URL with a bearer token instead of api.anthropic.com.
+# Rollback: unset CLAUDE_CODE_USE_BEDROCK and set ANTHROPIC_API_KEY in .env.
+CLAUDE_USE_BEDROCK_GATEWAY = os.getenv("CLAUDE_CODE_USE_BEDROCK") == "1"
+ANTHROPIC_BEDROCK_BASE_URL = os.getenv("ANTHROPIC_BEDROCK_BASE_URL")
+ANTHROPIC_AUTH_TOKEN = os.getenv("ANTHROPIC_AUTH_TOKEN")
 SCENARIO_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "scenarios.json"
 )
@@ -77,6 +98,55 @@ def _normalize_command_text(text):
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
+def _strip_comments_outside_strings(text):
+    """
+    Xóa <!-- HTML comment -->, /* block comment */, và // line comment —
+    NHƯNG chỉ khi chúng nằm NGOÀI string literal (theo dõi trạng thái
+    in_string + escape khi quét). Bắt buộc phải string-aware: rất nhiều field
+    value hợp lệ trong app (deeplink "Link" field "whiplash://...", hoặc bất
+    kỳ http(s)://... value) chứa "//" ngay trong nội dung — một regex toàn
+    cục sẽ hiểu nhầm đó là comment và xóa mất toàn bộ phần JSON còn lại sau
+    nó.
+    """
+    out = []
+    i = 0
+    n = len(text)
+    in_string = False
+    escape = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if text.startswith("<!--", i):
+            end = text.find("-->", i + 4)
+            i = end + 3 if end != -1 else n
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = end + 2 if end != -1 else n
+            continue
+        if text.startswith("//", i):
+            nl = text.find("\n", i)
+            i = nl if nl != -1 else n
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def clean_json_string(text):
     """
     Hàm làm sạch chuỗi JSON (Nuclear Cleaning):
@@ -87,24 +157,26 @@ def clean_json_string(text):
 
     # 0. [CRITICAL] Fix double braces từ LLM ({{ -> {, }} -> })
     # LLM hay copy pattern từ f-string examples và trả về {{ }} thay vì { }
-    # [FIX] Chỉ thay thế khi {{ bao quanh identifier/text (f-string style), KHÔNG được thay }}
-    # trong JSON hợp lệ vì "}}" là 2 closing braces của nested objects (VD: "data":{...}})
-    # Thay "{{word}}" → "{word}" (chỉ fix f-string templates thực sự)
-    text = re.sub(r"\{\{([^{}]+)\}\}", r"{\1}", text)
+    # Nếu text chứa {{ thì TOÀN BỘ output đang ở "double-brace mode" — thay thế tất cả.
+    # Valid JSON không bao giờ có {{ nên phát hiện {{ là đủ để kích hoạt fix toàn cục.
+    if "{{" in text:
+        text = text.replace("{{", "{").replace("}}", "}")
 
     # 1. Xóa Markdown code block (```json ... ```)
     text = re.sub(r"```json|```", "", text)
 
-    # 2. Xóa comment HTML (ĐÂY LÀ NGUYÊN NHÂN GÂY LỖI CỦA BẠN)
-    # Sử dụng [\s\S] để bắt cả ký tự xuống dòng
-    text = re.sub(r"<!--[\s\S]*?-->", "", text)
-
-    # 3. Xóa comment Block kiểu C /* ... */
-    text = re.sub(r"/\*[\s\S]*?\*/", "", text)
-
-    # 4. Xóa comment dòng kiểu JS // ...
-    # (Dùng cờ MULTILINE để xóa từ // đến hết dòng)
-    text = re.sub(r"//.*$", "", text, flags=re.MULTILINE)
+    # 2-4. [BUG FIX] Xóa comment HTML <!-- -->, block /* */, và line // ...
+    # NHƯNG chỉ khi nằm NGOÀI string literal. Trước đây dùng re.sub toàn cục
+    # trên cả text — CỰC KỲ NGUY HIỂM vì rất nhiều field value hợp lệ trong
+    # app chứa "//" ngay trong nội dung (deeplink "Link" field dạng
+    # "whiplash://dat.Action.quests/...", hoặc bất kỳ http(s)://... value).
+    # re.sub(r"//.*$", ...) khớp vào "//" bên TRONG string đó rồi xóa sạch
+    # toàn bộ phần còn lại của response — silent, nhìn giống hệt response bị
+    # cắt cụt giữa chừng (đây chính là nguyên nhân thật của các lỗi "truncated
+    # JSON" lặp lại nhiều lần trên testcase RBE Tasks có field Link). Quét
+    # thủ công theo trạng thái in_string để KHÔNG bao giờ đụng vào nội dung
+    # trong quotes.
+    text = _strip_comments_outside_strings(text)
 
     # 5. Trích xuất đoạn JSON list [...] hoặc object {...} nằm ngoài cùng
     # [FIX] Dùng rfind() thay vì regex để tìm ] cuối cùng
@@ -113,8 +185,24 @@ def clean_json_string(text):
 
     if first_bracket != -1:
         if last_bracket != -1 and last_bracket > first_bracket:
-            # Có cả [ và ] - extract từ [ đến ]
-            text = text[first_bracket : last_bracket + 1]
+            # [BUG GUARD] rfind() tìm ký tự "]" CUỐI CÙNG trong toàn bộ text,
+            # nhưng nếu response bị cắt cụt giữa chừng (model dừng lại mà
+            # KHÔNG đóng array ngoài cùng), đây có thể vô tình khớp vào một
+            # "]" của một sub-array bên trong (ví dụ "path":["RBE"]) rất gần
+            # đầu chuỗi — cắt bỏ gần như toàn bộ nội dung JSON hợp lệ còn lại.
+            # Phân biệt hai trường hợp bằng cách kiểm tra CẤU TRÚC: nếu đoạn
+            # [first_bracket:last_bracket+1] tự nó đã cân bằng dấu (không còn
+            # { [ nào mở dở khi quét hết đoạn đó), thì last_bracket đúng là
+            # dấu đóng ngoài cùng thật — tin tưởng và cắt bỏ phần đuôi (có thể
+            # là prose thừa). Nếu đoạn đó VẪN còn { [ mở dở, nghĩa là
+            # last_bracket chỉ là "]" của một sub-array giữa chừng và response
+            # thực sự bị cắt cụt — giữ nguyên tới hết chuỗi để bước closer
+            # phía dưới tự đóng đúng ở cuối chuỗi THẬT.
+            candidate = text[first_bracket : last_bracket + 1]
+            if _unclosed_bracket_stack(candidate):
+                text = text[first_bracket:]
+            else:
+                text = candidate
         else:
             # Có [ nhưng thiếu ] - lấy từ [ đến hết (sẽ fix brackets sau)
             text = text[first_bracket:]
@@ -124,7 +212,11 @@ def clean_json_string(text):
         last_brace = text.rfind("}")
         if first_brace != -1:
             if last_brace != -1 and last_brace > first_brace:
-                text = text[first_brace : last_brace + 1]
+                candidate = text[first_brace : last_brace + 1]
+                if _unclosed_bracket_stack(candidate):
+                    text = text[first_brace:]
+                else:
+                    text = candidate
             else:
                 text = text[first_brace:]
 
@@ -142,12 +234,31 @@ def clean_json_string(text):
     # Pattern match: 'any text' (single quoted strings)
     text = re.sub(r"'([^'\\]*(\\.[^'\\]*)*)'", replace_single_quotes, text)
 
+    # 6b. [NEW] Quote bare/unquoted object keys (Fix lỗi LLM đôi khi "quên" quote key
+    # khi copy một object tương tự object trước đó trong cùng list, ví dụ:
+    # {"action":"manipulate_csv",...} rồi tới {action:"manipulate_csv",...} (thiếu quote).
+    # Chỉ match khi key đứng ngay sau { hoặc , VÀ theo sau : là một JSON value hợp lệ
+    # (", [, {, số, true/false/null) — tránh việc quote nhầm nội dung text tự do
+    # bên trong một string value (vd "Attempt: 10000" không bị đụng tới).
+    text = re.sub(
+        r'([{,])(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:\s*)(?=["\[{]|-?\d|true\b|false\b|null\b)',
+        r'\1\2"\3"\4',
+        text,
+    )
+
     # 7. [NEW] Fix LLM merging two fields: "val1 - Key2":"val2" → "val1","Key2":"val2"
     # Xảy ra khi LLM viết nhầm: "Start Time UTC":"07:00 - End Time UTC":"07:15"
     # mà đúng phải là:          "Start Time UTC":"07:00","End Time UTC":"07:15"
     # Pattern: SPACE DASH SPACE [TitleCase key name] QUOTE COLON QUOTE
     # Dấu hiệu nhận biết: chuỗi kết thúc bằng [TitleCase]":"  → rõ ràng là key JSON bị chèn vào value
     text = re.sub(r' - ([A-Z][A-Za-z0-9 ()]+)"(\s*:\s*")', r'","\1"\2', text)
+
+    # 7b. [NEW] Fix LLM merging two fields: "val1, Key2":"val2" → "val1","Key2":"val2"
+    # Xảy ra khi lệnh có dạng "Field1: val1, Field2: val2" mà LLM gom thành một value:
+    # "Superstars or Groups":"Body_OOsbourne, Attempt":"10000" (SAI)
+    # → "Superstars or Groups":"Body_OOsbourne","Attempt":"10000" (ĐÚNG)
+    # Pattern: COMMA SPACE [TitleCase key name] QUOTE COLON QUOTE
+    text = re.sub(r', ([A-Z][A-Za-z0-9 ()]+)"(\s*:\s*")', r'","\1"\2', text)
 
     # 8. [NEW] Fix incomplete JSON (bị cắt output)
     # Nếu JSON không đóng đúng, tự động thêm closing brackets
@@ -182,57 +293,93 @@ def clean_json_string(text):
                 if last_colon != -1:
                     text = text[: last_colon + 1] + ' ""'
 
-        # 8.3. Fix incomplete key-value pairs
-        text = re.sub(r':\s*"([^"]*?)$', r': "\1"', text)
+        # [REMOVED] 8.3 "Fix incomplete key-value pairs" used to unconditionally
+        # re-run `r':\s*"([^"]*?)$'` here — but 8.2 above already closes any
+        # genuinely dangling trailing string correctly (with a quote-parity
+        # check). Once 8.2 has run, text always ends with a real closing
+        # quote as its ABSOLUTE last character. Re-running this regex after
+        # that can spuriously match an INTERNAL colon inside the value's own
+        # text (e.g. the ":" in "whiplash:" after a URL got shortened) and
+        # treat the closing quote 8.2 just added as if it were a fresh
+        # "opening" quote for an empty value — corrupting it into `: ""`
+        # (stray space + duplicated quote). Verified live: this produced the
+        # exact `"whiplash: ""` artifact seen in repeated RBE Task Link
+        # failures. Safe to drop entirely — it added no coverage 8.2 lacks.
 
-        # 8.4. Đếm số mở/đóng ngoặc và thêm thiếu
-        open_braces = text.count("{")
-        close_braces = text.count("}")
-        open_brackets = text.count("[")
-        close_brackets = text.count("]")
-
-        # 8.5. Thêm closing brackets nếu thiếu
-        # Strategy: Phân tích cấu trúc để thêm đúng vị trí
-
-        if open_braces > close_braces:
-            missing_braces = open_braces - close_braces
-            print(f"   🔧 Auto-fix: Need to add {missing_braces} missing '}}'")
-
-            # Tìm vị trí comma cuối cùng trước last object
-            # Pattern: `...},\n    {"action": "save_form"}`
-            # Cần thêm } SAU "r80"} (trước dấu comma đầu tiên sau nó)
-
-            # Find position after last complete data object
-            # Look for pattern: "value"}}, OR "value"},
-            last_complete = max(text.rfind('"}}'), text.rfind('"}},'))
-
-            if last_complete == -1:
-                # Not found - find last "value"},
-                last_complete = text.rfind('"},')
-
-            if last_complete != -1:
-                # Insert after the closing "
-                insert_pos = last_complete + 1  # After "
-                text = text[:insert_pos] + "}" * missing_braces + text[insert_pos:]
-                print(f"   ✅ Inserted }} after position {insert_pos}")
-            else:
-                # Fallback: add before final ]
-                last_bracket_pos = text.rfind("]")
-                if last_bracket_pos != -1:
-                    text = (
-                        text[:last_bracket_pos]
-                        + "}" * missing_braces
-                        + text[last_bracket_pos:]
-                    )
-                else:
-                    text += "}" * missing_braces
-
-        if open_brackets > close_brackets:
-            missing_brackets = open_brackets - close_brackets
-            print(f"   🔧 Auto-fix: Will add {missing_brackets} missing ']'")
-            text += "]" * missing_brackets
+        # 8.4/8.5. Đóng các { [ còn thiếu (bị cắt cụt giữa chừng) theo đúng
+        # thứ tự lồng nhau bằng stack, thay vì đếm tổng số mở/đóng rồi
+        # tìm-và-chèn theo pattern text như trước — cách chèn theo pattern
+        # (rfind '"}}' / '"},') có thể tìm nhầm một object ĐÃ đóng đúng ở
+        # GIỮA chuỗi (rất phổ biến khi response bị cắt cụt: mọi object trước
+        # đó đều hợp lệ, chỉ object CUỐI CÙNG bị thiếu dấu đóng) và chèn dấu
+        # đóng vào sai vị trí đó, cắt đứt phần JSON hợp lệ còn lại phía sau.
+        # Đóng ở CUỐI chuỗi theo stack luôn đúng cho trường hợp cắt cụt.
+        text = _close_unclosed_brackets(text)
 
     return text.strip()
+
+
+def _unclosed_bracket_stack(text):
+    """
+    Quét toàn bộ text (bỏ qua nội dung nằm trong string literal) và trả về
+    stack các { [ còn MỞ (chưa được đóng) khi quét xong. Stack rỗng nghĩa là
+    mọi { [ trong text đều đã được đóng cân bằng.
+    """
+    stack = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    return stack
+
+
+def _close_unclosed_brackets(text):
+    """
+    Đóng các { [ còn mở ở CUỐI chuỗi theo đúng thứ tự lồng nhau (LIFO). An
+    toàn cho response bị cắt cụt giữa chừng (trường hợp phổ biến nhất gây
+    thiếu dấu đóng) — luôn thêm đúng số lượng và đúng thứ tự dấu đóng cần
+    thiết ở cuối chuỗi, không đoán một vị trí chèn ở giữa.
+    """
+    stack = _unclosed_bracket_stack(text)
+    added = "".join("}" if c == "{" else "]" for c in reversed(stack))
+    if added:
+        print(f"   🔧 Auto-fix: Closing {len(added)} unclosed bracket(s)/brace(s) at end: {added}")
+        text += added
+    return text
+
+
+def _print_json_error_context(label, cleaned_text, error):
+    """
+    Debug helper: prints the ACTUAL string that failed json.loads (post
+    clean_json_string, NOT the raw LLM output) with a window around the
+    reported error position. Printing raw_output[:N] on parse failure is
+    misleading — clean_json_string's regex fixes (quote conversion, brace
+    insertion, etc.) can shift/alter content anywhere in the string, so the
+    error's line/col/char refers to a string that may already differ from
+    what was captured before cleaning.
+    """
+    pos = getattr(error, "pos", None)
+    if pos is None or not cleaned_text:
+        print(f"   {label} (cleaned, first 500): {cleaned_text[:500]}...")
+        return
+    start = max(0, pos - 150)
+    end = min(len(cleaned_text), pos + 150)
+    print(f"   {label} (cleaned, ~300 chars around char {pos}):")
+    print(f"   ...{cleaned_text[start:pos]}<<<HERE>>>{cleaned_text[pos:end]}...")
 
 
 def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase=None):
@@ -256,35 +403,36 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
         "num_gpu": 99,
     }
 
-    # Config tối ưu cho Careful Mode - Reasoning Phase (DeepSeek-R1:8b)
-    if careful_phase == "reasoning":
+    # Config tối ưu cho Careful Mode - Formatting Phase (Qwen3)
+    # (Reasoning phase / DeepSeek disabled — Qwen single-model pipeline only)
+    if careful_phase == "formatting":
         options = {
-            "temperature": 0.1,
-            "num_ctx": 4096,  # Đủ cho reasoning prompt (~2k tokens)
-            "num_predict": 1200,  # ⬆️ Tăng từ 768: tránh bị cắt giữa chừng khi lệnh phức tạp (768 hit limit = analysis bị truncate → Qwen fail)
+            "temperature": 0.0,  # 0.0 = hoàn toàn deterministic → JSON nhất quán hơn qua nhiều lần gọi
+            "num_ctx": 20480,  # ⬆️ Tăng từ 12288: prompt eval thực tế ~12258 tokens → cần buffer ~8k cho output
+            "num_predict": 2048,  # ✅ Giảm từ 4096: JSON output thực tế không bao giờ vượt 1500 tokens
+            # Anti-degeneration: greedy decoding (temp=0) can lock into an infinite
+            # repetition loop (e.g. the model emitting the same {"action":...} object
+            # 50+ times). repeat_penalty over a short window breaks the loop while
+            # leaving genuinely-varied multi-step JSON untouched.
+            "repeat_penalty": 1.2,
+            "repeat_last_n": 64,
             "num_gpu": 99,
-            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn 30-50% trên Apple Silicon M4
-            "flash_attn": True,  # ⬆️ Flash Attention: giảm memory bandwidth, tăng tốc attention computation
-        }
-    # Config tối ưu cho Careful Mode - Formatting Phase (Qwen2.5-Coder)
-    elif careful_phase == "formatting":
-        options = {
-            "temperature": 0.1,
-            "num_ctx": 8192,  # ⬆️ Đủ cho formatting prompt lớn (~6k tokens)
-            "num_predict": 4096,  # Đủ cho JSON output
-            "num_gpu": 99,
-            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn cho prompt ~6k tokens
-            "flash_attn": True,  # ⬆️ Flash Attention: tối ưu KV cache access pattern
+            "num_batch": 2048,
+            "flash_attn": True,
         }
     # Config tối ưu tốc độ (Fast Mode)
     elif optimized:
         options = {
-            "temperature": 0.0,  # Set to 0 for strict adherence to rules
-            "num_ctx": 8192,  # Đủ chứa Fast Mode prompt (~4k tokens) + output
-            "num_predict": 1024,  # ⬇️ Giảm từ 4096: max output ~400-600 tokens cho lệnh đơn giản
+            "temperature": 0.0,
+            "num_ctx": 6144,    # ⬇️ Từ 12288: prompt thực tế ~1750 tokens max → KV cache nhỏ hơn 2x → ~30-40% nhanh hơn
+            "num_predict": 1200, # ⬇️ Từ 1500: JSON output không bao giờ vượt 1000 tokens
+            # Anti-degeneration: see formatting-phase note above — breaks the greedy
+            # repetition loop that produced 50× duplicated import steps.
+            "repeat_penalty": 1.2,
+            "repeat_last_n": 64,
             "num_gpu": 99,
-            "num_batch": 2048,  # ⬆️ Tăng từ 1024: prompt eval nhanh hơn cho prompt lớn (few-shot ~4k tokens)
-            "flash_attn": True,  # ⬆️ Flash Attention: giảm memory IO, tăng tốc trên Metal backend
+            "num_batch": 2048,
+            "flash_attn": True,
         }
 
     payload = {
@@ -296,6 +444,12 @@ def call_ollama(model_name, prompt, stream=False, optimized=False, careful_phase
         # Lần gọi đầu: prompt eval ~84s (full 7715 tokens)
         # Lần gọi sau: prompt eval ~1-5s (chỉ eval phần user command mới)
         "keep_alive": "10m",
+        # think=False: Qwen3 has a "thinking" mode that emits a <think>...</think>
+        # reasoning block before the answer. We need raw JSON only — the chain-of-
+        # thought would break clean_json_string's parsing AND add latency for no
+        # benefit on this deterministic template-filling task. Ignored harmlessly
+        # by models without "thinking" capability (e.g. qwen2.5-coder).
+        "think": False,
     }
 
     wall_start = time.time()
@@ -360,12 +514,8 @@ def unload_model(model_name):
 
 def ensure_clean_context():
     """
-    Force-unload tất cả model đang loaded để đảm bảo lần load tiếp theo
-    dùng đúng num_ctx từ request (không bị kế thừa context 131K từ lần load trước).
-
-    VẤN ĐỀ GỐC: Nếu model đã load với num_ctx=131072 (default),
-    Ollama có thể giữ allocation đó cho các request sau dù num_ctx nhỏ hơn.
-    → KV cache 131K chiếm ~20GB trên model 8B/14B → swap → chậm 10x.
+    Force-unload models loaded với context quá lớn (131K default → swap → chậm 10x).
+    KHÔNG unload khi ctx hợp lý — giữ warm để tận dụng prompt-prefix KV caching.
     """
     try:
         response = requests.get("http://localhost:11434/api/ps")
@@ -374,145 +524,52 @@ def ensure_clean_context():
             for m in models:
                 ctx = m.get("context_length", 0)
                 name = m.get("name", "")
-                if ctx > 16384:  # Model đang load với context quá lớn (131K default)
+                if ctx > 24576:
                     print(
                         f"   ⚠️  Model {name} loaded với context={ctx} (quá lớn!) → Force unload..."
                     )
                     unload_model(name)
-                # ✅ KHÔNG unload nữa nếu model đang ở ctx hợp lý (8192):
-                # Unload mọi lần = cold-start mỗi request = tốn 15-30s reload từ disk!
     except:
         pass
 
 
-# ============================================================================
-# COMPLEXITY DETECTION (MỚI)
-# ============================================================================
-
-
-def detect_complexity(user_command):
+def _maybe_periodic_reload():
     """
-    Phát hiện độ phức tạp của lệnh
-
-    Returns:
-        bool: True nếu lệnh phức tạp (cần dùng 2 models)
+    Sau mỗi _RELOAD_EVERY_N_CALLS lần gọi formatting model, force-unload tất cả
+    để giải phóng VRAM fragmentation tích lũy qua nhiều session calls.
+    Model sẽ cold-start lần tiếp theo (~15-30s) nhưng VRAM sạch hoàn toàn.
     """
-    command_lower = user_command.lower()
-
-    # 1. Từ khóa logic phức tạp
-    # PHÂN LOẠI: Từ dài (>= 4 ký tự) dùng substring match, từ ngắn dùng word boundary regex
-    # để tránh false positive (ví dụ: "or" match trong "Normal", "Tournament")
-
-    # Từ khóa dài - an toàn dùng substring match
-    long_keywords = [
-        "nếu",
-        "else",
-        "otherwise",
-        "trong trường hợp",
-        "tất cả các tab",
-        "all tabs",
-        "mọi tab",
-        "every tab",
-        "với mỗi",
-        "for each",
-        "từng",
-        "each",
-        "sau đó tìm",
-        "then find",
-        "rồi tìm",
-        "hoặc",
-        "và nếu",
-        "and if",
-        "lặp lại",
-        "repeat",
-        "loop",
-    ]
-
-    # Từ khóa ngắn - PHẢI dùng word boundary regex để tránh match trong từ khác
-    # "or" match "Normal/Tournament", "if" match "notify/modify"
-    short_keyword_patterns = [
-        r"\bor\b",  # "or" nhưng KHÔNG match "Normal", "Tournament", "Leaderboard"
-        r"\bif\b",  # "if" nhưng KHÔNG match "notify", "modify", "config"
-    ]
-
-    has_long_keyword = any(kw in command_lower for kw in long_keywords)
-    has_short_keyword = any(
-        re.search(pat, command_lower) for pat in short_keyword_patterns
-    )
-    has_complex_logic = has_long_keyword or has_short_keyword
-
-    # 2. Đếm số bước (dấu -> hoặc →)
-    num_steps = command_lower.count("->") + command_lower.count("→")
-    many_steps = num_steps > 7  # Tăng từ 5 lên 7 để tránh false positive
-
-    # 3. Độ dài lệnh (lệnh quá dài thường phức tạp)
-    is_very_long = len(user_command) > 350  # Tăng từ 250 lên 350
-
-    # 4. Có chứa nhiều actions khác nhau
-    action_keywords = [
-        "navigate",
-        "edit",
-        "clone",
-        "upload",
-        "download",
-        "scan",
-        "export",
-        "import",
-        "delete",
-        "add",
-        "update",
-    ]
-    action_count = sum(1 for kw in action_keywords if kw in command_lower)
-    many_actions = action_count > 6  # Tăng từ 4 lên 6
-
-    # KẾT LUẬN
-    is_complex = has_complex_logic or many_steps or is_very_long or many_actions
-
-    if is_complex:
-        # Debug: Hiển thị keyword nào trigger
-        trigger_details = []
-        if has_complex_logic:
-            matched_long = [kw for kw in long_keywords if kw in command_lower]
-            matched_short = [
-                pat for pat in short_keyword_patterns if re.search(pat, command_lower)
-            ]
-            trigger_details.append(f"logic_keywords={matched_long + matched_short}")
-        if many_steps:
-            trigger_details.append(f"steps={num_steps}")
-        if is_very_long:
-            trigger_details.append(f"len={len(user_command)}")
-        if many_actions:
-            trigger_details.append(f"actions={action_count}")
-        print(f"   🔍 Complexity Detection: COMPLEX ({', '.join(trigger_details)})")
-    else:
+    global _formatting_call_count
+    _formatting_call_count += 1
+    if _formatting_call_count >= _RELOAD_EVERY_N_CALLS:
         print(
-            f"   🔍 Complexity Detection: SIMPLE (steps={num_steps}, len={len(user_command)}, actions={action_count})"
+            f"   🔄 PERIODIC RELOAD: {_formatting_call_count} calls reached "
+            f"(threshold={_RELOAD_EVERY_N_CALLS}) → force-unloading all models..."
         )
-
-    return is_complex
+        unload_model(MODEL_FORMATTING)
+        _formatting_call_count = 0
 
 
 # ============================================================================
-# SINGLE MODEL PIPELINE (Fast Mode)
+# SINGLE MODEL PIPELINE
 # ============================================================================
 
 
 def single_model_pipeline(user_command):
     """
-    Pipeline nhanh - Chỉ dùng 1 model (Qwen2.5-Coder)
+    Pipeline nhanh - Chỉ dùng 1 model (Qwen3)
     """
     print(f"   ⚡ FAST MODE: Single-model pipeline")
     pipeline_start = time.time()
 
     # Đảm bảo không có model nào đang load với context khổng lồ
+    _maybe_periodic_reload()
     ensure_clean_context()
 
     prompt = get_fast_mode_prompt(user_command)
 
-    # Gọi model với config tối ưu (temperature=0 để less creative)
     json_output = call_ollama(MODEL_FORMATTING, prompt, optimized=True)
-    # ✅ KHÔNG unload sau Fast Mode: giữ model warm cho request tiếp theo
-    # (Careful Mode sẽ tự unload khi cần VRAM cho DeepSeek-R1)
+    # Keep model warm: Prompt prefix KV caching reduces prompt eval from ~84s → 1-5s next call
 
     if not json_output:
         return []
@@ -539,107 +596,204 @@ def single_model_pipeline(user_command):
         return plan
     except json.JSONDecodeError as e:
         print(f"   ❌ Fast Mode Parse Error: {e}")
-        print(f"   Raw output (first 500 chars): {json_output[:500]}...")
-        print(f"   Cleaned output (first 500 chars): {final_json_str[:500]}...")
+        _print_json_error_context("Fast Mode", final_json_str, e)
 
-        # [DEBUG] Show full cleaned output if short enough
-        if len(final_json_str) < 2000:
-            print(f"   📝 Full Cleaned JSON:\n{final_json_str}")
-
-        print(
-            f"   ⚠️  Tip: Lệnh này có thể phức tạp, hãy thử tắt Fast Mode và chạy lại."
-        )
+        # Retry once: flush VRAM fragmentation then call again
+        print("   🔄 Retry Fast Mode (fresh context)...")
+        unload_model(MODEL_FORMATTING)
+        time.sleep(1)
+        json_output_retry = call_ollama(MODEL_FORMATTING, prompt, optimized=True)
+        if json_output_retry:
+            retry_str = clean_json_string(json_output_retry)
+            try:
+                plan_retry = json.loads(retry_str)
+                print(f"   ✅ Fast Mode retry OK: {len(plan_retry)} bước")
+                return plan_retry
+            except json.JSONDecodeError as e_retry:
+                print("   ❌ Qwen retry failed → returning empty plan")
+                _print_json_error_context("Fast Mode retry", retry_str, e_retry)
         return []
 
 
 # ============================================================================
-# DUAL MODEL PIPELINE (Careful Mode) - GIỮ NGUYÊN CODE CŨ
+# CAREFUL MODE PIPELINE (Claude API)
 # ============================================================================
 
 
-def dual_model_pipeline(user_command):
+def _call_claude_via_mushigen(prompt, model_name, wall_start):
     """
-    Pipeline cẩn thận - Dùng 2 models (DeepSeek-R1:8b + Qwen2.5-Coder:14b)
+    Gọi Claude qua Mushigen (Bedrock-shaped gateway) — cùng cơ chế
+    ANTHROPIC_BEDROCK_BASE_URL + ANTHROPIC_AUTH_TOKEN mà Claude Code CLI dùng.
+    Trả về response text, hoặc None nếu request lỗi.
     """
-    print(f"   🧠 CAREFUL MODE: Dual-model pipeline")
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 8192,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    # "effort" 400s on Haiku 4.5 (only Fable 5 / Opus / Sonnet 5 / Sonnet 4.6
+    # support it) and Haiku isn't built for deep adaptive thinking — only
+    # send these on the larger models that actually support them.
+    if "haiku" not in model_name:
+        body["thinking"] = {"type": "adaptive"}
+        body["output_config"] = {"effort": "high"}
+    try:
+        resp = requests.post(
+            f"{ANTHROPIC_BEDROCK_BASE_URL}/model/{model_name}/invoke",
+            headers={
+                "Authorization": f"Bearer {ANTHROPIC_AUTH_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=180,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        wall_elapsed = time.time() - wall_start
+        content_blocks = data.get("content", [])
+        # [BUG FIX] With thinking={"type":"adaptive"} + effort="high" (below),
+        # a long turn's answer can legitimately arrive as MULTIPLE "text"
+        # content blocks interleaved with "thinking" blocks (or a very long
+        # text answer chunked across several sequential "text" blocks by the
+        # Bedrock-shaped gateway) — NOT always a single block. The previous
+        # `next(...)` grabbed only the FIRST "text" block and silently
+        # dropped everything after it, which looks exactly like the response
+        # being truncated mid-JSON even though usage.output_tokens is nowhere
+        # near max_tokens. Concatenate ALL "text" blocks in order instead.
+        text_blocks = [
+            b.get("text", "") for b in content_blocks if b.get("type") == "text"
+        ]
+        text = "".join(text_blocks)
+        usage = data.get("usage", {})
+        print(f"\n   ⏱️  TIMING [{model_name}] (careful/claude via mushigen):")
+        print(f"      Total (wall):  {wall_elapsed:6.2f}s")
+        print(
+            f"      Tokens: in={usage.get('input_tokens')} out={usage.get('output_tokens')} "
+            f"cache_read={usage.get('cache_read_input_tokens', 0)}"
+        )
+        if len(text_blocks) > 1:
+            print(
+                f"      ⚠️  {len(text_blocks)} separate 'text' content blocks "
+                f"concatenated (stop_reason={data.get('stop_reason')})"
+            )
+        return text
+    except Exception as e:
+        print(f"❌ Claude API Error via Mushigen ({model_name}): {e}")
+        return None
+
+
+def call_claude(prompt, model_name=None):
+    """
+    Gọi Claude API cho Careful Mode.
+    Ưu tiên Mushigen (CLAUDE_CODE_USE_BEDROCK=1); fallback SDK 'anthropic' gọi
+    thẳng api.anthropic.com nếu có ANTHROPIC_API_KEY. Trả về response text,
+    hoặc None nếu thiếu config/SDK hoặc lỗi request.
+    """
+    model_name = model_name or MODEL_CLAUDE_CAREFUL
+    wall_start = time.time()
+
+    if CLAUDE_USE_BEDROCK_GATEWAY and ANTHROPIC_BEDROCK_BASE_URL and ANTHROPIC_AUTH_TOKEN:
+        return _call_claude_via_mushigen(prompt, model_name, wall_start)
+
+    if anthropic is None:
+        print(
+            "   ❌ Careful Mode (Claude): package 'anthropic' chưa được cài. "
+            "Chạy: pip install anthropic"
+        )
+        return None
+    if not ANTHROPIC_API_KEY:
+        print(
+            "   ❌ Careful Mode (Claude): thiếu ANTHROPIC_API_KEY trong .env "
+            "(hoặc thiếu CLAUDE_CODE_USE_BEDROCK/ANTHROPIC_BEDROCK_BASE_URL/"
+            "ANTHROPIC_AUTH_TOKEN cho Mushigen)"
+        )
+        return None
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # "effort" 400s on Haiku 4.5 (only Fable 5 / Opus / Sonnet 5 / Sonnet 4.6
+        # support it) and Haiku isn't built for deep adaptive thinking — only
+        # send these on the larger models that actually support them.
+        kwargs = {}
+        if "haiku" not in model_name:
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": "high"}
+        response = client.messages.create(
+            model=model_name,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+            **kwargs,
+        )
+        wall_elapsed = time.time() - wall_start
+        # [BUG FIX] Same issue as _call_claude_via_mushigen: with adaptive
+        # thinking + high effort, a long answer can arrive as multiple "text"
+        # blocks — concatenate all of them instead of taking only the first.
+        text_blocks = [b.text for b in response.content if b.type == "text"]
+        text = "".join(text_blocks)
+
+        usage = response.usage
+        print(f"\n   ⏱️  TIMING [{model_name}] (careful/claude):")
+        print(f"      Total (wall):  {wall_elapsed:6.2f}s")
+        print(
+            f"      Tokens: in={usage.input_tokens} out={usage.output_tokens} "
+            f"cache_read={getattr(usage, 'cache_read_input_tokens', 0)}"
+        )
+        if len(text_blocks) > 1:
+            print(
+                f"      ⚠️  {len(text_blocks)} separate 'text' content blocks "
+                f"concatenated (stop_reason={getattr(response, 'stop_reason', None)})"
+            )
+        return text
+    except Exception as e:
+        print(f"❌ Claude API Error ({model_name}): {e}")
+        return None
+
+
+def claude_careful_pipeline(user_command):
+    """
+    Careful Mode - Dùng Claude (Anthropic API) thay cho Qwen để tăng độ chính xác
+    khi hiểu lệnh tiếng Việt phức tạp và format JSON đúng schema.
+    Fallback về Fast Mode (Qwen) nếu Claude lỗi (thiếu key, network, parse fail 2 lần).
+    """
+    print(f"   🧪 CAREFUL MODE (Claude): {MODEL_CLAUDE_CAREFUL}")
     pipeline_start = time.time()
 
-    # CRITICAL: Force-unload models có context lớn để tránh swap (131K ctx = 25GB!)
-    ensure_clean_context()
+    prompt = get_fast_mode_prompt(user_command)
+    raw_output = call_claude(prompt)
 
-    # =========================================================================
-    # BƯỚC 1: SUY LUẬN (REASONING PHASE) - Model: DeepSeek-R1:8b
-    # =========================================================================
-    print(f"   1️⃣  DeepSeek-R1 are currently analyzing the requirements...")
+    if not raw_output:
+        print("   ⚠️  Careful Mode (Claude) không khả dụng → fallback Fast Mode (Qwen3).")
+        return single_model_pipeline(user_command)
 
-    reasoning_prompt = get_reasoning_prompt(user_command)
+    print(f"\n   🔍 DEBUG - RAW CLAUDE OUTPUT (first 800 chars):")
+    print(f"   {raw_output[:800]}...")
 
-    # Gọi DeepSeek-R1:8b với config tối ưu cho reasoning phase
-    raw_analysis = call_ollama(
-        MODEL_REASONING, reasoning_prompt, careful_phase="reasoning"
-    )
-    # ✅ Keep reasoning model warm: Prompt prefix caching giảm prompt eval từ ~84s → 1-5s
-
-    if not raw_analysis:
-        return []
-
-    # Lọc bỏ thẻ <think>...</think>
-    analysis_clean = re.sub(
-        r"<think>.*?</think>", "", raw_analysis, flags=re.DOTALL
-    ).strip()
-
-    print(
-        f"      📝 Analysis from DeepSeek: {analysis_clean[:100].replace(chr(10), ' ')}..."
-    )
-
-    # =========================================================================
-    # BƯỚC 2: ĐỊNH DẠNG (FORMATTING PHASE) - Model: Qwen2.5-Coder
-    # =========================================================================
-    print(f"   2️⃣  Qwen2.5-Coder is converting to JSON Action Plan...")
-
-    formatting_prompt = get_formatting_prompt(user_command, analysis_clean)
-
-    # Gọi Qwen với config tối ưu cho formatting phase
-    json_output = call_ollama(
-        MODEL_FORMATTING, formatting_prompt, careful_phase="formatting"
-    )
-    # ✅ KHÔNG unload Qwen sau Careful Mode: giữ model warm cho lần gọi tiếp theo
-    # Prompt prefix caching sẽ giảm prompt eval từ ~84s xuống ~1-5s cho lần gọi sau
-
-    if not json_output:
-        print("   ❌ Careful Mode: Qwen trả về rỗng (None). Sẽ fallback ở cấp trên.")
-        return []
-
-    # [DEBUG] Print raw Qwen output
-    print(f"\n   🔍 DEBUG - RAW QWEN OUTPUT (first 600 chars):")
-    print(f"   {json_output[:600]}...")
-
-    # Làm sạch và Parse JSON
-    final_json_str = clean_json_string(json_output)
-
+    final_json_str = clean_json_string(raw_output)
     try:
         plan = json.loads(final_json_str)
         pipeline_elapsed = time.time() - pipeline_start
         print(
-            f"   ✅ Careful Mode: Đã tạo thành công {len(plan)} bước hành động ({pipeline_elapsed:.1f}s total)"
+            f"   ✅ Careful Mode (Claude): Tạo thành công {len(plan)} bước ({pipeline_elapsed:.1f}s total)"
         )
-
-        # Auto-fix: Thêm bước Upload nếu thiếu
-        if (
-            plan
-            and plan[-1].get("action") == "manipulate_csv"
-            and "Import" in user_command
-        ):
-            print("   ⚠️ Auto-fix: Adding missing Upload step.")
-            target_file = plan[-1].get("target")
-            plan.append(
-                {"action": "upload", "target": "Import CSV", "value": target_file}
-            )
         return plan
     except json.JSONDecodeError as e:
-        print(f"   ❌ Lỗi Parse JSON từ Qwen: {e}")
-        print(f"   Raw output: {json_output}")
-        return []
+        print(f"   ❌ Careful Mode (Claude) Parse Error: {e}")
+        _print_json_error_context("Careful Mode (Claude)", final_json_str, e)
+
+        print("   🔄 Retry Careful Mode (Claude)...")
+        retry_output = call_claude(prompt)
+        if retry_output:
+            retry_str = clean_json_string(retry_output)
+            try:
+                plan_retry = json.loads(retry_str)
+                print(f"   ✅ Careful Mode (Claude) retry OK: {len(plan_retry)} bước")
+                return plan_retry
+            except json.JSONDecodeError as e_retry:
+                print("   ❌ Careful Mode (Claude) retry cũng fail.")
+                _print_json_error_context("Careful Mode (Claude) retry", retry_str, e_retry)
+
+        print("   ⚠️  Falling back to Fast Mode (Qwen3).")
+        return single_model_pipeline(user_command)
 
 
 def patch_model_pipeline(user_command, base_command, base_plan):
@@ -683,22 +837,96 @@ def patch_model_pipeline(user_command, base_command, base_plan):
 # ============================================================================
 
 
+def _inject_current_date(user_command: str) -> str:
+    """
+    Replace date placeholders with today's date before the AI pipeline sees the command.
+    Used in smoke-test CSV files so end-time dates are always "current day", not stale.
+
+    Tokens:
+      {{TODAY_ISO}}  → YYYY-MM-DD   (for RBE / Gacha: "2026-07-08 11:00")
+      {{TODAY_MDY}}  → MM/DD/YYYY   (for Offer / PVE / SD / FF / Grabbag: "07/08/2026 11:00 AM")
+    """
+    import datetime as _dt
+
+    if "{{TODAY" not in user_command:
+        return user_command
+    today = _dt.date.today()
+    user_command = user_command.replace("{{TODAY_ISO}}", today.strftime("%Y-%m-%d"))
+    user_command = user_command.replace("{{TODAY_MDY}}", today.strftime("%m/%d/%Y"))
+    return user_command
+
+
+def _inject_generated_ids(user_command: str, forced_id: str | None = None) -> str:
+    """
+    Preprocessing: replace 'hãy tự generate một ID duy nhất bắt đầu bằng <prefix>'
+    with '<prefix>_<timestamp>_<random>' before the AI pipeline sees the command.
+    Prevents the AI from reusing previously-seen IDs from its context window.
+
+    If `forced_id` is given, use it verbatim instead of generating a fresh one.
+    Callers (app.py) pre-generate an ID up front to look up/tokenize the golden
+    plan cache; without this, brain.py would silently mint its OWN different ID
+    here, the plan would end up with that (different) ID baked in, and golden
+    tokenization would fail to find the caller's ID to replace with {{UNIQUE_ID}}
+    — permanently freezing a stale, already-used ID into the golden template.
+    """
+    import datetime as _dt
+    import uuid as _uuid
+
+    # Count word ("một"/"1") and the "nhất"/"nhát" (typo) adjective both vary
+    # across testcase authors — match loosely on structure instead of the
+    # exact literal phrase, or rows using a different wording silently skip
+    # ID injection and the AI copies the raw instruction into the plan.
+    _pattern = re.compile(
+        r"hãy tự generate\s+\S+\s+ID\s+duy\s+\S+\s+bắt đầu bằng\s+(\S+)",
+        re.IGNORECASE,
+    )
+
+    def _make_id(match):
+        token = match.group(1).strip()
+        # Separate the prefix from any trailing punctuation so it stays in output
+        m = re.match(r"^(.*?)([.,;]*)$", token)
+        prefix = m.group(1) if m else token
+        trailing = m.group(2) if m else ""
+        if forced_id:
+            return f"{forced_id}{trailing}"
+        ts = _dt.datetime.now().strftime("%m%d%H%M")
+        rnd = _uuid.uuid4().hex[:4]
+        return f"{prefix}_{ts}_{rnd}{trailing}"
+
+    result, count = _pattern.subn(_make_id, user_command)
+    if count:
+        print(f"   🔑 Auto-generated {count} unique ID(s) before AI processing")
+    return result
+
+
 def parse_command_to_json(
-    user_command, use_fast_mode=True, context_plan=None, base_command=None
+    user_command,
+    use_fast_mode=True,
+    context_plan=None,
+    base_command=None,
+    forced_unique_id=None,
 ):
     """
     Main function - Chuyển đổi lệnh thành JSON Action Plan
 
     Args:
         user_command: Lệnh từ user (tiếng Việt hoặc English)
-        use_fast_mode: True = Fast (1 model), False = Careful (2 models)
+        use_fast_mode: True = Fast Mode (Qwen local qua Ollama),
+            False = Careful Mode (Claude API, fallback về Qwen nếu Claude lỗi)
         context_plan: Kế hoạch trước đó (nếu có)
         base_command: Câu lệnh gốc của scenario đã load (nếu có)
+        forced_unique_id: ID caller đã pre-generate (vd để golden-cache lookup) —
+            dùng ID này thay vì để _inject_generated_ids tự sinh ID khác, tránh
+            lệch giữa ID thực trong plan và ID dùng để tokenize golden.
 
     Returns:
         List[dict]: JSON Action Plan
     """
     global last_actual_mode
+
+    # Preprocess: replace date placeholders ({{TODAY_ISO}}/{{TODAY_MDY}}) then unique IDs
+    user_command = _inject_current_date(user_command)
+    user_command = _inject_generated_ids(user_command, forced_id=forced_unique_id)
 
     print("\n🧠 AI Pipeline Started...")
     print(
@@ -727,38 +955,12 @@ def parse_command_to_json(
                 has_context = False
 
     if not has_context:
-        # BƯỚC 1: Auto-detect complexity (chỉ khi dùng Fast Mode)
-        if use_fast_mode:
-            is_complex = detect_complexity(user_command)
-
-            # Nếu phát hiện phức tạp, tự động chuyển sang Careful Mode
-            if is_complex:
-                print(
-                    "   ⚠️  Command phức tạp phát hiện! Tự động chuyển sang Careful Mode..."
-                )
-                use_fast_mode = False
-
-        # BƯỚC 2: Chọn pipeline
         if use_fast_mode:
             last_actual_mode = "fast"
             plan = single_model_pipeline(user_command)
-
-            # Auto-fallback: Nếu Fast Mode thất bại, tự động chuyển sang Careful Mode
-            if not plan or len(plan) == 0:
-                print("   ⚠️  Fast Mode failed! Auto-switching to Careful Mode...")
-                last_actual_mode = "careful"
-                plan = dual_model_pipeline(user_command)
         else:
-            last_actual_mode = "careful"
-            plan = dual_model_pipeline(user_command)
-
-            # Auto-fallback: Nếu Careful Mode thất bại, thử lại bằng Fast Mode
-            if not plan or len(plan) == 0:
-                print(
-                    "   ⚠️  Careful Mode failed (returned empty plan)! Auto-fallback to Fast Mode..."
-                )
-                last_actual_mode = "fast"
-                plan = single_model_pipeline(user_command)
+            last_actual_mode = "careful_claude"
+            plan = claude_careful_pipeline(user_command)
 
     # BƯỚC 3: Auto-fix nếu cần
     if (
@@ -773,7 +975,7 @@ def parse_command_to_json(
 
     # BƯỚC 4: POST-PROCESSING - Fix invalid action names (CRITICAL)
     print("\n   🔧 POST-PROCESSING: Fixing AI action names...")
-    plan = fix_action_plan(plan, user_command)
+    plan = fix_action_plan(plan, user_command, unique_id=forced_unique_id)
 
     # DEBUG: Print FULL plan để kiểm tra
     print("\n" + "=" * 60)

@@ -6,13 +6,23 @@ __pycache__/
 .sixth/
 .cursor/
 .continue/
+.streamlit/
+.obsidian/
+.claude/
+.agents/
+.vscode/
+.env
 *.pyc
+downloads/
 # ===== NodeJS =====
 node_modules/
 # ===== Chrome automation =====
 chrome_profile/
 chrome-user-data/
 chrome-data/
+brave_profile/
+brave-user-data/
+brave-data/
 .obsididan/
 # ===== OS =====
 .DS_Store

@@ -1,0 +1,1548 @@
+# ai/action_fixer/deployment_fixers.py - split from action_fixer.py
+# Deployment option inference / checkbox+process merge / strip invalid
+from ._constants import (
+    DEPLOYMENT_KEYWORDS,
+    PAGE_TAB_NAMES,
+    NAVIGATION_PATH_MAP,
+    ACTION_NAME_MAP,
+    VALID_ACTIONS,
+    _VALID_DEPLOY_OPTIONS,
+)
+
+
+def _strip_invalid_deploy_options(plan):
+    """
+    Remove tab/section names that the AI wrongly adds to process_deployment options.
+    E.g. "Contest Superstars" is a tab inside the RBE form, not a home-screen checkbox.
+    Any option not in _VALID_DEPLOY_OPTIONS is dropped.
+    """
+    for step in plan:
+        if step.get("action") != "process_deployment":
+            continue
+        original = list(step.get("options", []))
+        valid = [opt for opt in original if opt in _VALID_DEPLOY_OPTIONS]
+        if len(valid) != len(original):
+            removed = [o for o in original if o not in _VALID_DEPLOY_OPTIONS]
+            print(f"   🔧 STRIP deploy options: removed {removed} (not valid home-screen checkboxes)")
+            step["options"] = valid
+    return plan
+
+
+
+
+def _fix_choose_n_id_contains_random_pattern(plan, user_command=""):
+    """
+    "Chọn N ID contain <substr> bất kỳ -> Export CSV file X.csv" — a compound
+    filter-then-random-select pattern with no prompt example anywhere (the
+    existing examples only cover plain "Chọn N ID bất kỳ" with no substring
+    constraint, or "Filter 1 X bất kỳ" which stops at N=1 and has no
+    download). Qwen fast-mode has no few-shot anchor for it and produces
+    various broken shapes for it — sometimes nothing resembling a checkbox
+    at all, sometimes a near-miss like
+    {"action":"checkbox","target":"ID contains","value":"LTPVE","count":2}.
+
+    The near-miss shape is actively dangerous, not just incomplete: its
+    substring value (e.g. "LTPVE") can collide with a home-screen deployment
+    keyword ("pve" is a naive substring of "LTPVE") in
+    `_merge_process_deployment_steps`'s deployment-checkbox detector, which
+    uses plain `keyword in check_val` containment. That misclassifies the
+    row-selection checkbox as a deploy-option checkbox, merges it into
+    process_deployment(options=["LTPVE"]), and `_strip_invalid_deploy_options`
+    then deletes it as an invalid option — silently destroying the checkbox
+    (and any download) before the run even reaches Playwright. So this fixer
+    must NOT merely bail out when *a* checkbox already exists; it must
+    recognize whether that checkbox is actually the CORRECT shape, and if
+    not, remove it here (before STEP 4's merge ever sees it) rather than
+    leave it to be mangled downstream.
+
+    handle_checkbox's random-selection path (table_checkbox.py CASE 1) has
+    no support for "pick N random rows FROM those matching a substring" as
+    a single action — its filter-then-tick shortcut only covers N==1
+    (`num_to_select == 1 and wants_id_filter`). For N>1 the only reliable
+    composition is two separate actions: filter the table first via the
+    existing "ID contains" search box (same mechanism as the "Filter ...
+    bất kỳ" pattern), THEN checkbox(random_N) picks from the now-restricted
+    row set that's left in the DOM.
+
+    Deterministically reconstructs the whole tail after existing navigate
+    step(s): update_form({"ID contains": substr}) -> click("Filter Data")
+    -> checkbox(target="ID", value="random_N") -> download(...). Skips
+    reconstruction only when the plan ALREADY contains both a matching
+    "ID contains" filter step and a "random_N" checkbox — i.e. it's
+    idempotent against a plan the model (or an earlier pass) already got
+    right, but treats any other checkbox shape as needing a rebuild.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    m = _re.search(
+        r"chọn\s+(\d+|một)\s+id\s+(?:contain(?:s|ing)?|chứa)\s+(\S+)\s+bất\s*k[yỳ]",
+        user_command,
+        _re.IGNORECASE,
+    )
+    if not m:
+        return plan
+
+    n = 1 if m.group(1).lower() == "một" else int(m.group(1))
+    substr = m.group(2).strip().strip("\"',.")
+
+    has_filter = any(
+        s.get("action") == "update_form"
+        and isinstance(s.get("data"), dict)
+        and any(str(k).strip().lower() == "id contains" for k in s["data"].keys())
+        for s in plan
+    )
+    has_random_checkbox = any(
+        s.get("action") == "checkbox"
+        and str(s.get("value", "")).strip().lower() == f"random_{n}"
+        for s in plan
+    )
+    if has_filter and has_random_checkbox:
+        return plan
+
+    nav_steps = [s for s in plan if s.get("action") == "navigate"]
+    if not nav_steps:
+        return plan
+
+    new_tail = [
+        {"action": "update_form", "data": {"ID contains": substr}},
+        {"action": "click", "target": "Filter Data"},
+        {"action": "checkbox", "target": "ID", "value": f"random_{n}"},
+    ]
+
+    fm = _re.search(r"export\s+csv(?:\s+file)?\s+([\w\-]+\.csv)", user_command, _re.IGNORECASE)
+    if fm:
+        new_tail.append({"action": "download", "target": "Export CSV", "value": fm.group(1)})
+
+    print(
+        f"   🔧 SYNTHESIZE: 'Chọn {n} ID contain {substr} bất kỳ' → "
+        f"filter(ID contains={substr}) + checkbox(random_{n})"
+        + (f" + download({fm.group(1)})" if fm else " (no download — filename not found in command)")
+    )
+    return nav_steps + new_tail
+
+
+def _fix_choose_id_misclassified_as_filter(plan, user_command=""):
+    """
+    "Chọn N ID bất kỳ -> Export CSV file X.csv" is sometimes misread by the
+    model as the FILTER pattern (update_form({"ID contains": "RANDOM"}) +
+    click "Filter Data") instead of the CHECKBOX pattern — both use the same
+    "RANDOM" sentinel, so the model conflates them. When that happens the
+    trailing download step is usually dropped too, since the model no longer
+    thinks a row was selected.
+
+    The Vietnamese verb disambiguates them: "Chọn" (select/tick a row) means
+    checkbox; "Filter"/"Lọc" means the search box. If the command uses "Chọn"
+    and the plan contains the filter-pair signature with no checkbox step
+    anywhere, convert it back to checkbox(random_N) and inject the missing
+    download if the command names an export filename.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    cmd_lower = user_command.lower()
+    if "filter" in cmd_lower or "lọc" in cmd_lower:
+        return plan
+
+    m = _re.search(r"chọn\s+(\d+|một)\s+id\s+bất\s*k[yỳ]", user_command, _re.IGNORECASE)
+    if not m:
+        return plan
+    n = 1 if m.group(1).lower() == "một" else int(m.group(1))
+
+    if any(s.get("action") == "checkbox" for s in plan):
+        return plan
+
+    result = []
+    i = 0
+    replaced = False
+    while i < len(plan):
+        step = plan[i]
+        nxt = plan[i + 1] if i + 1 < len(plan) else None
+        is_filter_pair = (
+            not replaced
+            and step.get("action") == "update_form"
+            and isinstance(step.get("data"), dict)
+            and len(step["data"]) == 1
+            and str(next(iter(step["data"].values()))).strip().upper() == "RANDOM"
+            and nxt is not None
+            and nxt.get("action") == "click"
+            and "filter" in str(nxt.get("target", "")).lower()
+        )
+        if is_filter_pair:
+            print(
+                f"   🔧 FIX MISCLASSIFIED FILTER: 'Chọn {n} ID bất kỳ' → "
+                f"checkbox(random_{n}), removed filter pair"
+            )
+            result.append({"action": "checkbox", "target": "ID", "value": f"random_{n}"})
+            replaced = True
+            i += 2
+            continue
+        result.append(step)
+        i += 1
+
+    if not replaced:
+        return plan
+
+    if not any(s.get("action") == "download" for s in result):
+        fm = _re.search(r"export\s+csv(?:\s+file)?\s+([\w\-]+\.csv)", user_command, _re.IGNORECASE)
+        if fm:
+            filename = fm.group(1)
+            checkbox_idx = next(i for i, s in enumerate(result) if s.get("action") == "checkbox")
+            print(f"   🔧 INJECT DOWNLOAD: Missing download after checkbox → {filename}")
+            result.insert(
+                checkbox_idx + 1,
+                {"action": "download", "target": "Export CSV", "value": filename},
+            )
+
+    return result
+
+
+def _fix_specific_id_choose_misclassified_as_edit_row(plan, user_command=""):
+    """
+    "Chọn ID: <specific_id> -> Export CSV" is sometimes misread by weaker models
+    (e.g. Qwen) as the EDIT pattern (edit_row/clone_row with a hallucinated
+    target ID) instead of the CHECKBOX pattern (checkbox(target="ID",
+    value="<specific_id>")). Unlike the "Chọn N ID bất kỳ" RANDOM case, the
+    model here often invents a plausible-looking but wrong ID (memorized from
+    an unrelated few-shot example) rather than "RANDOM", so
+    `_remove_edit_row_before_checkbox` (which only strips edit_row("RANDOM"))
+    never catches it — there is no checkbox step anywhere to trigger it.
+
+    The Vietnamese verb still disambiguates regardless of colon/quote
+    punctuation: "Chọn ID" (select a row by ID) always means checkbox; only
+    "Sửa/Edit ID" means edit_row. If the command names a specific (non-random)
+    ID right after "Chọn ID" and the plan's first edit_row/clone_row step
+    fires before any checkbox exists, convert it into
+    checkbox(target="ID", value=<the ID from the command>) and make sure the
+    matching download step (if named in the command) survives right after it.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    m = _re.search(r"chọn\s+id\s*:?\s*[\"']?([^\s\"'>]+)", user_command, _re.IGNORECASE)
+    if not m:
+        return plan
+
+    target_id = m.group(1).strip().rstrip("\"',.")
+    if not target_id or target_id.lower() in ("bất", "bat", "random", "ngẫu", "nhiên"):
+        # "Chọn ... bất kỳ" (random selection) — handled by other fixers, not this one.
+        return plan
+
+    if any(s.get("action") == "checkbox" for s in plan):
+        return plan
+
+    edit_positions = [i for i, s in enumerate(plan) if s.get("action") in ("edit_row", "clone_row")]
+    if not edit_positions:
+        return plan
+
+    idx = edit_positions[0]
+    old_target = plan[idx].get("target", "")
+    print(
+        f"   🔧 FIX MISCLASSIFIED EDIT_ROW: 'Chọn ID: {target_id}' → "
+        f"checkbox(target=\"ID\", value=\"{target_id}\") (was {plan[idx].get('action')}('{old_target}'))"
+    )
+    result = list(plan)
+    result[idx] = {"action": "checkbox", "target": "ID", "value": target_id}
+
+    if not any(s.get("action") == "download" for s in result):
+        fm = _re.search(r"export\s+csv(?:\s+file)?\s+([\w\-]+\.csv)", user_command, _re.IGNORECASE)
+        if fm:
+            filename = fm.group(1)
+            print(f"   🔧 INJECT DOWNLOAD: Missing download after checkbox → {filename}")
+            result.insert(idx + 1, {"action": "download", "target": "Export CSV", "value": filename})
+
+    return result
+
+
+def _fix_bare_random_checkbox_and_missing_download(plan, user_command=""):
+    """
+    "Chọn N ID bất kỳ -> Export CSV file X.csv" where the model DOES emit a
+    checkbox step (so `_fix_choose_id_misclassified_as_filter` /
+    `_fix_specific_id_choose_misclassified_as_edit_row` both no-op — they only
+    fire when no checkbox exists yet) but still gets two things wrong:
+
+      1. value is the bare sentinel "RANDOM" (or a "random_M" with the wrong
+         count) instead of "random_N". handle_checkbox's CASE 1 regex
+         `random.*?(\d+)` finds no digit in bare "RANDOM" and silently falls
+         back to selecting only 1 row, dropping the user's requested count.
+      2. the trailing download step is missing entirely, even though the
+         command names an export filename right after the checkbox
+         instruction — `_inject_missing_checkbox_before_download` only
+         injects a checkbox before an EXISTING download step; it can't
+         inject a download that isn't there at all.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    m = _re.search(r"chọn\s+(\d+|một)\s+id\s+bất\s*k[yỳ]", user_command, _re.IGNORECASE)
+    if not m:
+        return plan
+    n = 1 if m.group(1).lower() == "một" else int(m.group(1))
+
+    result = list(plan)
+    checkbox_idx = None
+    for i, step in enumerate(result):
+        if step.get("action") != "checkbox":
+            continue
+        value = str(step.get("value", "")).strip()
+        rm = _re.fullmatch(r"random(?:_(\d+))?", value, _re.IGNORECASE)
+        if rm:
+            existing_n = int(rm.group(1)) if rm.group(1) else None
+            if existing_n != n:
+                print(
+                    f"   🔧 FIX CHECKBOX COUNT: value '{value}' → 'random_{n}' "
+                    f"(command says 'Chọn {n} ID bất kỳ')"
+                )
+                step["value"] = f"random_{n}"
+            if checkbox_idx is None:
+                checkbox_idx = i
+
+    if checkbox_idx is not None and not any(s.get("action") == "download" for s in result):
+        fm = _re.search(r"export\s+csv(?:\s+file)?\s+([\w\-]+\.csv)", user_command, _re.IGNORECASE)
+        if fm:
+            filename = fm.group(1)
+            print(f"   🔧 INJECT DOWNLOAD: Missing download after checkbox → {filename}")
+            result.insert(
+                checkbox_idx + 1,
+                {"action": "download", "target": "Export CSV", "value": filename},
+            )
+
+    return result
+
+
+def _inject_missing_checkbox_before_download(plan, user_command=""):
+    """
+    When command says "Chọn N ID bất kỳ -> Export CSV" but AI skips the checkbox step,
+    inject checkbox(random_N) immediately before each download step that lacks one.
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    # Parse how many rows the user wants to select (default 1)
+    m = _re.search(
+        r"chọn\s+(\d+|một)\s+ID\s+bất\s*k[yỳ]",
+        user_command,
+        _re.IGNORECASE,
+    )
+    if not m:
+        # No "Chọn N ID bất kỳ" in command — nothing to inject
+        return plan
+    n = 1 if m.group(1).lower() == "một" else int(m.group(1))
+
+    result = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+        if step.get("action") == "download":
+            # Check if the step immediately before this is a checkbox
+            preceding = result[-1] if result else None
+            if not preceding or preceding.get("action") != "checkbox":
+                print(f"   🔧 INJECT CHECKBOX: Missing checkbox before download → random_{n}")
+                result.append({
+                    "action": "checkbox",
+                    "target": "",
+                    "value": f"random_{n}",
+                })
+        result.append(step)
+        i += 1
+    return result
+
+
+def _dedup_consecutive_identical_steps(plan):
+    """
+    Safety net against model degeneration: greedy decoding can lock into a loop
+    and emit the SAME step dozens of times (e.g. 50× upload of the same CSV →
+    50 file-chooser dialogs that block the run). Collapse runs of byte-identical
+    consecutive steps down to a single occurrence. Only EXACT duplicates are
+    removed, so legitimate repeated-but-different steps (two waits, two clicks on
+    different targets) are preserved.
+    """
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    import json as _json
+
+    result = []
+    prev_key = object()  # sentinel — never equals a real step
+    removed = 0
+    for step in plan:
+        try:
+            key = _json.dumps(step, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            key = repr(step)
+        if key == prev_key:
+            removed += 1
+            continue
+        result.append(step)
+        prev_key = key
+    if removed:
+        print(f"   🔧 DEDUP: removed {removed} duplicate consecutive step(s)")
+    return result
+
+
+def _fix_download_filename_in_target(plan):
+    """
+    Normalize download/upload steps where the AI put the data filename in
+    `target` (the button name slot) and left `value` empty — e.g.
+    {"action": "download", "target": "Book_test.csv"}. The executor saves using
+    `value`; an empty value makes save_as() resolve to the downloads/ directory →
+    "[Errno 21] Is a directory". Move the filename into `value` and default the
+    button target to Export CSV / Import CSV.
+    """
+    if not plan:
+        return plan
+
+    _exts = (".csv", ".xlsx", ".xls", ".json", ".txt")
+    for step in plan:
+        if step.get("action") not in ("download", "upload"):
+            continue
+        value = str(step.get("value") or "").strip()
+        target = str(step.get("target") or "").strip()
+        if not value and target.lower().endswith(_exts):
+            step["value"] = target
+            step["target"] = (
+                "Export CSV" if step["action"] == "download" else "Import CSV"
+            )
+            print(
+                f"   🔧 FIX DOWNLOAD FILENAME: moved '{target}' from target → value "
+                f"(target='{step['target']}')"
+            )
+    return plan
+
+
+def _fix_manipulate_csv_value_verbatim(plan, user_command=""):
+    """
+    Force manipulate_csv `data` values to match the user command VERBATIM.
+
+    manipulate_csv writes straight into a raw CSV cell (see
+    automation/data_handler.py `_process_csv_manipulation`, operation="set") —
+    there is no datetime/format normalization on the way in, unlike
+    update_form which fills a UI widget that often expects "HH:MM AM/PM".
+    The prompt has dozens of update_form examples showing that AM/PM
+    format, and the AI sometimes over-generalizes that habit onto
+    manipulate_csv values too — e.g. "Sửa cột End Times: 07/31/2026, 11:00"
+    (no AM/PM in the command) gets rewritten to "...11:00 AM" in the plan.
+    That hallucinated suffix then lands in the CSV cell unchanged and can
+    fail the game's CSV-import validation (wrong format for that column).
+
+    Fix: for each manipulate_csv(operation="set", data="Col=Value") step,
+    find the matching "Sửa [cột] Col: <literal>" clause in the user command
+    and force Value back to that literal text if the AI's value doesn't
+    match. Steps whose column can't be found in the command are left alone
+    (nothing to compare against).
+    """
+    import re as _re
+
+    if not plan:
+        return plan
+
+    for step in plan:
+        if step.get("action") != "manipulate_csv" or step.get("operation") != "set":
+            continue
+        data = step.get("data")
+        if not isinstance(data, str) or "=" not in data:
+            continue
+        col, val = data.split("=", 1)
+        col = col.strip()
+        val = val.strip()
+
+        m = _re.search(
+            r"sửa\s+(?:cột\s+)?" + _re.escape(col) + r"\s*:\s*(.+?)(?:\s*->|$)",
+            user_command,
+            _re.IGNORECASE,
+        )
+        if not m:
+            continue
+
+        literal_val = m.group(1).strip()
+        if literal_val and literal_val != val:
+            print(
+                f"   🔧 CSV-VERBATIM: '{col}' value '{val}' → '{literal_val}' "
+                f"(AI reformatted a value the command gave verbatim)"
+            )
+            step["data"] = f"{col}={literal_val}"
+
+    return plan
+
+
+def _inject_gacha_pool_weight_uniquify(plan, user_command="", unique_id=None):
+    """
+    Gacha Event's Gacha Pool / Gacha Weight CSV imports reference the exact
+    same "gacha pool" name strings across TWO separate files:
+    gacha_pools_test.csv's "gacha pool" column values reappear as
+    gacha_weight_test.csv's Item/Pool values (in its Segments and
+    Guaranteed Rewards sub-tables). Both CSVs ship with static pool names,
+    so re-running the same smoke case a second time re-imports the exact
+    same pool IDs — colliding with whatever a previous run already created
+    server-side ("duplicate ID" import failures).
+
+    Fix: whenever a plan uploads BOTH a "...gacha_pool..." and a
+    "...gacha_weight..." CSV, deterministically inject:
+      1. manipulate_csv(operation="uniquify") on the pool file, right
+         before its upload step — appends one shared per-run suffix to
+         every distinct "gacha pool" value (group-preserving: rows sharing
+         an original value get the exact same new value).
+      2. manipulate_csv(operation="apply_rename_map") on the weight file,
+         right before ITS upload step — re-applies the identical old->new
+         mapping via raw-text substitution (see automation/data_handler.py
+         `_process_csv_manipulation`; the weight file's multi-table layout
+         has no single header row a normal column-based edit could target).
+
+    This is injected deterministically rather than left to the LLM: both
+    operation names are novel (no few-shot example exists for them in
+    prompts.py), so relying on Ollama to emit the right JSON shape every
+    single run would be unreliable — same reasoning as
+    `_inject_missing_download_before_manipulate_csv` below.
+
+    Suffix source (CRITICAL for golden-plan freshness): the suffix reuses
+    the run's `unique_id` (brain.py's forced_unique_id) verbatim instead of
+    minting its own timestamp. golden plan caching (ai/plan_cache.py) only
+    tokenizes strings that exactly equal `generated_unique_id`/`last_id`
+    into {{UNIQUE_ID}}/{{LAST_ID}} before freezing a PASSed run as a
+    template — a self-invented suffix would NOT match either, so it would
+    get baked into the golden template as a static literal and every
+    future replay would re-apply that SAME stale suffix, silently
+    recreating the exact duplicate-ID problem this fixer exists to solve.
+    Reusing `unique_id` means this manipulate_csv step's data string
+    naturally gets tokenized/detokenized alongside every other field that
+    already uses that same ID. Falls back to a self-generated timestamp
+    only if no unique_id was supplied (e.g. an ad-hoc call site that
+    doesn't use golden caching at all, so staleness can't occur there).
+
+    Idempotent: no-ops if either operation is already present in the plan,
+    or if the pool upload doesn't precede the weight upload (unexpected
+    ordering — skip rather than risk executing apply_rename_map before its
+    rename map exists).
+    """
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    def _upload_idx_matching(keyword):
+        for i, s in enumerate(plan):
+            if not isinstance(s, dict) or s.get("action") != "upload":
+                continue
+            fname = str(s.get("value", "") or s.get("target", "") or "").lower()
+            if keyword in fname:
+                return i
+        return None
+
+    pool_idx = _upload_idx_matching("gacha_pool")
+    weight_idx = _upload_idx_matching("gacha_weight")
+    if pool_idx is None or weight_idx is None:
+        return plan
+
+    if any(
+        isinstance(s, dict)
+        and s.get("action") == "manipulate_csv"
+        and s.get("operation") in ("uniquify", "apply_rename_map")
+        for s in plan
+    ):
+        return plan  # already injected
+
+    if not (pool_idx < weight_idx):
+        print(
+            "   ℹ️ Gacha pool upload does not precede gacha weight upload — "
+            "skipping uniquify/apply_rename_map injection (unexpected order)"
+        )
+        return plan
+
+    pool_file = plan[pool_idx].get("value") or plan[pool_idx].get("target")
+    weight_file = plan[weight_idx].get("value") or plan[weight_idx].get("target")
+
+    if unique_id:
+        suffix = f"_{unique_id}"
+    else:
+        import datetime as _dt
+
+        suffix = "_" + _dt.datetime.now().strftime("%m%d%H%M%S")
+
+    uniquify_step = {
+        "action": "manipulate_csv",
+        "target": pool_file,
+        "operation": "uniquify",
+        "data": f"gacha pool={suffix}",
+    }
+    apply_step = {
+        "action": "manipulate_csv",
+        "target": weight_file,
+        "operation": "apply_rename_map",
+        "data": "",
+    }
+
+    # Insert at the higher index first so the lower index stays valid.
+    plan.insert(weight_idx, apply_step)
+    plan.insert(pool_idx, uniquify_step)
+    print(
+        f"   🔧 INJECT: gacha pool/weight uniquify (+apply_rename_map) steps "
+        f"(suffix={suffix})"
+    )
+    return plan
+
+
+def _inject_missing_download_before_manipulate_csv(plan, user_command=""):
+    """
+    "Export <X> ... file <name.csv> -> Sửa/Xóa cột ..." always implies a
+    download step that fetches <name.csv> BEFORE any manipulate_csv touches
+    it. `_process_csv_manipulation` (automation/data_handler.py) hard-requires
+    the file to already exist on disk and returns "Error: File X not found."
+    otherwise — silently failing the whole case.
+
+    Non-standard export phrasing (e.g. "Export Chapter theo BookID file
+    chapter_test.csv" instead of the generic "Export CSV file X.csv" the
+    prompt's few-shot examples use) can make the model drop the download
+    step entirely while still emitting the manipulate_csv edits, because it
+    doesn't recognize the unfamiliar wording as an export/download action.
+
+    Safety net: for each manipulate_csv step whose target filename has no
+    earlier download step producing that same filename, inject one right
+    before it. The button label is inferred from the nearest preceding
+    "export <word> ..." clause before the filename mention in the command;
+    falls back to the generic "Export CSV" label if none is found.
+    """
+    import re as _re
+
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    downloaded = set()
+    result = []
+    for step in plan:
+        if step.get("action") == "download":
+            fname = str(step.get("value") or step.get("target") or "").strip()
+            if fname:
+                downloaded.add(fname.lower())
+        elif step.get("action") == "manipulate_csv":
+            fname = str(step.get("target") or "").strip()
+            if fname and fname.lower() not in downloaded:
+                target = "Export CSV"
+                idx = user_command.lower().find(fname.lower())
+                if idx != -1:
+                    prefix = user_command[:idx]
+                    matches = list(_re.finditer(r"export\s+(\w+)", prefix, _re.IGNORECASE))
+                    if matches:
+                        word = matches[-1].group(1)
+                        if word.lower() != "csv":
+                            target = f"Export {word}"
+                print(
+                    f"   🔧 INJECT DOWNLOAD: manipulate_csv('{fname}') has no prior "
+                    f"download — injecting download(target='{target}', value='{fname}')"
+                )
+                result.append({"action": "download", "target": target, "value": fname})
+                downloaded.add(fname.lower())
+        result.append(step)
+    return result
+
+
+def _remove_redundant_pre_download_steps(plan):
+    """
+    core.py's `download`/`upload` dispatcher already finds and clicks the
+    trigger button itself (`_find_download_trigger`), and for
+    target=="Export Chapter" specifically it ALSO handles the entire BookID
+    lookup + selection flow internally (extracts BookID from the page header,
+    falls back to the previously-downloaded chapter CSV, selects it in the
+    #searchChapterTemplate multiselect — see automation/core.py's `download`
+    branch). No manual step is needed to drive any of that.
+
+    The model sometimes still hallucinates a manual replica of this flow right
+    before the real download/upload step — a bare click("Export")/click("Import")
+    duplicating the button the dispatcher already clicks itself, and/or an
+    update_form({"File Name": "<same file as the download's value>"}) standing
+    in for a form field that doesn't exist. Both are safe to drop whenever they
+    sit directly in front of a download/upload step referencing the same file.
+    """
+    import re as _re
+
+    if not plan or not isinstance(plan, list):
+        return plan
+
+    dl_values = {
+        str(s.get("value") or "").strip().lower()
+        for s in plan
+        if s.get("action") in ("download", "upload") and s.get("value")
+    }
+
+    to_drop = set()
+    for i, step in enumerate(plan):
+        if step.get("action") not in ("download", "upload"):
+            continue
+        j = i - 1
+        cluster = []
+        found_real = False
+        while j >= 0:
+            s = plan[j]
+            act = s.get("action")
+            if act == "wait":
+                cluster.append(j)
+            elif act == "click" and str(s.get("target") or "").strip().lower() in (
+                "export",
+                "import",
+            ):
+                cluster.append(j)
+                found_real = True
+            elif act == "update_form" and isinstance(s.get("data"), dict) and any(
+                _re.search(r"file\s*name|filename|t[êe]n\s*file", str(k), _re.IGNORECASE)
+                and str(v).strip().lower() in dl_values
+                for k, v in s.get("data").items()
+            ):
+                cluster.append(j)
+                found_real = True
+            else:
+                break
+            j -= 1
+        if found_real:
+            to_drop.update(cluster)
+
+    if not to_drop:
+        return plan
+
+    print(
+        f"   🔧 REMOVE REDUNDANT PRE-DOWNLOAD STEPS: {len(to_drop)} hallucinated "
+        f"step(s) before download/upload removed (executor already handles the "
+        f"button click / BookID selection internally)"
+    )
+    return [s for idx, s in enumerate(plan) if idx not in to_drop]
+
+
+def _auto_infer_deployment_options(plan, user_command=""):
+    """
+    Auto-infer deployment options from context if process_deployment has empty options.
+
+    Context sources:
+    1. Navigation path (e.g., "Offer" → infer "Offers")
+    2. Uploaded filename (e.g., "gacha_*.csv" → infer "Gacha")
+    3. Previous actions (e.g., after smart_test_cycle on table)
+
+    Only infers when the user command contains explicit deployment intent.
+    Skips inference for commands that just navigate home (e.g. search test cases).
+    """
+    if not plan:
+        return plan
+
+    # Only infer when the command has explicit deployment intent.
+    # Without this guard, a "search → logo click" command would auto-deploy
+    # whatever feature was last navigated to.
+    _cmd_lower = (user_command or "").lower()
+    # Deploy cases always end with "-> Process" or contain "Deploy".
+    # "Bỏ chọn checkbox" (uncheck a UI filter checkbox) must NOT trigger inference —
+    # it contains "checkbox" as a substring so we cannot use "checkbox" as a keyword.
+    _DEPLOY_INTENT_KEYWORDS = ["process", "deploy"]
+    _has_deploy_intent = any(kw in _cmd_lower for kw in _DEPLOY_INTENT_KEYWORDS)
+    if not _has_deploy_intent:
+        print("   ℹ️  AUTO-INFER skipped: no deployment intent in command")
+        return plan
+
+    # Mapping từ keyword → deployment option name
+    # Based on actual Home screen checkboxes
+    DEPLOYMENT_INFERENCE_MAP = {
+        # === DEPLOYMENT CHECKBOXES (Exact names from Home screen) ===
+        # Left column
+        "localization": "Localization",
+        "excel": "Excel",
+        "currency": "Currency",
+        "consumables": "Consumables",
+        "consumable": "Consumables",
+        "faction feud": "Faction Feud",
+        "grab bag": "Grab Bag",
+        "grabbag": "Grab Bag",
+        "chat channels": "Chat Channels",
+        "chat channel": "Chat Channels",
+        "pve": "PVE",
+        "faction mission": "Faction Mission",
+        "merch store": "Merch Store",
+        "feature setting": "Feature Setting",
+        "invasion": "Invasion",
+        "mizz missions": "Mizz Missions",
+        "mizz mission": "Mizz Missions",
+        "subscription 1.5": "Subscription 1.5",
+        "feature gate setting": "Feature Gate Setting",
+        "versus shop": "Versus Shop",
+        "league config": "League Config",
+        "champion rewards": "Champion Rewards",
+        "battle shop": "Battle Shop",
+        "notification": "Notification",
+        "reactivation flow & contest": "Reactivation Flow & Contest",
+        "reactivation flow": "Reactivation Flow & Contest",
+        "auto play & speed up": "Auto Play & Speed Up",
+        "auto play": "Auto Play & Speed Up",
+        "news modal": "News Modal",
+        "stat change": "Stat Change",
+        # Right column
+        "gacha events": "Gacha Events",
+        "gacha event": "Gacha Events",
+        "gacha": "Gacha Events",
+        "offers": "Offers",
+        "offer": "Offers",
+        "missions": "Missions",
+        "mission": "Missions",
+        "fight card": "Fight Card",
+        "cash contract": "Cash Contract",
+        "liveops message": "LiveOps Message",
+        "live ops message": "LiveOps Message",
+        "rbe": "RBE",
+        "faction lockbox": "Faction Lockbox",
+        "promo code": "Promo Code",
+        "subscription & vip": "Subscription & VIP",
+        "subscription vip": "Subscription & VIP",
+        "perks": "Perks",
+        "perk": "Perks",
+        "effect cap setting": "Effect Cap Setting",
+        "social box gacha": "Social Box Gacha",
+        "monthly bonus": "Monthly Bonus",
+        "versus tournament": "Versus Tournament",
+        "player league": "Player League",
+        "strap and medal": "Strap and Medal",
+        "superstars": "Superstars",
+        "superstar": "Superstars",
+        "boost": "Boost",
+        "faction boss": "Faction Boss",
+        "moment poster": "Moment Poster",
+        "time challenge": "Time Challenge",
+        "social friends": "Social Friends",
+        "social friend": "Social Friends",
+        "token": "Token",
+        # === NAVIGATION CONTEXT (for auto-inference) ===
+        "offer section": "Offers",
+        "shop tier": "Offers",
+        "shop": "Offers",
+        "prize wall": "Prize Wall",
+        "prizewall": "Prize Wall",
+        "live event": "Live Events",
+        "event": "Live Events",
+        "config": "Data Configs",
+        "blueprint": "Hyper Blueprint",
+        # === CSV FILENAMES ===
+        "gacha_": "Gacha Events",
+        "offer_": "Offers",
+        "section_": "Offers",
+        "shop_": "Offers",
+        "prize": "Prize Wall",
+        "event_": "Live Events",
+        "perk_": "Perks",
+        "mission_": "Missions",
+        "config_": "Data Configs",
+        # Tournament / Versus contexts
+        "tournament": "Versus Tournament",
+        "versus": "Versus Tournament",
+        "tournament_": "Versus Tournament",
+    }
+
+    result = []
+
+    for i, step in enumerate(plan):
+        action = step.get("action", "")
+
+        # Check if this is a process_deployment with empty options
+        if action == "process_deployment":
+            options = step.get("options", [])
+
+            if not options or len(options) == 0:
+                print(
+                    f"   🔍 AUTO-INFER: process_deployment has no options, analyzing context..."
+                )
+
+                inferred_option = None
+
+                # Strategy 1: Look backward for navigation path
+                for j in range(i - 1, max(-1, i - 10), -1):  # Check up to 10 steps back
+                    prev_step = plan[j]
+                    prev_action = prev_step.get("action", "")
+
+                    if prev_action == "navigate":
+                        path = prev_step.get("path", [])
+                        path_str = " ".join(path).lower()
+
+                        # Check each keyword
+                        for keyword, option in DEPLOYMENT_INFERENCE_MAP.items():
+                            if keyword in path_str:
+                                inferred_option = option
+                                print(
+                                    f"      ✅ Inferred from navigation '{path}' → '{option}'"
+                                )
+                                break
+
+                        if inferred_option:
+                            break
+
+                    # Strategy 2: Look for upload/smart_test_cycle filename
+                    elif prev_action in ["upload", "smart_test_cycle", "download"]:
+                        filename = prev_step.get("value", "")
+                        if filename:
+                            filename_lower = filename.lower()
+
+                            for keyword, option in DEPLOYMENT_INFERENCE_MAP.items():
+                                if keyword in filename_lower:
+                                    inferred_option = option
+                                    print(
+                                        f"      ✅ Inferred from filename '{filename}' → '{option}'"
+                                    )
+                                    break
+
+                            if inferred_option:
+                                break
+
+                # Apply inferred option
+                if inferred_option:
+                    step["options"] = [inferred_option]
+                    print(
+                        f"      🎯 AUTO-INFER: Added option '{inferred_option}' to process_deployment"
+                    )
+                else:
+                    print(f"      ⚠️  Could not infer deployment option from context")
+                    print(
+                        f"      💡 Tip: Specify explicitly like 'Process với Offers' or 'Chọn Offers rồi Process'"
+                    )
+
+        result.append(step)
+
+    return result
+
+
+
+
+def _merge_process_deployment_steps(plan, uncheck_targets=None):
+    """
+    Merge patterns like:
+      1. checkbox(Offers) → process_deployment → click(Process)
+
+      2. process_deployment → checkbox(Offers) → click(Process)
+    Into single:
+      process_deployment(options=["Offers"])
+    """
+    if not plan:
+        return plan
+
+    # 🆕 DEBUG: Print plan before merge
+    print(f"\n   📋 DEBUG - Plan BEFORE merge ({len(plan)} steps):")
+    for idx, step in enumerate(plan):
+        action = step.get("action", "?")
+        target = step.get("target", "")
+        value = step.get("value", "")
+        options = step.get("options", [])
+        if action == "process_deployment":
+            print(f"      {idx}: {action} (options={options})")
+        elif action == "checkbox":
+            print(f"      {idx}: {action} (target={target}, value={value})")
+        else:
+            print(f"      {idx}: {action} (target={target})")
+
+    merged = []
+    i = 0
+    while i < len(plan):
+        step = plan[i]
+
+        # Check if this starts a process_deployment sequence
+        if step.get("action") == "process_deployment":
+            options = list(step.get("options", []))
+
+            # 🆕 Look BACKWARD for checkbox that should be merged
+            # Pattern: checkbox(Offers) → process_deployment
+            k = len(merged) - 1  # Start from last item in merged
+            backward_count = 0
+            items_to_remove = []  # Track indices to remove
+
+            # Common deployment options keywords
+            # Based on actual Home screen checkboxes
+            deployment_keywords = DEPLOYMENT_KEYWORDS
+
+            while k >= 0 and backward_count < 3:  # Check up to 3 steps back
+                prev_step = merged[k]
+                prev_action = prev_step.get("action", "")
+
+                # Check if it's a non-table checkbox (deployment option)
+                if prev_action == "checkbox":
+                    value = str(prev_step.get("value", ""))
+                    target = prev_step.get("target", "")
+                    checkbox_label = prev_step.get(
+                        "checkbox_label", ""
+                    )  # 🆕 AI sometimes uses this field
+                    checkbox_field = prev_step.get(
+                        "checkbox", ""
+                    )  # 🆕 AI also uses "checkbox" field
+                    field_attr = prev_step.get(
+                        "field", ""
+                    )  # 🆕 AI also uses "field" key (e.g. "Faction Feud")
+                    deployment_opt = prev_step.get(
+                        "_deployment_opt", ""
+                    )  # Pre-detected
+                    is_uncheck = prev_step.get("_uncheck", False)
+
+                    # 🆕 SMART DETECTION: Check if this is a deployment option
+                    is_deployment_option = bool(
+                        deployment_opt
+                    )  # Already detected in STEP 2
+
+                    # 🆕 Also check 'option' field (AI sometimes uses this key)
+                    option_attr = prev_step.get("option", "")
+
+                    if not is_deployment_option:
+                        # Fallback: Check all possible fields
+                        fields_to_check = [
+                            checkbox_field,
+                            field_attr,
+                            checkbox_label,
+                            option_attr,
+                            target,
+                            value,
+                        ]
+
+                        for field in fields_to_check:
+                            if field:
+                                field_lower = str(field).lower()
+                                for keyword in deployment_keywords:
+                                    if keyword in field_lower:
+                                        is_deployment_option = True
+                                        break
+                                if is_deployment_option:
+                                    break
+
+                    # If not random_ OR is deployment option name, merge it
+                    if (
+                        not value.startswith("random_") and target != "ID"
+                    ) or is_deployment_option:
+                        # Prefer _deployment_opt (pre-detected), then other fields
+                        opt = (
+                            deployment_opt
+                            or checkbox_field
+                            or field_attr
+                            or checkbox_label
+                            or option_attr
+                            or target
+                            or value
+                        )
+                        # Add uncheck prefix if this is an uncheck operation
+                        if is_uncheck and opt:
+                            opt_key = f"-{opt}"  # Prefix with - to indicate uncheck
+                        else:
+                            opt_key = opt
+                        if opt_key and opt_key not in options:
+                            options.insert(
+                                0, opt_key
+                            )  # Insert at beginning to preserve order
+                            print(
+                                f"   🔧 MERGE (backward): checkbox('{opt}'{', uncheck' if is_uncheck else ''}) → process_deployment options"
+                            )
+                            items_to_remove.append(k)
+                        k -= 1
+                        backward_count += 1
+                        continue
+
+                # 🆕 Also handle click("Versus Tournament") → deployment option
+                # AI sometimes generates click instead of checkbox for deployment items
+                if prev_action == "click":
+                    click_target = str(prev_step.get("target", "")).strip()
+                    click_target_lower = click_target.lower()
+                    is_deployment_click = any(
+                        keyword in click_target_lower for keyword in deployment_keywords
+                    )
+                    if is_deployment_click:
+                        opt_key = click_target
+                        if opt_key and opt_key not in options:
+                            options.insert(0, opt_key)
+                            print(
+                                f"   🔧 MERGE (backward): click('{click_target}') → process_deployment options"
+                            )
+                            items_to_remove.append(k)
+                        k -= 1
+                        backward_count += 1
+                        continue
+
+                # Stop if we hit a navigation or other major action
+                if prev_action in [
+                    "navigate",
+                    "smart_test_cycle",
+                    "upload",
+                    "download",
+                    "edit_row",
+                    "clone_row",
+                ]:
+                    break
+
+                k -= 1
+                backward_count += 1
+
+            # Remove absorbed checkboxes (in reverse order to maintain indices)
+            for idx in sorted(items_to_remove, reverse=True):
+                merged.pop(idx)
+
+            # Look FORWARD for checkbox/click that should be merged
+            j = i + 1
+            while j < len(plan):
+                next_step = plan[j]
+                next_action = next_step.get("action", "")
+
+                if next_action == "checkbox":
+                    value = str(next_step.get("value", ""))
+                    target = next_step.get("target", "")
+                    checkbox_label = next_step.get(
+                        "checkbox_label", ""
+                    )  # 🆕 AI sometimes uses this field
+                    checkbox_field = next_step.get(
+                        "checkbox", ""
+                    )  # 🆕 AI also uses "checkbox" field
+                    field_attr = next_step.get(
+                        "field", ""
+                    )  # 🆕 AI also uses "field" key (e.g. "Faction Feud")
+                    deployment_opt = next_step.get(
+                        "_deployment_opt", ""
+                    )  # Pre-detected
+                    is_uncheck = next_step.get("_uncheck", False)
+
+                    # 🆕 SMART DETECTION: Check if this is a deployment option
+                    is_deployment_option = bool(
+                        deployment_opt
+                    )  # Already detected in STEP 2
+
+                    # 🆕 Also check 'option' field (AI sometimes uses this key)
+                    option_attr = next_step.get("option", "")
+
+                    if not is_deployment_option:
+                        # Fallback: Check all possible fields
+                        fields_to_check = [
+                            checkbox_field,
+                            field_attr,
+                            checkbox_label,
+                            option_attr,
+                            target,
+                            value,
+                        ]
+
+                        for field in fields_to_check:
+                            if field:
+                                field_lower = str(field).lower()
+                                for keyword in deployment_keywords:
+                                    if keyword in field_lower:
+                                        is_deployment_option = True
+                                        break
+                                if is_deployment_option:
+                                    break
+
+                    # If not random_ OR is deployment option name, merge it
+                    # CRITICAL: Even if value is random_X, if target/checkbox/field/option contains deployment keyword, still merge it
+                    if not value.startswith("random_") or is_deployment_option:
+                        # Prefer _deployment_opt (pre-detected), then other fields
+                        opt = (
+                            deployment_opt
+                            or checkbox_field
+                            or field_attr
+                            or checkbox_label
+                            or option_attr
+                            or target
+                            or value
+                        )
+                        # Add uncheck prefix if this is an uncheck operation
+                        if is_uncheck and opt:
+                            opt_key = f"-{opt}"
+                        else:
+                            opt_key = opt
+                        if opt_key and opt_key != "ID" and opt_key not in options:
+                            options.append(opt_key)
+                        print(
+                            f"   🔧 MERGE (forward): checkbox('{opt}'{', uncheck' if is_uncheck else ''}) → process_deployment options"
+                        )
+                        j += 1
+                    else:
+                        # It's a table checkbox (random_X without deployment keyword)
+                        # Only break if we're sure it's NOT a deployment option
+                        print(
+                            f"   ⚠️  Skipping table checkbox (target='{target}', value='{value}')"
+                        )
+                        break
+                elif next_action == "click":
+                    click_fwd_target = next_step.get("target", "")
+                    click_fwd_lower = click_fwd_target.lower().strip()
+                    # Case A: click("Process"/"Deploy"/etc.) → absorbed button
+                    if click_fwd_lower in (
+                        "process",
+                        "deploy",
+                        "bấm process",
+                        "nút process",
+                        "process button",
+                        "button process",
+                    ):
+                        print(
+                            f"   🔧 MERGE: click('Process') → absorbed by process_deployment"
+                        )
+                        j += 1
+                    # Case B: click("Versus Tournament"/"Offers"/etc.) → deployment option
+                    elif any(
+                        keyword in click_fwd_lower for keyword in deployment_keywords
+                    ):
+                        opt = click_fwd_target
+                        if opt and opt not in options:
+                            options.append(opt)
+                        print(
+                            f"   🔧 MERGE (forward): click('{opt}') → process_deployment options"
+                        )
+                        j += 1
+                    else:
+                        break
+                else:
+                    break
+
+            # [FIX] Filter out button names from options (Process, Deploy, etc.)
+            # These are NOT deployment checkboxes!
+            button_names = [
+                "process",
+                "deploy",
+                "submit",
+                "confirm",
+                "ok",
+                "yes",
+                "save",
+            ]
+            options = [opt for opt in options if opt.lower() not in button_names]
+
+            # Apply uncheck_targets to existing options that weren't from checkbox steps
+            if uncheck_targets:
+                new_options = []
+                for opt in options:
+                    if opt.startswith("-"):
+                        new_options.append(opt)  # Already marked as uncheck
+                    else:
+                        opt_lower = opt.lower().strip()
+                        if opt_lower in uncheck_targets or any(
+                            t in opt_lower or opt_lower in t for t in uncheck_targets
+                        ):
+                            new_options.append(f"-{opt}")
+                            print(
+                                f"   🔧 Applied uncheck prefix to existing option: '{opt}' → '-{opt}'"
+                            )
+                        else:
+                            new_options.append(opt)
+                options = new_options
+
+            step["options"] = options
+
+            # 🆕 Debug: Print final options
+            if not options:
+                print(
+                    f"   ⚠️ WARNING: process_deployment has no options (will just click Process button)"
+                )
+            else:
+                print(f"   ✅ process_deployment final options: {options}")
+
+            merged.append(step)
+            i = j
+        else:
+            merged.append(step)
+            i += 1
+
+    # 🆕 STEP 4: Filter out invalid/duplicate actions
+    # Common deployment options keywords (reuse from module constant)
+    deployment_keywords = DEPLOYMENT_KEYWORDS
+
+    filtered = []
+    has_process_deployment = False  # Track if we've seen process_deployment
+
+    for idx, step in enumerate(merged):
+        action = step.get("action", "")
+        target = step.get("target", "")
+
+        # [FIX] Track process_deployment
+        if action == "process_deployment":
+            has_process_deployment = True
+
+        # [FIX] Filter out navigate/process_deployment after a process_deployment
+        # Because process_deployment already navigates to Home page
+        if has_process_deployment and idx > 0:
+            # Check if previous steps contain process_deployment
+            prev_has_deployment = any(
+                merged[i].get("action") == "process_deployment" for i in range(idx)
+            )
+
+            if prev_has_deployment:
+                # Filter navigate to deployment-related pages (The Brick, Home, etc.)
+                if action == "navigate":
+                    path = step.get("path", [])
+                    if not isinstance(path, list):
+                        path = [path] if path else []
+
+                    # Deployment-related navigation keywords
+                    deployment_nav = ["the brick", "brick", "home", "logo", "main"]
+
+                    # Check if any path element matches deployment navigation
+                    is_deployment_nav = any(
+                        any(kw in str(p).lower() for kw in deployment_nav) for p in path
+                    )
+
+                    if is_deployment_nav:
+                        print(
+                            f"   🔧 FILTER: Removing navigate after process_deployment (path={path})"
+                        )
+                        continue
+
+                # Filter duplicate process_deployment → merge options into first one
+                if action == "process_deployment":
+                    # Find the first process_deployment and merge options into it
+                    first_pd = next(
+                        (
+                            s
+                            for s in filtered
+                            if s.get("action") == "process_deployment"
+                        ),
+                        None,
+                    )
+                    if first_pd is not None:
+                        dup_options = step.get("options", [])
+                        existing_options = first_pd.get("options", [])
+                        for opt in dup_options:
+                            if opt and opt not in existing_options:
+                                existing_options.append(opt)
+                        first_pd["options"] = existing_options
+                        if dup_options:
+                            print(
+                                f"   🔧 FILTER: Merging duplicate process_deployment options {dup_options} → {existing_options}"
+                            )
+                        else:
+                            print(
+                                f"   🔧 FILTER: Removing duplicate process_deployment (no new options)"
+                            )
+                    continue
+
+        # Filter out click actions with empty/whitespace-only target
+        if action == "click":
+            if not target or not target.strip():
+                print(f"   🔧 FILTER: Removing invalid click action (empty target)")
+                continue
+
+        # 🆕 Filter out orphaned deployment checkbox (checkbox that should have been merged)
+        # If checkbox contains deployment keyword and value is NOT random_X, it's likely a duplicate
+        if action == "checkbox":
+            value = str(step.get("value", ""))
+            checkbox_field = step.get("checkbox", "")
+            checkbox_label = step.get("checkbox_label", "")
+            field_attr = step.get("field", "")  # 🆕 AI also uses "field" key
+            option_attr = step.get("option", "")  # 🆕 AI also uses "option" key
+
+            # target="ID" → table-row checkbox, never a deployment checkbox
+            if target.lower().strip() == "id":
+                filtered.append(step)
+                continue
+
+            # Check if this is a deployment option checkbox
+            is_deployment_checkbox = False
+            for field in [
+                checkbox_field,
+                field_attr,
+                checkbox_label,
+                option_attr,
+                target,
+                value,
+            ]:
+                if field:
+                    field_lower = str(field).lower()
+                    for keyword in deployment_keywords:
+                        if keyword in field_lower and not value.startswith("random_"):
+                            is_deployment_checkbox = True
+                            break
+                    if is_deployment_checkbox:
+                        break
+
+            # If it's a deployment checkbox, check if there's a process_deployment nearby
+            if is_deployment_checkbox:
+                # Look backward/forward for process_deployment within 2 steps
+                has_nearby_process_deployment = False
+                for j in range(max(0, idx - 2), min(len(merged), idx + 3)):
+                    if j != idx and merged[j].get("action") == "process_deployment":
+                        has_nearby_process_deployment = True
+                        break
+
+                if has_nearby_process_deployment:
+                    deployment_opt = (
+                        checkbox_field
+                        or field_attr
+                        or checkbox_label
+                        or target
+                        or value
+                    )
+                    print(
+                        f"   🔧 FILTER: Removing orphaned deployment checkbox('{deployment_opt}') - already merged"
+                    )
+                    continue
+
+        filtered.append(step)
+
+    # Clean up internal keys from all steps
+    # 🆕 SYNTHESIS: If plan has deployment checkboxes but NO process_deployment,
+    # synthesize one. Pattern: checkbox(Toggle All) + checkbox(-Excel) + click(Process)
+    # becomes: process_deployment(options=["Toggle All", "-Excel"])
+    has_pd = any(s.get("action") == "process_deployment" for s in filtered)
+    if not has_pd:
+        deployment_checkboxes = []
+        non_deployment_indices = []
+        click_process_idx = None
+
+        for idx, step in enumerate(filtered):
+            action = step.get("action", "")
+            if action == "checkbox":
+                # Check if deployment checkbox (same logic as orphan filter)
+                target = step.get("target", "")
+                value = str(step.get("value", ""))
+                checkbox_field = step.get("checkbox", "")
+                field_attr = step.get("field", "")
+                checkbox_label = step.get("checkbox_label", "")
+
+                # target="ID" means table-row checkbox (e.g. "Chọn ID 'X'") — never deployment
+                if target.lower().strip() == "id":
+                    non_deployment_indices.append(idx)
+                    continue
+
+                is_dep = False
+                opt_name = None
+                for f in [checkbox_field, field_attr, checkbox_label, target, value]:
+                    if f:
+                        f_lower = str(f).lower()
+                        for kw in deployment_keywords:
+                            if kw in f_lower or f_lower in kw:
+                                is_dep = True
+                                opt_name = f
+                                break
+                        if is_dep:
+                            break
+
+                if is_dep:
+                    deployment_checkboxes.append((idx, opt_name, step))
+                else:
+                    non_deployment_indices.append(idx)
+            elif action == "click" and step.get("target", "").lower() in (
+                "process",
+                "deploy",
+                "bấm process",
+                "nút process",
+                "process button",
+            ):
+                click_process_idx = idx
+
+        if deployment_checkboxes and (
+            click_process_idx is not None or len(deployment_checkboxes) >= 1
+        ):
+            # Build options list
+            options = []
+            for _, opt_name, step in deployment_checkboxes:
+                # Check _uncheck flag (set in STEP 2 of fix_action_plan)
+                is_uncheck = step.get("_uncheck", False)
+                opt = opt_name
+                if is_uncheck:
+                    opt = f"-{opt}"
+                if opt not in options:
+                    options.append(opt)
+
+            # Remove absorbed steps and replace with process_deployment
+            indices_to_remove = set(idx for idx, _, _ in deployment_checkboxes)
+            if click_process_idx is not None:
+                indices_to_remove.add(click_process_idx)
+
+            new_filtered = []
+            pd_inserted = False
+            for idx, step in enumerate(filtered):
+                if idx in indices_to_remove:
+                    if not pd_inserted:
+                        new_filtered.append(
+                            {"action": "process_deployment", "options": options}
+                        )
+                        pd_inserted = True
+                        print(
+                            f"   🔧 SYNTHESIZE: deployment checkboxes + click(Process) → process_deployment(options={options})"
+                        )
+                else:
+                    new_filtered.append(step)
+            if not pd_inserted:
+                new_filtered.append(
+                    {"action": "process_deployment", "options": options}
+                )
+                print(
+                    f"   🔧 SYNTHESIZE: deployment checkboxes → process_deployment(options={options})"
+                )
+            filtered = new_filtered
+
+    # Clean up internal keys from all steps
+    for step in filtered:
+        step.pop("_deployment_opt", None)
+        step.pop("_uncheck", None)
+
+    # 🆕 DEBUG: Print plan after merge
+    print(f"\n   📋 DEBUG - Plan AFTER merge ({len(filtered)} steps):")
+    for idx, step in enumerate(filtered):
+        action = step.get("action", "?")
+        target = step.get("target", "")
+        value = step.get("value", "")
+        options = step.get("options", [])
+        if action == "process_deployment":
+            print(f"      {idx}: {action} (options={options})")
+        elif action == "checkbox":
+            print(f"      {idx}: {action} (target={target}, value={value})")
+        else:
+            print(f"      {idx}: {action}")
+
+    return filtered
+
+
+# Phrases that mean "click the home/Brick logo" (navigate-home, no deploy).
+_LOGO_BRICK_PATTERNS = (
+    "logo the brick",
+    "logo thebrick",
+    "logo brick",
+    "the brick",
+    "bấm logo",
+    "click logo",
+    "click the brick",
+    "bấm the brick",
+)
+
+
+def _inject_missing_final_deployment(plan, user_command=""):
+    """
+    Guarantee a trailing process_deployment when the command ENDS with a
+    "Bấm vào logo The Brick" instruction.
+
+    Every smoke test case finishes by clicking the Brick logo to return home
+    (and optionally Process a deploy). The AI frequently drops this final step,
+    so the run never navigates home / never records the closing action. This
+    fixer deterministically appends {"action":"process_deployment","options":[]}
+    when:
+      * the LAST "->" segment of the command is a logo-click, AND
+      * that segment is NOT a deploy step (no "Process"/"Chọn checkbox"), AND
+      * the plan does not already end with process_deployment.
+
+    Deploy cases ("... -> Chọn checkbox X -> Process") already end with
+    process_deployment(options=[...]) and are left untouched.
+    """
+    if not isinstance(plan, list):
+        return plan
+
+    cmd = (user_command or "").strip()
+    if not cmd:
+        return plan
+
+    # Look at the final instruction segment only.
+    last_seg = cmd.split("->")[-1].strip().lower()
+    is_logo_segment = any(p in last_seg for p in _LOGO_BRICK_PATTERNS)
+    if not is_logo_segment:
+        return plan
+    # If the closing segment is actually a deploy/process step, leave it to the
+    # checkbox+process merge logic.
+    if "process" in last_seg or "checkbox" in last_seg:
+        return plan
+
+    last_action = plan[-1].get("action") if plan and isinstance(plan[-1], dict) else None
+    if last_action == "process_deployment":
+        return plan
+
+    plan.append({"action": "process_deployment", "options": []})
+    print(
+        "   🔧 INJECT: appended process_deployment(options=[]) — command ends with "
+        "'logo The Brick' but plan was missing the final navigate-home step"
+    )
+    return plan
+
+
