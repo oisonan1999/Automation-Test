@@ -168,7 +168,11 @@ NAVIGATION_PATH_MAP = {
     # Promo Code
     "promo code": ["Live Events", "Promo Code", "Promo Code"],
     # Social Box Gacha
-    "social box gacha": ["Live Events", "Social Box Gacha", "Social Box Gacha"],
+    "sbg event": ["Live Events", "Social Box Gacha", "SBG Event"],
+    "sbg segment": ["Live Events", "Social Box Gacha", "SBG Segment"],
+    "sbg boost": ["Live Events", "Social Box Gacha", "SBG Boost"],
+    "sbg simulation": ["Live Events", "Social Box Gacha", "SBG Simulation"],
+    "sbg level up bonus": ["Live Events", "Social Box Gacha", "SBG Level Up Bonus"],
     # Monthly Bonus
     "monthly bonus": ["Live Events", "Monthly Bonus", "Monthly Bonus"],
     # Prize Wall

@@ -238,132 +238,6 @@
       }
     ]
   },
-  "pve||clone chapter then save: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào nút clone chapter -> bấm vào chapter 1 -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Clone Chapter then Save",
-    "step_count": 7,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-27T09:52:48",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Clone Chapter"
-      },
-      {
-        "action": "click",
-        "target": "Chapter 1"
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||edit the matches then save: vào pve -> sửa book vừa clone -> đợi trang load -> bấm vào normal matches -> bấm vào match 1 -> sửa ssgroup id: ss_oosbourne_ozzy, 5 star, gold -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Edit the Matches then Save",
-    "step_count": 8,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-27T09:55:51",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Normal Matches"
-      },
-      {
-        "action": "click",
-        "target": "Match 1"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "SSGroup ID": "SS_OOsbourne_Ozzy, 5 Star, Gold"
-        }
-      },
-      {
-        "action": "save_form",
-        "mode": "save"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||turn on the universal toggle: vào pve -> sửa id vừa clone -> đợi trang load -> sửa toggle universal global: on -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Turn on the Universal toggle",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-27T09:57:06",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Universal Global": "on"
-        }
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
   "pve||deploy and view diff: bấm vào logo the brick -> chọn checkbox pve -> process": {
     "feature": "PVE",
     "label": "Deploy and view diff",
@@ -377,140 +251,6 @@
         "options": [
           "PVE"
         ]
-      }
-    ]
-  },
-  "pve||export the chapter csv: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào tab import/export chapters -> export chapter theo bookid file chapter_test.csv -> xóa tất giá trị trong cột ss1 entry req -> xóa tất cả giá trị trong cột ss2 entry req -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Export the Chapter CSV",
-    "step_count": 9,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-27T10:05:44",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Import/Export Chapters"
-      },
-      {
-        "action": "download",
-        "target": "Export Chapter",
-        "value": "chapter_test.csv"
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "chapter_test.csv",
-        "operation": "set",
-        "data": "SS1 Entry Req="
-      },
-      {
-        "action": "manipulate_csv",
-        "target": "chapter_test.csv",
-        "operation": "set",
-        "data": "SS2 Entry Req="
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||import the chapter csv: vào pve -> sửa book vừa clone -> đợi trang load -> bấm vào tab import/export chapters -> import chapter chapter_test.csv -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Import the Chapter CSV",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-27T10:25:23",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "click",
-        "target": "Import/Export Chapters"
-      },
-      {
-        "action": "upload",
-        "target": "chapter_test.csv",
-        "value": "chapter_test.csv"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
-      }
-    ]
-  },
-  "pve||setup the css for the pve: vào pve -> sửa book vừa clone -> đợi trang load -> contest superstar: on -> sửa rbe: rbe_test_hieunm, normal node 1: ss_oosbourne_ozzy, softcurrency: 10000, hard node 1: ss_oosbourne_ozzy, softcurrency: 10000, hell node 1: ss_oosbourne_ozzy, softcurrency: 10000 -> save -> bấm vào logo the brick": {
-    "feature": "PVE",
-    "label": "Setup the CSS for the PVE",
-    "step_count": 6,
-    "uses_unique": false,
-    "uses_last": true,
-    "saved_at": "2026-07-27T10:29:19",
-    "template": [
-      {
-        "action": "navigate",
-        "path": [
-          "Live Events",
-          "PVE",
-          "Classic PVE"
-        ]
-      },
-      {
-        "action": "edit_row",
-        "target": "{{LAST_ID}}"
-      },
-      {
-        "action": "wait"
-      },
-      {
-        "action": "update_form",
-        "data": {
-          "Contest Superstar": "on",
-          "RBE": "RBE_test_hieunm",
-          "Normal Node 1": "SS_OOsbourne_Ozzy",
-          "SoftCurrency": "10000",
-          "Hard Node 1": "SS_OOsbourne_Ozzy",
-          "Hell Node 1": "SS_OOsbourne_Ozzy"
-        }
-      },
-      {
-        "action": "save_form"
-      },
-      {
-        "action": "process_deployment",
-        "options": []
       }
     ]
   },
@@ -1399,6 +1139,314 @@
         "action": "download",
         "target": "Export CSV",
         "value": "Book_test.csv"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||import the book csv: vào pve -> import csv file book_test.csv -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Import the Book CSV",
+    "step_count": 3,
+    "uses_unique": false,
+    "uses_last": false,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-09-22T10:58:55",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "upload",
+        "target": "Import CSV",
+        "value": "Book_test.csv"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||export the chapter csv: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào tab import/export chapters -> export chapter theo bookid file chapter_test.csv -> xóa tất giá trị trong cột ss1 entry req -> xóa tất cả giá trị trong cột ss2 entry req -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Export the Chapter CSV",
+    "step_count": 9,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-09-22T10:59:59",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Import/Export Chapters"
+      },
+      {
+        "action": "download",
+        "target": "Export Chapter",
+        "value": "chapter_test.csv"
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "chapter_test.csv",
+        "operation": "set",
+        "data": "SS1 Entry Req="
+      },
+      {
+        "action": "manipulate_csv",
+        "target": "chapter_test.csv",
+        "operation": "set",
+        "data": "SS2 Entry Req="
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||import the chapter csv: vào pve -> sửa book vừa clone -> đợi trang load -> bấm vào tab import/export chapters -> import chapter chapter_test.csv -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Import the Chapter CSV",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-09-22T11:00:54",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Import/Export Chapters"
+      },
+      {
+        "action": "upload",
+        "target": "Import Chapter",
+        "value": "chapter_test.csv"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||clone chapter then save: vào pve -> sửa id vừa clone -> đợi trang load -> bấm vào nút clone chapter -> bấm vào chapter 1 -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Clone Chapter then Save",
+    "step_count": 7,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-09-22T11:01:54",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Clone Chapter"
+      },
+      {
+        "action": "click",
+        "target": "Chapter 1"
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||edit the matches then save: vào pve -> sửa book vừa clone -> đợi trang load -> bấm vào normal matches -> bấm vào match 1 -> sửa ssgroup id: ss_oosbourne_ozzy, 5 star, gold -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Edit the Matches then Save",
+    "step_count": 8,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-09-22T11:04:23",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "click",
+        "target": "Normal Matches"
+      },
+      {
+        "action": "click",
+        "target": "Match 1"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "SSGroup ID": "SS_OOsbourne_Ozzy, 5 Star, Gold"
+        }
+      },
+      {
+        "action": "save_form"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||turn on the universal toggle: vào pve -> sửa id vừa clone -> đợi trang load -> sửa toggle universal global: on -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Turn on the Universal toggle",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-09-22T11:05:20",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Universal Global": "on"
+        }
+      },
+      {
+        "action": "save_form",
+        "mode": "save"
+      },
+      {
+        "action": "process_deployment",
+        "options": []
+      }
+    ]
+  },
+  "pve||setup the css for the pve: vào pve -> sửa book vừa clone -> đợi trang load -> contest superstar: on -> sửa rbe: rbe_test_hieunm, normal node 1: ss_oosbourne_ozzy, softcurrency: 10000, hard node 1: ss_oosbourne_ozzy, softcurrency: 10000, hell node 1: ss_oosbourne_ozzy, softcurrency: 10000 -> save -> bấm vào logo the brick": {
+    "feature": "PVE",
+    "label": "Setup the CSS for the PVE",
+    "step_count": 6,
+    "uses_unique": false,
+    "uses_last": true,
+    "uses_today_iso": false,
+    "uses_today_mdy": false,
+    "saved_at": "2026-09-22T11:06:44",
+    "template": [
+      {
+        "action": "navigate",
+        "path": [
+          "Live Events",
+          "PVE",
+          "Standard PVE",
+          "PVE"
+        ]
+      },
+      {
+        "action": "edit_row",
+        "target": "{{LAST_ID}}"
+      },
+      {
+        "action": "wait"
+      },
+      {
+        "action": "update_form",
+        "data": {
+          "Contest Superstar": "on",
+          "RBE": "RBE_test_hieunm",
+          "Normal Node 1": "SS_OOsbourne_Ozzy",
+          "SoftCurrency": "10000",
+          "Hard Node 1": "SS_OOsbourne_Ozzy",
+          "Hell Node 1": "SS_OOsbourne_Ozzy"
+        }
+      },
+      {
+        "action": "save_form"
       },
       {
         "action": "process_deployment",
